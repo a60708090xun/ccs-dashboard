@@ -7,7 +7,9 @@
 #   ccs-sessions        — all sessions within N hours
 #   ccs-active          — non-archived sessions within N days
 #   ccs-cleanup         — kill stopped (suspended) claude processes
-#   ccs-details         — show last prompt & response of a session
+#   ccs-details         — interactive session conversation browser
+#   ccs-pick N          — show details for Nth session from --md list
+#   ccs-html            — generate HTML dashboard
 #   ccs-handoff         — generate session handoff note
 
 # ── Helper: parse one JSONL session file → tab-separated row ──
@@ -290,24 +292,36 @@ Sections:
   2. Zombie processes  — stopped claude processes eating RAM
   3. Stale sessions    — open but untouched > 1 day
 
-Colors:
+Options:
+  --md [--list|--table]   Output as Markdown (for Happy web / Claude Code rendering)
+                          --list  list format, mobile-friendly (default)
+                          --table table format
+
+Colors (terminal):
   green   active (< 10 min)    yellow  recent (< 1 hour)
   blue    idle (< 1 day)       gray    stale (> 1 day)
 HELP
     return 0
   fi
 
+  local md=false md_fmt="list"
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --md) md=true; shift ;;
+      --list) md_fmt="list"; shift ;;
+      --table) md_fmt="table"; shift ;;
+      *) shift ;;
+    esac
+  done
+
   local projects_dir="$HOME/.claude/projects"
 
-  # ── Section 1: Active sessions ──
-  printf "\033[1;36m━━ Active Sessions ━━\033[0m\n"
-  local prev_project="" active_count=0
+  # ── Collect data (shared by both modes) ──
   local open_files=()
   while IFS= read -r -d '' f; do
     tail -20 "$f" 2>/dev/null | grep -q '"type":"last-prompt"' || open_files+=("$f")
   done < <(find "$projects_dir" -maxdepth 2 -name "*.jsonl" -mmin -$((7 * 1440)) ! -path "*/subagents/*" -print0 2>/dev/null)
 
-  # Split into fresh (< 1 day) and stale (>= 1 day)
   local fresh_files=() stale_files=()
   local now
   now=$(date +%s)
@@ -321,6 +335,16 @@ HELP
       stale_files+=("$f")
     fi
   done
+
+  # ── Markdown mode ──
+  if $md; then
+    _ccs_status_md "$md_fmt" "$now" "${fresh_files[@]}" "---" "${stale_files[@]}"
+    return 0
+  fi
+
+  # ── Terminal mode (ANSI) ──
+  printf "\033[1;36m━━ Active Sessions ━━\033[0m\n"
+  local prev_project="" active_count=0
 
   if [ ${#fresh_files[@]} -eq 0 ]; then
     printf "  \033[90m(none)\033[0m\n"
@@ -338,7 +362,6 @@ HELP
     done
   fi
 
-  # ── Section 2: Zombie processes ──
   echo
   printf "\033[1;31m━━ Zombie Processes ━━\033[0m\n"
   local zombie_count=0 zombie_mb=0
@@ -353,10 +376,8 @@ HELP
     cwd=$(readlink /proc/$pid/cwd 2>/dev/null || echo "?")
     cwd=$(echo "$cwd" | sed "s|^$HOME/||; s|^$HOME$|~|")
 
-    # Start time from ps (convert to YYYY/MM/DD HH:MM:SS)
     started=$(date -d "$(ps -p "$pid" -o lstart= 2>/dev/null)" '+%Y/%m/%d %H:%M:%S' 2>/dev/null || echo "-")
 
-    # Session ID from cmdline
     sid=$(tr '\0' ' ' < /proc/$pid/cmdline 2>/dev/null \
       | grep -oP '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' | head -1)
     topic="-"
@@ -380,7 +401,6 @@ HELP
     printf "\n  \033[1m%d zombie(s), %d MB RAM\033[0m → \033[33mccs-cleanup\033[0m to free\n" "$zombie_count" "$zombie_mb"
   fi
 
-  # ── Section 3: Stale sessions ──
   echo
   printf "\033[1;90m━━ Stale Sessions ━━\033[0m\n"
   if [ ${#stale_files[@]} -eq 0 ]; then
@@ -389,7 +409,542 @@ HELP
     printf "  \033[90m%d open session(s) untouched > 1 day\033[0m → \033[33mccs-sessions 168\033[0m to inspect\n" "${#stale_files[@]}"
   fi
 }
+
+# ── Helper: markdown output for ccs-status --md ──
+# Usage: _ccs_status_md <list|table> <now> <fresh_files...> --- <stale_files...>
+_ccs_status_md() {
+  local fmt="$1"; shift
+  local now="$1"; shift
+  local projects_dir="$HOME/.claude/projects"
+
+  # Split args by "---" separator into fresh_files and stale_files
+  local fresh_files=() stale_files=() past_sep=false
+  for arg in "$@"; do
+    if [ "$arg" = "---" ]; then past_sep=true; continue; fi
+    if $past_sep; then stale_files+=("$arg"); else fresh_files+=("$arg"); fi
+  done
+
+  echo "### ⚡ Active Sessions"
+  echo
+
+  if [ ${#fresh_files[@]} -eq 0 ]; then
+    echo "_(none)_"
+  else
+    # Sort by project, then by age
+    local sorted_rows
+    sorted_rows=$(for f in "${fresh_files[@]}"; do
+      local mod ago project dir
+      mod=$(stat -c "%Y" "$f")
+      ago=$(( (now - mod) / 60 ))
+      dir=$(basename "$(dirname "$f")")
+      project=$(echo "$dir" | sed 's/^-pool2-chenhsun-*//; s/-/\//g')
+      [ -z "$project" ] && project="~(home)"
+      printf '%s\t%d\t%s\n' "$project" "$ago" "$f"
+    done | sort -t$'\t' -k1,1 -k2,2n)
+
+    # Table header (table mode only)
+    if [ "$fmt" = "table" ]; then
+      echo "| # | Project | Session | Active | Status | Topic |"
+      echo "|---|---------|---------|--------|--------|-------|"
+    fi
+
+    local prev_project="" session_idx=0
+    # Also build index file for ccs-pick
+    local pick_file="$HOME/.claude/.ccs-pick-index"
+    : > "$pick_file"
+
+    while IFS=$'\t' read -r project ago f; do
+      local ago_str icon sid topic full_sid
+      session_idx=$((session_idx + 1))
+
+      full_sid=$(basename "$f" .jsonl)
+      sid=$(echo "$full_sid" | cut -c1-8)
+      topic=$(_ccs_topic_from_jsonl "$f")
+
+      if [ "$ago" -lt 10 ]; then
+        icon="🟢"; ago_str="${ago}m ago"
+      elif [ "$ago" -lt 60 ]; then
+        icon="🟡"; ago_str="${ago}m ago"
+      else
+        icon="🔵"; ago_str="$((ago / 60))h ago"
+      fi
+
+      # Write to pick index: idx \t sid_prefix \t topic
+      printf '%d\t%s\t%s\n' "$session_idx" "$sid" "$topic" >> "$pick_file"
+
+      if [ "$fmt" = "table" ]; then
+        local status_label
+        if [ "$ago" -lt 10 ]; then status_label="active"
+        elif [ "$ago" -lt 60 ]; then status_label="recent"
+        else status_label="idle"; fi
+        topic=$(echo "$topic" | sed 's/|/\\|/g')
+        project=$(echo "$project" | sed 's/|/\\|/g')
+        echo "| ${session_idx} | ${project} | \`${sid}\` | ${ago_str} | ${icon} ${status_label} | ${topic} |"
+      else
+        # List mode — group by project with header + hr
+        if [ "$project" != "$prev_project" ]; then
+          [ -n "$prev_project" ] && echo "---"
+          local proj_count
+          proj_count=$(echo "$sorted_rows" | grep -c "^${project}	")
+          echo "📁 **${project}** (${proj_count})"
+          echo
+        fi
+        prev_project="$project"
+        echo "${icon} **${session_idx}.** **${topic}** \`${sid}\` ${ago_str}"
+        echo
+      fi
+    done <<< "$sorted_rows"
+  fi
+
+  # Zombie processes
+  echo "### 🧟 Zombie Processes"
+  echo
+
+  local zombie_count=0 zombie_mb=0 has_zombie=false
+  while IFS= read -r line; do
+    has_zombie=true
+    local pid rss mb cwd sid topic started
+    pid=$(echo "$line" | awk '{print $1}')
+    rss=$(echo "$line" | awk '{print $3}')
+    mb=$((rss / 1024))
+    zombie_count=$((zombie_count + 1))
+    zombie_mb=$((zombie_mb + mb))
+
+    cwd=$(readlink /proc/$pid/cwd 2>/dev/null || echo "?")
+    cwd=$(echo "$cwd" | sed "s|^$HOME/||; s|^$HOME$|~|")
+
+    started=$(date -d "$(ps -p "$pid" -o lstart= 2>/dev/null)" '+%m/%d %H:%M' 2>/dev/null || echo "-")
+
+    sid=$(tr '\0' ' ' < /proc/$pid/cmdline 2>/dev/null \
+      | grep -oP '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' | head -1)
+    topic="-"
+    if [ -n "$sid" ]; then
+      local jsonl
+      jsonl=$(find "$projects_dir" -maxdepth 2 -name "${sid}.jsonl" 2>/dev/null | head -1)
+      [ -n "$jsonl" ] && topic=$(_ccs_topic_from_jsonl "$jsonl")
+    fi
+
+    if [ "$fmt" = "table" ]; then
+      if [ "$zombie_count" -eq 1 ]; then
+        echo "| PID | RAM | Working Dir | Started | Topic |"
+        echo "|-----|-----|-------------|---------|-------|"
+      fi
+      topic=$(echo "$topic" | sed 's/|/\\|/g')
+      cwd=$(echo "$cwd" | sed 's/|/\\|/g')
+      echo "| ${pid} | ${mb} MB | ${cwd} | ${started} | ${topic} |"
+    else
+      echo "🔴 PID ${pid} · ${mb} MB · ${cwd} · ${started}"
+      echo "> ${topic}"
+      echo
+    fi
+  done < <(ps -eo pid,stat,rss,etime,args | awk '$2 ~ /^T/ && /claude/ && !/awk/')
+
+  if ! $has_zombie; then
+    echo "_(none)_ ✓"
+  else
+    echo
+    echo "> **${zombie_count}** zombie(s), **${zombie_mb} MB** RAM → \`ccs-cleanup\` to free"
+  fi
+
+  # Stale sessions
+  echo
+  echo "### 💤 Stale Sessions"
+  echo
+  if [ ${#stale_files[@]} -eq 0 ]; then
+    echo "_(none)_ ✓"
+  else
+    echo "> **${#stale_files[@]}** open session(s) untouched > 1 day → \`ccs-sessions 168\` to inspect"
+  fi
+
+  # Pick hint
+  echo
+  echo "---"
+  echo "_Reply with a number to see session details → \`ccs-pick N\`_"
+}
 alias ccs='ccs-status'
+
+# ── ccs-pick <N> — show details for Nth session from ccs-status --md ──
+ccs-pick() {
+  if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
+    cat <<'HELP'
+ccs-pick <N> [-n COUNT]  — show details for the Nth session from ccs-status --md
+[personal tool, not official Claude Code]
+
+Uses the index built by the last ccs-status --md run.
+Run ccs-status --md first to build the index.
+
+Options:
+  --md        Output as Markdown (for Happy web rendering)
+  -n COUNT    Number of prompt-response pairs to show (default: 3)
+HELP
+    return 0
+  fi
+
+  local pick_file="$HOME/.claude/.ccs-pick-index"
+  local idx="" md=false pair_count=3 full_pair=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --md) md=true; shift ;;
+      -n) pair_count="$2"; shift 2 ;;
+      --full) full_pair="$2"; shift 2 ;;
+      *) idx="$1"; shift ;;
+    esac
+  done
+
+  # --full N:P mode — extract idx and pair number
+  if [ -n "$full_pair" ]; then
+    idx="${full_pair%%:*}"
+    local full_p="${full_pair##*:}"
+  fi
+
+  if [ -z "$idx" ]; then
+    echo "Usage: ccs-pick <N>"
+    return 1
+  fi
+
+  if [ ! -f "$pick_file" ]; then
+    echo "No index found. Run ccs-status --md first."
+    return 1
+  fi
+
+  local sid topic
+  sid=$(awk -F'\t' -v n="$idx" '$1 == n {print $2}' "$pick_file")
+  topic=$(awk -F'\t' -v n="$idx" '$1 == n {print $3}' "$pick_file")
+
+  if [ -z "$sid" ]; then
+    local total
+    total=$(wc -l < "$pick_file")
+    echo "Invalid index: ${idx} (valid: 1-${total})"
+    return 1
+  fi
+
+  if $md; then
+    # Markdown output for Happy web
+    local jsonl
+    jsonl=$(_ccs_resolve_jsonl "$sid" "true")
+    if [ -z "$jsonl" ]; then
+      echo "Session not found: ${sid}"
+      return 1
+    fi
+
+    local full_sid mod_date dir project status
+    full_sid=$(basename "$jsonl" .jsonl)
+    mod_date=$(stat -c "%y" "$jsonl" | cut -d. -f1)
+    dir=$(basename "$(dirname "$jsonl")")
+    project=$(echo "$dir" | sed 's/^-pool2-chenhsun-*//; s/-/\//g')
+    [ -z "$project" ] && project="~(home)"
+
+    if tail -20 "$jsonl" 2>/dev/null | grep -q '"type":"last-prompt"'; then
+      status="archived"
+    else
+      local now ago
+      now=$(date +%s); ago=$(( (now - $(stat -c "%Y" "$jsonl")) / 60 ))
+      if [ "$ago" -lt 10 ]; then status="active"
+      elif [ "$ago" -lt 60 ]; then status="recent"
+      elif [ "$ago" -lt 1440 ]; then status="idle"
+      else status="stale"; fi
+    fi
+
+    local total_prompts
+    total_prompts=$(jq -c 'select(.type == "user" and (.message.content | type == "string"))' "$jsonl" 2>/dev/null | wc -l)
+
+    echo "### 🔍 #${idx} ${topic}"
+    echo
+    echo "> **Session:** \`${sid}\` (${status}) · **Project:** ${project} · **Prompts:** ${total_prompts} · **Last:** ${mod_date}"
+
+    # --full mode: show single pair untruncated
+    if [ -n "$full_pair" ]; then
+      local pair_json user_text assistant_text
+      pair_json=$(_ccs_get_pair "$jsonl" "$full_p")
+      user_text=$(echo "$pair_json" | head -1 | jq -r '.text' 2>/dev/null)
+      assistant_text=$(echo "$pair_json" | tail -1 | jq -r '.text' 2>/dev/null)
+
+      echo
+      echo "---"
+      echo "#### 💬 Prompt [${full_p}/${total_prompts}]"
+      echo
+      echo "${user_text}"
+      echo
+      echo "#### 🤖 Response (full)"
+      echo
+      echo "${assistant_text}"
+      echo
+      echo "---"
+      echo "_Resume: \`claude --resume ${full_sid}\`_"
+      return 0
+    fi
+
+    # Show last N prompt-response pairs (oldest first)
+    local start_from=$((total_prompts - pair_count + 1))
+    [ "$start_from" -lt 1 ] && start_from=1
+    local p
+    for ((p = start_from; p <= total_prompts; p++)); do
+      local pair_json user_text assistant_text
+      pair_json=$(_ccs_get_pair "$jsonl" "$p")
+      user_text=$(echo "$pair_json" | head -1 | jq -r '.text' 2>/dev/null)
+      assistant_text=$(echo "$pair_json" | tail -1 | jq -r '.text' 2>/dev/null)
+
+      echo
+      echo "---"
+      echo "#### 💬 Prompt [${p}/${total_prompts}]"
+      echo
+      echo "${user_text}"
+      echo
+      echo "#### 🤖 Response"
+      echo
+      local max_resp_lines=10
+      echo "${assistant_text}" | head -"$max_resp_lines"
+      local total_lines
+      total_lines=$(echo "$assistant_text" | wc -l)
+      if [ "$total_lines" -gt "$max_resp_lines" ]; then
+        echo
+        echo "_... (+$((total_lines - max_resp_lines)) lines) → \`ccs-pick --md --full ${idx}:${p}\`_"
+      fi
+    done
+    echo
+    echo "---"
+    echo "_Resume: \`claude --resume ${full_sid}\`_"
+  else
+    ccs-details --last "$sid"
+  fi
+}
+
+# ── ccs-html [--open] — generate HTML dashboard ──
+ccs-html() {
+  if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
+    cat <<'HELP'
+ccs-html [--open]  — generate HTML session dashboard
+[personal tool, not official Claude Code]
+
+Generates a standalone HTML file with session status.
+Output: ~/tools/ccs-dashboard/dashboard.html
+
+  --open    Open in default browser after generating
+HELP
+    return 0
+  fi
+
+  local open_browser=false
+  [ "$1" = "--open" ] && open_browser=true
+
+  local projects_dir="$HOME/.claude/projects"
+  local html_file="$HOME/tools/ccs-dashboard/dashboard.html"
+  local now
+  now=$(date +%s)
+  local gen_time
+  gen_time=$(date '+%Y-%m-%d %H:%M:%S')
+
+  # ── Collect session data ──
+  local open_files=()
+  while IFS= read -r -d '' f; do
+    tail -20 "$f" 2>/dev/null | grep -q '"type":"last-prompt"' || open_files+=("$f")
+  done < <(find "$projects_dir" -maxdepth 2 -name "*.jsonl" -mmin -$((7 * 1440)) ! -path "*/subagents/*" -print0 2>/dev/null)
+
+  # Split fresh / stale
+  local fresh_rows="" stale_count=0
+  local zombie_rows="" zombie_count=0 zombie_mb=0
+
+  for f in "${open_files[@]}"; do
+    local mod ago ago_str status status_class project sid topic full_sid
+    mod=$(stat -c "%Y" "$f")
+    ago=$(( (now - mod) / 60 ))
+
+    full_sid=$(basename "$f" .jsonl)
+    sid=$(echo "$full_sid" | cut -c1-8)
+
+    local dir
+    dir=$(basename "$(dirname "$f")")
+    project=$(echo "$dir" | sed 's/^-pool2-chenhsun-*//; s/-/\//g')
+    [ -z "$project" ] && project="~(home)"
+
+    topic=$(_ccs_topic_from_jsonl "$f")
+
+    if [ "$ago" -lt 10 ]; then
+      status="active"; status_class="active"
+      ago_str="${ago}m ago"
+    elif [ "$ago" -lt 60 ]; then
+      status="recent"; status_class="recent"
+      ago_str="${ago}m ago"
+    elif [ "$ago" -lt 1440 ]; then
+      status="idle"; status_class="idle"
+      ago_str="$((ago / 60))h ago"
+    else
+      stale_count=$((stale_count + 1))
+      continue
+    fi
+
+    # Escape HTML
+    topic=$(echo "$topic" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g')
+    project=$(echo "$project" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g')
+
+    fresh_rows="${fresh_rows}<tr class=\"${status_class}\">
+  <td>${project}</td>
+  <td><code>${sid}</code></td>
+  <td>${ago_str}</td>
+  <td><span class=\"badge ${status_class}\">${status}</span></td>
+  <td>${topic}</td>
+</tr>
+"
+  done
+
+  # ── Zombie processes ──
+  while IFS= read -r line; do
+    local pid rss mb cwd sid topic started last_active
+    pid=$(echo "$line" | awk '{print $1}')
+    rss=$(echo "$line" | awk '{print $3}')
+    mb=$((rss / 1024))
+    zombie_count=$((zombie_count + 1))
+    zombie_mb=$((zombie_mb + mb))
+
+    cwd=$(readlink /proc/$pid/cwd 2>/dev/null || echo "?")
+    cwd=$(echo "$cwd" | sed "s|^$HOME/||; s|^$HOME$|~|")
+
+    started=$(date -d "$(ps -p "$pid" -o lstart= 2>/dev/null)" '+%Y/%m/%d %H:%M' 2>/dev/null || echo "-")
+
+    sid=$(tr '\0' ' ' < /proc/$pid/cmdline 2>/dev/null \
+      | grep -oP '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' | head -1)
+    topic="-"
+    if [ -n "$sid" ]; then
+      local jsonl
+      jsonl=$(find "$projects_dir" -maxdepth 2 -name "${sid}.jsonl" 2>/dev/null | head -1)
+      [ -n "$jsonl" ] && topic=$(_ccs_topic_from_jsonl "$jsonl")
+    fi
+
+    topic=$(echo "$topic" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g')
+    cwd=$(echo "$cwd" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g')
+
+    zombie_rows="${zombie_rows}<tr>
+  <td>${pid}</td>
+  <td>${mb} MB</td>
+  <td>${cwd}</td>
+  <td>${started}</td>
+  <td>${topic}</td>
+</tr>
+"
+  done < <(ps -eo pid,stat,rss,etime,args | awk '$2 ~ /^T/ && /claude/ && !/awk/')
+
+  # ── Generate HTML ──
+  cat > "$html_file" << 'HTMLHEAD'
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CCS Dashboard</title>
+<style>
+  :root {
+    --bg: #0d1117; --fg: #c9d1d9; --border: #30363d;
+    --green: #3fb950; --yellow: #d29922; --blue: #58a6ff;
+    --red: #f85149; --gray: #8b949e; --cyan: #39c5cf;
+    --card-bg: #161b22;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif;
+    background: var(--bg); color: var(--fg);
+    padding: 24px; line-height: 1.5;
+  }
+  h1 { color: var(--cyan); margin-bottom: 4px; font-size: 1.4em; }
+  .meta { color: var(--gray); font-size: 0.85em; margin-bottom: 20px; }
+  .section {
+    background: var(--card-bg); border: 1px solid var(--border);
+    border-radius: 8px; padding: 16px; margin-bottom: 16px;
+  }
+  .section h2 {
+    font-size: 1em; margin-bottom: 12px; display: flex; align-items: center; gap: 8px;
+  }
+  .section h2 .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+  .dot-green { background: var(--green); }
+  .dot-red { background: var(--red); }
+  .dot-gray { background: var(--gray); }
+  table { width: 100%; border-collapse: collapse; font-size: 0.9em; }
+  th { text-align: left; color: var(--gray); font-weight: 600; padding: 6px 10px;
+       border-bottom: 1px solid var(--border); }
+  td { padding: 6px 10px; border-bottom: 1px solid var(--border); }
+  tr:last-child td { border-bottom: none; }
+  code { background: #1c2128; padding: 2px 6px; border-radius: 4px; font-size: 0.85em; }
+  .badge {
+    display: inline-block; padding: 1px 8px; border-radius: 10px;
+    font-size: 0.8em; font-weight: 500;
+  }
+  .badge.active { background: rgba(63,185,80,0.15); color: var(--green); }
+  .badge.recent { background: rgba(210,153,34,0.15); color: var(--yellow); }
+  .badge.idle   { background: rgba(88,166,255,0.15); color: var(--blue); }
+  .empty { color: var(--gray); font-style: italic; padding: 8px 0; }
+  .summary { color: var(--gray); font-size: 0.85em; margin-top: 8px; }
+  tr.active td:first-child { border-left: 3px solid var(--green); }
+  tr.recent td:first-child { border-left: 3px solid var(--yellow); }
+  tr.idle td:first-child   { border-left: 3px solid var(--blue); }
+</style>
+</head>
+<body>
+<h1>⚡ CCS Dashboard</h1>
+HTMLHEAD
+
+  # Inject dynamic meta
+  printf '<p class="meta">Generated: %s</p>\n' "$gen_time" >> "$html_file"
+
+  # Active sessions section
+  cat >> "$html_file" << 'SECTION1'
+<div class="section">
+<h2><span class="dot dot-green"></span> Active Sessions</h2>
+SECTION1
+
+  if [ -z "$fresh_rows" ]; then
+    echo '<p class="empty">(none)</p>' >> "$html_file"
+  else
+    cat >> "$html_file" << 'TABLE'
+<table>
+<tr><th>Project</th><th>Session</th><th>Last Active</th><th>Status</th><th>Topic</th></tr>
+TABLE
+    printf '%s' "$fresh_rows" >> "$html_file"
+    echo '</table>' >> "$html_file"
+  fi
+  echo '</div>' >> "$html_file"
+
+  # Zombie section
+  cat >> "$html_file" << 'SECTION2'
+<div class="section">
+<h2><span class="dot dot-red"></span> Zombie Processes</h2>
+SECTION2
+
+  if [ "$zombie_count" -eq 0 ]; then
+    echo '<p class="empty">(none) ✓</p>' >> "$html_file"
+  else
+    cat >> "$html_file" << 'TABLE2'
+<table>
+<tr><th>PID</th><th>RAM</th><th>Working Dir</th><th>Started</th><th>Topic</th></tr>
+TABLE2
+    printf '%s' "$zombie_rows" >> "$html_file"
+    echo '</table>' >> "$html_file"
+    printf '<p class="summary">%d zombie(s), %d MB RAM → <code>ccs-cleanup</code> to free</p>\n' "$zombie_count" "$zombie_mb" >> "$html_file"
+  fi
+  echo '</div>' >> "$html_file"
+
+  # Stale section
+  cat >> "$html_file" << 'SECTION3'
+<div class="section">
+<h2><span class="dot dot-gray"></span> Stale Sessions</h2>
+SECTION3
+
+  if [ "$stale_count" -eq 0 ]; then
+    echo '<p class="empty">(none) ✓</p>' >> "$html_file"
+  else
+    printf '<p class="summary">%d open session(s) untouched &gt; 1 day → <code>ccs-sessions 168</code> to inspect</p>\n' "$stale_count" >> "$html_file"
+  fi
+  echo '</div>' >> "$html_file"
+
+  echo '</body></html>' >> "$html_file"
+
+  echo "Generated: $html_file"
+  local file_size
+  file_size=$(stat -c "%s" "$html_file")
+  echo "  Size: ${file_size} bytes"
+
+  if $open_browser; then
+    xdg-open "$html_file" 2>/dev/null || open "$html_file" 2>/dev/null || echo "  (could not open browser)"
+  fi
+}
 
 # ── Helper: resolve JSONL file from args ──
 _ccs_resolve_jsonl() {
