@@ -11,6 +11,7 @@
 #   ccs-pick N          — show details for Nth session from --md list
 #   ccs-html            — generate HTML dashboard
 #   ccs-handoff         — generate session handoff note
+#   ccs-resume-prompt   — generate bootstrap prompt for new session
 
 # ── Helper: parse one JSONL session file → tab-separated row ──
 _ccs_session_row() {
@@ -1338,4 +1339,199 @@ EOF
   echo "  Branch:   ${git_branch}"
   echo ""
   echo "Edit the file to fill in: 目前進度 / 下一步 / 重要決策"
+}
+
+# ── ccs-resume-prompt [session-id-prefix] — generate bootstrap prompt for new session ──
+ccs-resume-prompt() {
+  if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
+    cat <<'HELP'
+ccs-resume-prompt [session-id-prefix]  — generate bootstrap prompt for new session
+[personal tool, not official Claude Code]
+
+Generates a concise bootstrap prompt (< 2000 tokens) from an existing session,
+designed to paste into a fresh Claude Code session for seamless handoff.
+
+Arguments:
+  session-id-prefix   First N chars of session UUID (from ccs-active/ccs-sessions)
+                      If omitted, uses the most recent session in current project dir.
+
+Options:
+  -a, --all           Search all projects (not just current dir)
+  -n COUNT            Number of recent prompt-response pairs to summarize (default: 3)
+  --copy              Copy to clipboard (xclip)
+  --stdout            Print raw prompt only (no header/footer, for piping)
+HELP
+    return 0
+  fi
+
+  local prefix="" search_all=false pair_count=3 do_copy=false raw=false
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -a|--all) search_all=true; shift ;;
+      -n) pair_count="$2"; shift 2 ;;
+      --copy) do_copy=true; shift ;;
+      --stdout) raw=true; shift ;;
+      *) prefix="$1"; shift ;;
+    esac
+  done
+
+  local jsonl
+  jsonl=$(_ccs_resolve_jsonl "$prefix" "$search_all")
+  if [ -z "$jsonl" ]; then
+    if [ -n "$prefix" ]; then
+      echo "No session found matching: ${prefix}*" >&2
+    else
+      echo "No sessions for current dir. Use -a to search all, or provide a session ID prefix." >&2
+    fi
+    return 1
+  fi
+
+  # ── Session metadata ──
+  local full_sid sid topic dir project project_dir
+  full_sid=$(basename "$jsonl" .jsonl)
+  sid=$(echo "$full_sid" | cut -c1-8)
+  topic=$(_ccs_topic_from_jsonl "$jsonl")
+
+  dir=$(basename "$(dirname "$jsonl")")
+  project=$(echo "$dir" | sed 's/^-pool2-chenhsun-*//; s/-/\//g')
+  [ -z "$project" ] && project="~(home)"
+  # Reconstruct project_dir from encoded dir name
+  project_dir=$(echo "$dir" | sed 's/-/\//g')
+  [ ! -d "$project_dir" ] && project_dir=""
+
+  # ── Git context (if project dir exists) ──
+  local git_branch="" git_status="" git_log=""
+  if [ -n "$project_dir" ] && [ -d "$project_dir/.git" ]; then
+    git_branch=$(cd "$project_dir" && git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "N/A")
+    git_status=$(cd "$project_dir" && git status --short 2>/dev/null | head -5)
+    git_log=$(cd "$project_dir" && git log --oneline -3 2>/dev/null)
+  fi
+
+  # ── Extract recent conversation pairs ──
+  # Count only real user prompts (skip meta/system messages)
+  # Build filtered pair indices: map real prompt index → raw prompt index
+  local -a real_to_raw=()
+  local raw_idx=0
+  while IFS=$'\t' read -r is_meta content; do
+    raw_idx=$((raw_idx + 1))
+    # Skip meta messages (isMeta flag from Claude)
+    [ "$is_meta" = "true" ] && continue
+    # Skip system/command wrapper messages
+    case "$content" in
+      '<local-command'*|'<command-name'*|'<system-'*) continue ;;
+    esac
+    # Skip /exit, /quit, empty
+    [[ "$content" =~ ^[[:space:]]*/exit ]] && continue
+    [[ "$content" =~ ^[[:space:]]*/quit ]] && continue
+    [ -z "${content// /}" ] && continue
+    real_to_raw+=("$raw_idx")
+  done < <(jq -r '
+    select(.type == "user" and (.message.content | type == "string")) |
+    [(.isMeta // false | tostring), (.message.content | .[:80] | gsub("\n"; " "))] |
+    @tsv
+  ' "$jsonl" 2>/dev/null)
+
+  local real_count=${#real_to_raw[@]}
+  local start_from=$((real_count - pair_count + 1))
+  [ "$start_from" -lt 1 ] && start_from=1
+
+  local conversation_summary=""
+  local ri
+  for ((ri = start_from; ri <= real_count; ri++)); do
+    local raw_p=${real_to_raw[$((ri - 1))]}
+    local pair_json user_text assistant_text user_preview assistant_preview
+    pair_json=$(_ccs_get_pair "$jsonl" "$raw_p")
+    user_text=$(echo "$pair_json" | head -1 | jq -r '.text' 2>/dev/null)
+    assistant_text=$(echo "$pair_json" | tail -1 | jq -r '.text' 2>/dev/null)
+
+    # Truncate for token efficiency
+    user_preview=$(echo "$user_text" | head -3 | cut -c1-200)
+    local user_lines
+    user_lines=$(echo "$user_text" | wc -l)
+    [ "$user_lines" -gt 3 ] && user_preview="${user_preview}..."
+
+    assistant_preview=$(echo "$assistant_text" | head -5 | cut -c1-200)
+    local asst_lines
+    asst_lines=$(echo "$assistant_text" | wc -l)
+    [ "$asst_lines" -gt 5 ] && assistant_preview="${assistant_preview}..."
+
+    conversation_summary="${conversation_summary}
+### [${ri}/${real_count}] User
+${user_preview}
+
+### [${ri}/${real_count}] Claude
+${assistant_preview}
+"
+  done
+
+  # ── Extract tool usage from last assistant turn ──
+  local recent_files=""
+  recent_files=$(jq -r '
+    select(.type == "assistant") |
+    .message.content[]? |
+    select(.type == "tool_use") |
+    if .name == "Read" then "R " + .input.file_path
+    elif .name == "Edit" then "E " + .input.file_path
+    elif .name == "Write" then "W " + .input.file_path
+    elif .name == "Bash" then "$ " + (.input.command | split("\n") | first | .[:80])
+    else empty end
+  ' "$jsonl" 2>/dev/null | tail -10 | sort -u)
+
+  # ── Build the prompt ──
+  local prompt=""
+  read -r -d '' prompt << PROMPT_EOF
+繼續上一個 session 的工作：**${topic}**
+
+## Context
+
+- **Project:** ${project}
+- **Session:** \`${sid}\` (${real_count} prompts)$(
+[ -n "$git_branch" ] && printf '\n- **Branch:** `%s`' "$git_branch"
+)$(
+[ -n "$git_log" ] && printf '\n- **Recent commits:**\n```\n%s\n```' "$git_log"
+)$(
+[ -n "$git_status" ] && printf '\n- **Uncommitted changes:**\n```\n%s\n```' "$git_status"
+[ -z "$git_status" ] && [ -n "$git_branch" ] && printf '\n- **Working tree:** clean'
+)
+
+## 最近對話摘要
+${conversation_summary}$(
+[ -n "$recent_files" ] && printf '\n## 最近操作的檔案\n\n```\n%s\n```' "$recent_files"
+)
+
+## Instructions
+
+請先確認你理解上述 context，然後繼續未完成的工作。如果需要更多資訊，先讀取相關檔案再動手。
+PROMPT_EOF
+
+  # ── Output ──
+  if $raw; then
+    echo "$prompt"
+  else
+    if ! $do_copy; then
+      printf "\033[1;36m━━ Resume Prompt ━━\033[0m  \033[90m%s | %s | %d prompts\033[0m\n\n" "$sid" "$topic" "$real_count"
+    fi
+    echo "$prompt"
+    if ! $do_copy; then
+      echo
+      printf "\033[90m---\033[0m\n"
+      printf "\033[90mPaste the above into a new session, or use:\033[0m\n"
+      printf "\033[33m  ccs-resume-prompt %s --copy     \033[90m# copy to clipboard\033[0m\n" "$sid"
+      printf "\033[33m  claude --resume %s  \033[90m# resume with full context (heavier)\033[0m\n" "$full_sid"
+    fi
+  fi
+
+  # ── Copy to clipboard ──
+  if $do_copy; then
+    if command -v xclip &>/dev/null; then
+      echo "$prompt" | xclip -selection clipboard
+      printf "\033[32mCopied to clipboard!\033[0m (%d chars)\n" "${#prompt}" >&2
+    elif command -v xsel &>/dev/null; then
+      echo "$prompt" | xsel --clipboard --input
+      printf "\033[32mCopied to clipboard!\033[0m (%d chars)\n" "${#prompt}" >&2
+    else
+      echo "No clipboard tool found (install xclip or xsel)" >&2
+      echo "$prompt"
+    fi
+  fi
 }
