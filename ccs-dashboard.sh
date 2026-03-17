@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # ccs-dashboard.sh — Claude Code Session dashboard (personal tool, not official)
-# Source this file from .bashrc:  source ~/.local/lib/ccs-dashboard.sh
+# Source this file from .bashrc:  source ~/tools/ccs-dashboard/ccs-dashboard.sh
 #
 # Commands:
 #   ccs-status  (ccs)   — unified dashboard: active + zombies + stale
 #   ccs-sessions        — all sessions within N hours
 #   ccs-active          — non-archived sessions within N days
 #   ccs-cleanup         — kill stopped (suspended) claude processes
+#   ccs-details         — show last prompt & response of a session
 #   ccs-handoff         — generate session handoff note
 
 # ── Helper: parse one JSONL session file → tab-separated row ──
@@ -389,6 +390,247 @@ HELP
   fi
 }
 alias ccs='ccs-status'
+
+# ── Helper: resolve JSONL file from args ──
+_ccs_resolve_jsonl() {
+  local projects_dir="$HOME/.claude/projects"
+  local prefix="$1" search_all="$2"
+  if [ -n "$prefix" ]; then
+    find "$projects_dir" -maxdepth 2 -name "${prefix}*.jsonl" ! -path "*/subagents/*" 2>/dev/null | head -1
+  else
+    local search_dir
+    if [ "$search_all" = "true" ]; then
+      search_dir="$projects_dir"
+    else
+      local encoded_dir
+      encoded_dir=$(pwd | sed 's|/|-|g')
+      search_dir="$projects_dir/$encoded_dir"
+      [ ! -d "$search_dir" ] && return 1
+    fi
+    find "$search_dir" -maxdepth 2 -name "*.jsonl" ! -path "*/subagents/*" -printf '%T@\t%p\n' 2>/dev/null \
+      | sort -rn | head -1 | cut -f2
+  fi
+}
+
+# ── Helper: extract prompt-response pairs index from JSONL ──
+# Output: tab-separated lines: prompt_line_num \t prompt_text_preview
+_ccs_build_pairs_index() {
+  local jsonl="$1"
+  # Extract all user prompts (string content = real user input, not tool_result)
+  # and the next assistant text response after each
+  jq -r 'select(.type == "user" and (.message.content | type == "string")) | .message.content | gsub("\n"; " ") | .[:120]' "$jsonl" 2>/dev/null \
+    | cat -n
+}
+
+# ── Helper: extract the Nth prompt-response pair ──
+# Output: two JSON lines: {role:"user", text:...} and {role:"assistant", text:...}
+_ccs_get_pair() {
+  local jsonl="$1" pair_idx="$2"
+
+  # Filter: user prompts (string content) and assistant turns with non-empty text
+  # Then find the Nth user prompt and its following assistant response
+  jq -c '
+    if .type == "user" and (.message.content | type == "string") then
+      {role: "user", text: .message.content}
+    elif .type == "assistant" then
+      (.message.content | if type == "array" then
+        [.[] | select(.type == "text") | .text] | join("\n")
+      else . end) as $t |
+      if ($t | length) > 0 then {role: "assistant", text: $t}
+      else empty end
+    else empty end
+  ' "$jsonl" 2>/dev/null \
+    | awk -v idx="$pair_idx" 'BEGIN{pn=0;fp=0} /\"role\":\"user\"/{pn++;if(pn==idx){fp=1;print;next}} fp&&/\"role\":\"assistant\"/{print;exit}'
+}
+
+# ── ccs-details [session-id-prefix] — interactive session conversation browser ──
+ccs-details() {
+  if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
+    cat <<'HELP'
+ccs-details [session-id-prefix]  — interactive session conversation browser
+[personal tool, not official Claude Code]
+
+Browse prompt-response pairs in a session, similar to tig for git.
+
+Arguments:
+  session-id-prefix   First N chars of session UUID (from ccs-active/ccs-sessions)
+                      If omitted, uses the most recent session in current project dir.
+
+Options:
+  -a, --all           Search all projects (not just current dir)
+  --last              Non-interactive: show only the last prompt & response
+
+Interactive keys:
+  ↑/↓, j/k           Navigate prompts
+  Enter               View full prompt & response (piped to less)
+  q, Esc              Quit
+HELP
+    return 0
+  fi
+
+  local prefix="" search_all=false last_only=false
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -a|--all) search_all=true; shift ;;
+      --last) last_only=true; shift ;;
+      *) prefix="$1"; shift ;;
+    esac
+  done
+
+  local jsonl
+  jsonl=$(_ccs_resolve_jsonl "$prefix" "$search_all")
+  if [ -z "$jsonl" ]; then
+    if [ -n "$prefix" ]; then
+      echo "No session found matching: ${prefix}*"
+    else
+      echo "No sessions for current dir. Use -a to search all, or provide a session ID prefix."
+    fi
+    return 1
+  fi
+
+  # ── Session metadata ──
+  local full_sid sid mod_date topic status dir project
+  full_sid=$(basename "$jsonl" .jsonl)
+  sid=$(echo "$full_sid" | cut -c1-8)
+  mod_date=$(stat -c "%y" "$jsonl" | cut -d. -f1)
+
+  dir=$(basename "$(dirname "$jsonl")")
+  project=$(echo "$dir" | sed 's/^-pool2-chenhsun-*//; s/-/\//g')
+  [ -z "$project" ] && project="~(home)"
+  topic=$(_ccs_topic_from_jsonl "$jsonl")
+
+  if tail -20 "$jsonl" 2>/dev/null | grep -q '"type":"last-prompt"'; then
+    status="archived"
+  else
+    local now ago
+    now=$(date +%s); ago=$(( (now - $(stat -c "%Y" "$jsonl")) / 60 ))
+    if [ "$ago" -lt 10 ]; then status="active"
+    elif [ "$ago" -lt 60 ]; then status="recent"
+    elif [ "$ago" -lt 1440 ]; then status="idle"
+    else status="stale"; fi
+  fi
+
+  # ── Build pairs index (cached in temp file for performance) ──
+  local index_file
+  index_file=$(mktemp /tmp/ccs-details-XXXXXX)
+  # Each line: sequential_num \t prompt_preview
+  jq -r 'select(.type == "user" and (.message.content | type == "string")) | .message.content | split("\n") | join(" ") | .[:100]' "$jsonl" 2>/dev/null > "$index_file"
+
+  local total_prompts
+  total_prompts=$(wc -l < "$index_file")
+
+  if [ "$total_prompts" -eq 0 ]; then
+    echo "No user prompts found in session."
+    rm -f "$index_file"
+    return 1
+  fi
+
+  # ── --last mode: non-interactive ──
+  if $last_only; then
+    printf "\033[1;36m━━ Session Details ━━\033[0m\n"
+    printf "  \033[1mSession:\033[0m  %s (%s)  \033[1mProject:\033[0m %s\n" "$sid" "$status" "$project"
+    printf "  \033[1mTopic:\033[0m    %s  \033[1mLast:\033[0m %s\n" "$topic" "$mod_date"
+    printf "  \033[1mPrompts:\033[0m  %d\n" "$total_prompts"
+
+    local pair_json
+    pair_json=$(_ccs_get_pair "$jsonl" "$total_prompts")
+    local user_text assistant_text
+    user_text=$(echo "$pair_json" | head -1 | jq -r '.text' 2>/dev/null)
+    assistant_text=$(echo "$pair_json" | tail -1 | jq -r '.text' 2>/dev/null)
+
+    echo
+    printf "\033[1;33m━━ Last Prompt [%d/%d] ━━\033[0m\n" "$total_prompts" "$total_prompts"
+    printf "\033[33m%s\033[0m\n" "$user_text"
+    echo
+    printf "\033[1;32m━━ Response ━━\033[0m\n"
+    echo "$assistant_text" | head -30
+    echo
+    printf "\033[90mResume: claude --resume %s\033[0m\n" "$full_sid"
+    rm -f "$index_file"
+    return 0
+  fi
+
+  # ── Interactive mode ──
+  local sel=$total_prompts  # start at most recent
+  local term_lines key running=true
+
+  # Read index lines into array
+  local -a prompts=()
+  mapfile -t prompts < "$index_file"
+  rm -f "$index_file"
+
+  while $running; do
+    term_lines=$(tput lines 2>/dev/null || echo 24)
+    local visible=$((term_lines - 8))  # header takes ~6 lines + footer
+    [ "$visible" -lt 5 ] && visible=5
+
+    # Clear screen and draw
+    clear
+    printf "\033[1;36m━━ %s ━━\033[0m  \033[90m%s | %s | %d prompts\033[0m\n" "$topic" "$sid" "$status" "$total_prompts"
+    printf "\033[90m  ↑↓/jk navigate  Enter view  q quit\033[0m\n"
+    printf '%.0s─' {1..80}; echo
+
+    # Calculate window: show prompts around selection
+    local win_start win_end
+    win_start=$((sel - visible / 2))
+    [ "$win_start" -lt 1 ] && win_start=1
+    win_end=$((win_start + visible - 1))
+    [ "$win_end" -gt "$total_prompts" ] && win_end=$total_prompts
+    # Adjust start if end hit the limit
+    win_start=$((win_end - visible + 1))
+    [ "$win_start" -lt 1 ] && win_start=1
+
+    local i
+    for ((i = win_start; i <= win_end; i++)); do
+      local prompt_text="${prompts[$((i-1))]}"
+      local display_num
+      display_num=$(printf '%3d' "$i")
+      if [ "$i" -eq "$sel" ]; then
+        printf "\033[7m  %s  %s\033[0m\n" "$display_num" "$prompt_text"
+      else
+        printf "  \033[90m%s\033[0m  %s\n" "$display_num" "$prompt_text"
+      fi
+    done
+
+    # Footer
+    printf '%.0s─' {1..80}; echo
+    printf "\033[90m[%d/%d]\033[0m" "$sel" "$total_prompts"
+
+    # Read key
+    IFS= read -rsn1 key
+    case "$key" in
+      $'\x1b')  # escape sequence
+        read -rsn2 -t 0.1 key
+        case "$key" in
+          '[A') [ "$sel" -gt 1 ] && sel=$((sel - 1)) ;;           # up
+          '[B') [ "$sel" -lt "$total_prompts" ] && sel=$((sel + 1)) ;;  # down
+          '') running=false ;;  # bare Esc
+        esac
+        ;;
+      k) [ "$sel" -gt 1 ] && sel=$((sel - 1)) ;;
+      j) [ "$sel" -lt "$total_prompts" ] && sel=$((sel + 1)) ;;
+      g) sel=1 ;;                    # go to first
+      G) sel=$total_prompts ;;       # go to last
+      q) running=false ;;
+      '')  # Enter: show full pair
+        local pair_json user_text assistant_text
+        pair_json=$(_ccs_get_pair "$jsonl" "$sel")
+        user_text=$(echo "$pair_json" | head -1 | jq -r '.text' 2>/dev/null)
+        assistant_text=$(echo "$pair_json" | tail -n +2 | jq -r '.text' 2>/dev/null)
+        {
+          printf "\033[1;33m━━ Prompt [%d/%d] ━━\033[0m\n" "$sel" "$total_prompts"
+          printf "\033[33m%s\033[0m\n" "$user_text"
+          echo
+          printf "\033[1;32m━━ Response ━━\033[0m\n"
+          echo "$assistant_text"
+        } | less -R
+        ;;
+    esac
+  done
+
+  clear
+  printf "\033[90mResume: claude --resume %s\033[0m\n" "$full_sid"
+}
 
 # ── ccs-handoff [project-dir] — generate session handoff note ──
 ccs-handoff() {
