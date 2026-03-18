@@ -1943,7 +1943,8 @@ ccs-overview  — cross-session work overview
 [personal tool, not official Claude Code]
 
 Usage:
-  ccs-overview              Terminal ANSI output (default)
+  ccs-overview              Terminal ANSI output (default, excludes subagents)
+  ccs-overview --all        Include subagent sessions
   ccs-overview --md         Markdown output (for Skill / Happy web)
   ccs-overview --json       JSON output (for Skill structured parsing)
   ccs-overview --git        Cross-project git status
@@ -1952,13 +1953,14 @@ HELP
     return 0
   fi
 
-  local mode="terminal" todos_only=false git_mode=false
+  local mode="terminal" todos_only=false git_mode=false show_all=false
   while [ $# -gt 0 ]; do
     case "$1" in
       --md)         mode="md"; shift ;;
       --json)       mode="json"; shift ;;
       --git)        git_mode=true; shift ;;
       --todos-only) todos_only=true; shift ;;
+      --all|-a)     show_all=true; shift ;;
       *) echo "Unknown option: $1" >&2; return 1 ;;
     esac
   done
@@ -1984,8 +1986,18 @@ HELP
       continue
     fi
 
-    local dir row
+    local dir sid_prefix
     dir=$(basename "$(dirname "$f")")
+    sid_prefix=$(basename "$f" .jsonl | cut -c1-6)
+
+    # Skip subagent sessions unless --all
+    if ! $show_all; then
+      # subagents project dir or agent-prefixed session ID
+      [[ "$dir" == *subagents* ]] && continue
+      [[ "$sid_prefix" == agent-* ]] && continue
+    fi
+
+    local row
     row=$(_ccs_session_row "$f")
     [ -z "$row" ] && continue
 
