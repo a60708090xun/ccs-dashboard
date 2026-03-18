@@ -306,11 +306,10 @@ alias ccs='ccs-status'
 ccs-pick() {
   if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
     cat <<'HELP'
-ccs-pick <N> [-n COUNT]  — show details for the Nth session from ccs-status --md
+ccs-pick <N|SESSION-ID> [-n COUNT]  — show details for a session
 [personal tool, not official Claude Code]
 
-Uses the index built by the last ccs-status --md run.
-Run ccs-status --md first to build the index.
+Accepts a numeric index (from ccs-status --md) or a session ID prefix.
 
 Options:
   --md        Output as Markdown (for Happy web rendering)
@@ -347,14 +346,22 @@ HELP
   fi
 
   local sid topic
-  sid=$(awk -F'\t' -v n="$idx" '$1 == n {print $2}' "$pick_file")
-  topic=$(awk -F'\t' -v n="$idx" '$1 == n {print $3}' "$pick_file")
 
-  if [ -z "$sid" ]; then
-    local total
-    total=$(wc -l < "$pick_file")
-    echo "Invalid index: ${idx} (valid: 1-${total})"
-    return 1
+  # Accept session ID prefix (non-numeric) or index number
+  if [[ "$idx" =~ ^[0-9]+$ ]]; then
+    # Numeric — look up in pick index
+    sid=$(awk -F'\t' -v n="$idx" '$1 == n {print $2}' "$pick_file")
+    topic=$(awk -F'\t' -v n="$idx" '$1 == n {print $3}' "$pick_file")
+    if [ -z "$sid" ]; then
+      local total
+      total=$(wc -l < "$pick_file")
+      echo "Invalid index: ${idx} (valid: 1-${total})"
+      return 1
+    fi
+  else
+    # Non-numeric — treat as session ID prefix
+    sid="$idx"
+    topic=""
   fi
 
   if $md; then
