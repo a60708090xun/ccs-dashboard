@@ -306,11 +306,10 @@ alias ccs='ccs-status'
 ccs-pick() {
   if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
     cat <<'HELP'
-ccs-pick <N> [-n COUNT]  — show details for the Nth session from ccs-status --md
+ccs-pick <N|SESSION-ID> [-n COUNT]  — show details for a session
 [personal tool, not official Claude Code]
 
-Uses the index built by the last ccs-status --md run.
-Run ccs-status --md first to build the index.
+Accepts a numeric index (from ccs-status --md) or a session ID prefix.
 
 Options:
   --md        Output as Markdown (for Happy web rendering)
@@ -347,14 +346,22 @@ HELP
   fi
 
   local sid topic
-  sid=$(awk -F'\t' -v n="$idx" '$1 == n {print $2}' "$pick_file")
-  topic=$(awk -F'\t' -v n="$idx" '$1 == n {print $3}' "$pick_file")
 
-  if [ -z "$sid" ]; then
-    local total
-    total=$(wc -l < "$pick_file")
-    echo "Invalid index: ${idx} (valid: 1-${total})"
-    return 1
+  # Accept session ID prefix (non-numeric) or index number
+  if [[ "$idx" =~ ^[0-9]+$ ]]; then
+    # Numeric — look up in pick index
+    sid=$(awk -F'\t' -v n="$idx" '$1 == n {print $2}' "$pick_file")
+    topic=$(awk -F'\t' -v n="$idx" '$1 == n {print $3}' "$pick_file")
+    if [ -z "$sid" ]; then
+      local total
+      total=$(wc -l < "$pick_file")
+      echo "Invalid index: ${idx} (valid: 1-${total})"
+      return 1
+    fi
+  else
+    # Non-numeric — treat as session ID prefix
+    sid="$idx"
+    topic=""
   fi
 
   if $md; then
@@ -1895,6 +1902,8 @@ _ccs_overview_terminal() {
     status=$(echo "$row" | cut -f3)
     color=$(echo "$row" | cut -f4)
 
+    local sid
+    sid=$(basename "$f" .jsonl | cut -c1-8)
     local topic
     topic=$(_ccs_topic_from_jsonl "$f")
 
@@ -1907,8 +1916,8 @@ _ccs_overview_terminal() {
       ago_str="$((ago_min / 1440))d"
     fi
 
-    # Brief line: [status] project (age) — topic
-    printf '  %b%-25s\033[0m \033[90m%4s\033[0m  %s\n' "$color" "$project" "$ago_str" "$topic"
+    # Brief line: [status] sid project (age) — topic
+    printf '  %b%s %-25s\033[0m \033[90m%4s\033[0m  %s\n' "$color" "$sid" "$project" "$ago_str" "$topic"
 
     # Todos (compact)
     local data
@@ -1995,6 +2004,12 @@ HELP
       # subagents project dir or agent-prefixed session ID
       [[ "$dir" == *subagents* ]] && continue
       [[ "$sid_prefix" == agent-* ]] && continue
+
+      # Skip sessions with no real user prompts
+      if ! grep -m1 '"type":"user"' "$f" 2>/dev/null \
+        | jq -e 'select((.isMeta // false) == false and (.message.content | type == "string") and (.message.content | test("^<local-command|^<command-name|^<system-") | not))' &>/dev/null; then
+        continue
+      fi
     fi
 
     local row
