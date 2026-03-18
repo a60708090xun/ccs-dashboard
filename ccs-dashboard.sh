@@ -1425,6 +1425,499 @@ _ccs_overview_session_data() {
     }'
 }
 
+# ── Helper: render overview as Markdown ──
+_ccs_overview_md() {
+  local -n _files=$1 _projects=$2 _rows=$3
+  local count=${#_files[@]}
+  local now_str
+  now_str=$(date '+%Y-%m-%d %H:%M')
+
+  printf '# Work Overview (%s)\n\n' "$now_str"
+  printf '## Active Sessions (%d)\n\n' "$count"
+
+  if [ "$count" -eq 0 ]; then
+    printf '(no active sessions)\n\n'
+  fi
+
+  # Collect all todos for cross-session summary
+  local -a all_todo_lines=()
+  local i
+
+  for ((i = 0; i < count; i++)); do
+    local f="${_files[$i]}"
+    local dir="${_projects[$i]}"
+    local row="${_rows[$i]}"
+
+    # Parse row fields (tab-separated: project, ago_min, status, color, display...)
+    local project ago_min status sid topic
+    project=$(echo "$row" | cut -f1)
+    ago_min=$(echo "$row" | cut -f2)
+    status=$(echo "$row" | cut -f3)
+
+    local resolved_path
+    resolved_path=$(_ccs_resolve_project_path "$dir")
+
+    sid=$(basename "$f" .jsonl | cut -c1-8)
+    topic=$(_ccs_topic_from_jsonl "$f")
+
+    # Status emoji
+    local emoji="🔵"
+    case "$status" in
+      active)  emoji="🟢" ;;
+      recent)  emoji="🟡" ;;
+      idle)    emoji="🔵" ;;
+      stale)   emoji="⚪" ;;
+    esac
+
+    # Age string
+    local ago_str
+    if [ "$ago_min" -lt 60 ]; then
+      ago_str="${ago_min}m ago"
+    elif [ "$ago_min" -lt 1440 ]; then
+      ago_str="$((ago_min / 60))h ago"
+    else
+      ago_str="$((ago_min / 1440))d ago"
+    fi
+
+    # Session data
+    local data
+    data=$(_ccs_overview_session_data "$f")
+
+    local user_ex asst_ex deadline_ctx
+    user_ex=$(echo "$data" | jq -r '.last_exchange.user // ""')
+    asst_ex=$(echo "$data" | jq -r '.last_exchange.assistant // ""')
+    deadline_ctx=$(echo "$data" | jq -r '.deadline_context // ""')
+
+    printf '### %d. %s %s — %s\n' "$((i + 1))" "$emoji" "$project" "$topic"
+    printf -- '- **Session:** %s | %s | %s\n' "$sid" "$project" "$ago_str"
+
+    # Git status (brief)
+    if [ -d "$resolved_path/.git" ]; then
+      local branch dirty_count
+      branch=$(git -C "$resolved_path" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "?")
+      dirty_count=$(git -C "$resolved_path" status --porcelain 2>/dev/null | wc -l)
+      if [ "$dirty_count" -gt 0 ]; then
+        printf -- '- **Git:** %s (%d uncommitted files)\n' "$branch" "$dirty_count"
+      else
+        printf -- '- **Git:** %s (clean)\n' "$branch"
+      fi
+    fi
+
+    # Last Exchange
+    if [ -n "$user_ex" ] || [ -n "$asst_ex" ]; then
+      printf -- '- **Last Exchange:**\n'
+      [ -n "$user_ex" ] && printf '  - **User:** %s\n' "$user_ex"
+      [ -n "$asst_ex" ] && printf '  - **Claude:** %s\n' "$asst_ex"
+    fi
+
+    # Todos
+    local todo_items
+    todo_items=$(echo "$data" | jq -r '.todos[]? | (if .status == "completed" then "  - [x] " elif .status == "in_progress" then "  - [~] " else "  - [ ] " end) + .content')
+    if [ -n "$todo_items" ]; then
+      printf -- '- **Todos:**\n%s\n' "$todo_items"
+
+      # Collect non-completed for cross-session summary
+      while IFS=$'\t' read -r t_content t_status; do
+        [ "$t_status" = "completed" ] && continue
+        local urgency="⚪ 無 deadline"
+        [ -n "$deadline_ctx" ] && urgency="🔴 $deadline_ctx"
+        all_todo_lines+=("$(printf '%s\t%s\t%s\t%s' "$t_content" "$project" "$t_status" "$urgency")")
+      done < <(echo "$data" | jq -r '.todos[]? | [.content, .status] | @tsv')
+    else
+      printf -- '- **Todos:** (none)\n'
+    fi
+
+    # Context (deadline)
+    if [ -n "$deadline_ctx" ]; then
+      printf -- '- **Context:** %s\n' "$(echo "$deadline_ctx" | sed 's/|/; /g')"
+    fi
+
+    printf '\n'
+  done
+
+  # Cross-session pending todos
+  if [ ${#all_todo_lines[@]} -gt 0 ]; then
+    printf '## Pending Todos (cross-session)\n\n'
+    printf '| # | Task | Project | Status | Urgency |\n'
+    printf '|---|------|---------|--------|---------|\n'
+    local n=0
+    for line in "${all_todo_lines[@]}"; do
+      n=$((n + 1))
+      local t_content t_project t_status t_urgency
+      t_content=$(echo "$line" | cut -f1)
+      t_project=$(echo "$line" | cut -f2)
+      t_status=$(echo "$line" | cut -f3)
+      t_urgency=$(echo "$line" | cut -f4)
+      printf '| %d | %s | %s | %s | %s |\n' "$n" "$t_content" "$t_project" "$t_status" "$t_urgency"
+    done
+    printf '\n'
+  fi
+
+  # Zombie processes (count only)
+  local zombie_count
+  zombie_count=$(ps aux 2>/dev/null | grep -c '[c]laude.*--session' || echo 0)
+  local stopped_count
+  stopped_count=$(ps -eo pid,stat,comm 2>/dev/null | awk '$2 ~ /T/ && $3 ~ /claude/' | wc -l)
+  if [ "$stopped_count" -gt 0 ]; then
+    local zombie_ram
+    zombie_ram=$(ps -eo stat,rss,comm 2>/dev/null | awk '$1 ~ /T/ && $3 ~ /claude/ {sum+=$2} END {printf "%d", sum/1024}')
+    printf '## Zombie Processes\n\n'
+    printf '%d stopped process(es), ~%d MB RAM. Run `ccs-cleanup --dry-run` for details.\n\n' "$stopped_count" "$zombie_ram"
+  else
+    printf '## Zombie Processes\n\n(none)\n\n'
+  fi
+}
+
+# ── Helper: render overview as JSON ──
+_ccs_overview_json() {
+  local -n _files=$1 _projects=$2 _rows=$3
+  local count=${#_files[@]}
+  local now_str
+  now_str=$(date -Iseconds)
+
+  local sessions_json="[]"
+  local all_todos_json="[]"
+  local i
+
+  for ((i = 0; i < count; i++)); do
+    local f="${_files[$i]}"
+    local dir="${_projects[$i]}"
+    local row="${_rows[$i]}"
+
+    local project ago_min status
+    project=$(echo "$row" | cut -f1)
+    ago_min=$(echo "$row" | cut -f2)
+    status=$(echo "$row" | cut -f3)
+
+    local resolved_path
+    resolved_path=$(_ccs_resolve_project_path "$dir")
+
+    local sid
+    sid=$(basename "$f" .jsonl | cut -c1-8)
+    local topic
+    topic=$(_ccs_topic_from_jsonl "$f")
+
+    local data
+    data=$(_ccs_overview_session_data "$f")
+
+    # Git info
+    local git_branch="null" git_dirty=0
+    if [ -d "$resolved_path/.git" ]; then
+      git_branch=$(git -C "$resolved_path" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
+      git_dirty=$(git -C "$resolved_path" status --porcelain 2>/dev/null | wc -l)
+    fi
+
+    # Build session JSON
+    local session_obj
+    session_obj=$(jq -nc \
+      --arg sid "$sid" \
+      --arg project "$project" \
+      --arg path "$resolved_path" \
+      --argjson ago "$ago_min" \
+      --arg status "$status" \
+      --arg topic "$topic" \
+      --arg git_branch "$git_branch" \
+      --argjson git_dirty "$git_dirty" \
+      --argjson data "$data" \
+      '{
+        session_id: $sid,
+        project: $project,
+        path: $path,
+        ago_minutes: $ago,
+        status: $status,
+        topic: $topic,
+        git: {branch: $git_branch, uncommitted_files: $git_dirty},
+        last_exchange: $data.last_exchange,
+        todos: $data.todos,
+        deadline_context: $data.deadline_context
+      }')
+
+    sessions_json=$(echo "$sessions_json" | jq --argjson s "$session_obj" '. + [$s]')
+
+    # Collect pending todos
+    local pending
+    pending=$(echo "$data" | jq -c --arg proj "$project" '[.todos[]? | select(.status != "completed") | {content, status, project: $proj}]')
+    all_todos_json=$(echo "$all_todos_json" | jq --argjson p "$pending" '. + $p')
+  done
+
+  # Zombie count
+  local stopped_count
+  stopped_count=$(ps -eo pid,stat,comm 2>/dev/null | awk '$2 ~ /T/ && $3 ~ /claude/' | wc -l)
+
+  jq -nc \
+    --arg timestamp "$now_str" \
+    --argjson sessions "$sessions_json" \
+    --argjson pending_todos "$all_todos_json" \
+    --argjson zombie_count "$stopped_count" \
+    '{
+      timestamp: $timestamp,
+      active_sessions: ($sessions | length),
+      sessions: $sessions,
+      pending_todos: $pending_todos,
+      zombie_processes: $zombie_count
+    }'
+}
+
+# ── Helper: render todos-only view ──
+_ccs_overview_todos() {
+  local -n _files=$1 _projects=$2 _rows=$3
+  local mode="$4"
+  local count=${#_files[@]}
+  local -a todo_entries=()
+  local i
+
+  for ((i = 0; i < count; i++)); do
+    local f="${_files[$i]}"
+    local row="${_rows[$i]}"
+    local project
+    project=$(echo "$row" | cut -f1)
+
+    local data
+    data=$(_ccs_overview_session_data "$f")
+
+    while IFS=$'\t' read -r t_content t_status; do
+      [ "$t_status" = "completed" ] && continue
+      local deadline_ctx
+      deadline_ctx=$(echo "$data" | jq -r '.deadline_context // ""')
+      todo_entries+=("$(printf '%s\t%s\t%s\t%s' "$t_content" "$project" "$t_status" "$deadline_ctx")")
+    done < <(echo "$data" | jq -r '.todos[]? | [.content, .status] | @tsv')
+  done
+
+  if [ "$mode" = "json" ]; then
+    local json="[]"
+    for entry in "${todo_entries[@]}"; do
+      local c p s d
+      c=$(echo "$entry" | cut -f1)
+      p=$(echo "$entry" | cut -f2)
+      s=$(echo "$entry" | cut -f3)
+      d=$(echo "$entry" | cut -f4)
+      json=$(echo "$json" | jq --arg c "$c" --arg p "$p" --arg s "$s" --arg d "$d" \
+        '. + [{content: $c, project: $p, status: $s, deadline_context: (if $d == "" then null else $d end)}]')
+    done
+    echo "$json" | jq .
+    return
+  fi
+
+  # Markdown or terminal
+  local now_str
+  now_str=$(date '+%Y-%m-%d %H:%M')
+  printf '# Pending Todos (%s)\n\n' "$now_str"
+
+  if [ ${#todo_entries[@]} -eq 0 ]; then
+    printf '(no pending todos across sessions)\n'
+    return
+  fi
+
+  printf '| # | Task | Project | Status | Context |\n'
+  printf '|---|------|---------|--------|---------|\n'
+  local n=0
+  for entry in "${todo_entries[@]}"; do
+    n=$((n + 1))
+    local c p s d
+    c=$(echo "$entry" | cut -f1)
+    p=$(echo "$entry" | cut -f2)
+    s=$(echo "$entry" | cut -f3)
+    d=$(echo "$entry" | cut -f4)
+    [ -z "$d" ] && d="—"
+    printf '| %d | %s | %s | %s | %s |\n' "$n" "$c" "$p" "$s" "$d"
+  done
+  printf '\n'
+}
+
+# ── Helper: render cross-project git status ──
+_ccs_overview_git() {
+  local -n _files=$1 _projects=$2
+  local mode="$3"
+  local count=${#_files[@]}
+
+  # Deduplicate projects
+  local -A seen_projects=()
+  local -a unique_dirs=()
+  local i
+  for ((i = 0; i < count; i++)); do
+    local dir="${_projects[$i]}"
+    if [ -z "${seen_projects[$dir]+x}" ]; then
+      seen_projects[$dir]=1
+      unique_dirs+=("$dir")
+    fi
+  done
+
+  local proj_count=${#unique_dirs[@]}
+
+  if [ "$mode" = "json" ]; then
+    _ccs_overview_git_json unique_dirs
+    return
+  fi
+
+  # Markdown output
+  printf '## Git Status (%d projects)\n\n' "$proj_count"
+
+  local n=0
+  for dir in "${unique_dirs[@]}"; do
+    local resolved
+    resolved=$(_ccs_resolve_project_path "$dir")
+    [ ! -d "$resolved/.git" ] && continue
+
+    n=$((n + 1))
+    local branch dirty_count ahead behind stash_count
+    branch=$(git -C "$resolved" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "?")
+
+    local porcelain
+    porcelain=$(git -C "$resolved" status --porcelain 2>/dev/null)
+    dirty_count=$(echo "$porcelain" | grep -c '.' || echo 0)
+    local modified_count untracked_count
+    modified_count=$(echo "$porcelain" | grep -c '^ *[MADRCU]' || echo 0)
+    untracked_count=$(echo "$porcelain" | grep -c '^?' || echo 0)
+
+    # Ahead/behind
+    ahead=0; behind=0
+    if git -C "$resolved" rev-parse --verify '@{u}' &>/dev/null; then
+      local lr
+      lr=$(git -C "$resolved" rev-list --left-right --count '@{u}...HEAD' 2>/dev/null)
+      behind=$(echo "$lr" | cut -f1)
+      ahead=$(echo "$lr" | cut -f2)
+    fi
+
+    stash_count=$(git -C "$resolved" stash list 2>/dev/null | wc -l)
+
+    local project
+    project=$(echo "$resolved" | sed "s|^$HOME/||")
+    [ -z "$project" ] && project="~(home)"
+
+    local icon="✅"
+    [ "$dirty_count" -gt 0 ] || [ "$ahead" -gt 0 ] && icon="⚠️"
+
+    printf '### %d. %s %s — %s\n' "$n" "$icon" "$project" "$branch"
+
+    if [ "$dirty_count" -eq 0 ] && [ "$ahead" -eq 0 ] && [ "$behind" -eq 0 ]; then
+      printf -- '- **Clean**\n'
+    else
+      if [ "$dirty_count" -gt 0 ]; then
+        printf -- '- **Uncommitted:** %d files (%d modified, %d untracked)\n' "$dirty_count" "$modified_count" "$untracked_count"
+      fi
+      printf -- '- **Ahead/Behind:** ↑%d ↓%d' "$ahead" "$behind"
+      [ "$ahead" -gt 0 ] && printf ' (%d commits unpushed)' "$ahead"
+      printf '\n'
+      [ "$stash_count" -gt 0 ] && printf -- '- **Stash:** %d entry/entries\n' "$stash_count"
+      if [ "$dirty_count" -gt 0 ]; then
+        local modified_files
+        modified_files=$(echo "$porcelain" | awk '{print $NF}' | head -5 | paste -sd ', ' -)
+        printf -- '- **Modified:** %s\n' "$modified_files"
+        [ "$dirty_count" -gt 5 ] && printf '  ... and %d more\n' "$((dirty_count - 5))"
+      fi
+    fi
+    printf '\n'
+  done
+
+  [ "$n" -eq 0 ] && printf '(no git repositories found)\n\n'
+}
+
+# ── Helper: git status as JSON ──
+_ccs_overview_git_json() {
+  local -n _dirs=$1
+  local result="[]"
+
+  for dir in "${_dirs[@]}"; do
+    local resolved
+    resolved=$(_ccs_resolve_project_path "$dir")
+    [ ! -d "$resolved/.git" ] && continue
+
+    local branch dirty ahead=0 behind=0 stash_count
+    branch=$(git -C "$resolved" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "?")
+    dirty=$(git -C "$resolved" status --porcelain 2>/dev/null | wc -l)
+    if git -C "$resolved" rev-parse --verify '@{u}' &>/dev/null; then
+      local lr
+      lr=$(git -C "$resolved" rev-list --left-right --count '@{u}...HEAD' 2>/dev/null)
+      behind=$(echo "$lr" | cut -f1)
+      ahead=$(echo "$lr" | cut -f2)
+    fi
+    stash_count=$(git -C "$resolved" stash list 2>/dev/null | wc -l)
+
+    local project
+    project=$(echo "$resolved" | sed "s|^$HOME/||")
+    [ -z "$project" ] && project="~(home)"
+
+    result=$(echo "$result" | jq \
+      --arg proj "$project" \
+      --arg path "$resolved" \
+      --arg branch "$branch" \
+      --argjson dirty "$dirty" \
+      --argjson ahead "$ahead" \
+      --argjson behind "$behind" \
+      --argjson stash "$stash_count" \
+      '. + [{project: $proj, path: $path, branch: $branch, uncommitted: $dirty, ahead: $ahead, behind: $behind, stash: $stash}]')
+  done
+
+  echo "$result" | jq .
+}
+
+# ── Helper: render overview as terminal ANSI ──
+_ccs_overview_terminal() {
+  local -n _files=$1 _projects=$2 _rows=$3
+  local count=${#_files[@]}
+  local now_str
+  now_str=$(date '+%Y-%m-%d %H:%M')
+
+  printf '\033[1m── Work Overview (%s) ──\033[0m\n\n' "$now_str"
+
+  if [ "$count" -eq 0 ]; then
+    printf '  \033[90m(no active sessions)\033[0m\n\n'
+    return
+  fi
+
+  printf '\033[1mActive Sessions (%d)\033[0m\n' "$count"
+
+  local i
+  for ((i = 0; i < count; i++)); do
+    local f="${_files[$i]}"
+    local row="${_rows[$i]}"
+
+    local project ago_min status color
+    project=$(echo "$row" | cut -f1)
+    ago_min=$(echo "$row" | cut -f2)
+    status=$(echo "$row" | cut -f3)
+    color=$(echo "$row" | cut -f4)
+
+    local topic
+    topic=$(_ccs_topic_from_jsonl "$f")
+
+    local ago_str
+    if [ "$ago_min" -lt 60 ]; then
+      ago_str="${ago_min}m"
+    elif [ "$ago_min" -lt 1440 ]; then
+      ago_str="$((ago_min / 60))h"
+    else
+      ago_str="$((ago_min / 1440))d"
+    fi
+
+    # Brief line: [status] project (age) — topic
+    printf '  %b%-25s\033[0m \033[90m%4s\033[0m  %s\n' "$color" "$project" "$ago_str" "$topic"
+
+    # Todos (compact)
+    local data
+    data=$(_ccs_overview_session_data "$f")
+    local pending_count
+    pending_count=$(echo "$data" | jq '[.todos[]? | select(.status != "completed")] | length')
+    local in_progress
+    in_progress=$(echo "$data" | jq -r '[.todos[]? | select(.status == "in_progress") | .content] | first // empty')
+
+    if [ -n "$in_progress" ]; then
+      printf '    \033[33m↳ %s\033[0m\n' "$in_progress"
+    elif [ "$pending_count" -gt 0 ]; then
+      printf '    \033[90m↳ %d pending todo(s)\033[0m\n' "$pending_count"
+    fi
+  done
+
+  # Zombie summary
+  local stopped_count
+  stopped_count=$(ps -eo pid,stat,comm 2>/dev/null | awk '$2 ~ /T/ && $3 ~ /claude/' | wc -l)
+  if [ "$stopped_count" -gt 0 ]; then
+    printf '\n\033[31m⚠ %d zombie process(es)\033[0m — run \033[1mccs-cleanup --dry-run\033[0m\n' "$stopped_count"
+  fi
+
+  printf '\n'
+}
+
 # ── ccs-overview — cross-session work overview ──
 ccs-overview() {
   if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
