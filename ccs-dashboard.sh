@@ -2004,6 +2004,12 @@ HELP
       # subagents project dir or agent-prefixed session ID
       [[ "$dir" == *subagents* ]] && continue
       [[ "$sid_prefix" == agent-* ]] && continue
+
+      # Skip sessions with no real user prompts
+      if ! grep -m1 '"type":"user"' "$f" 2>/dev/null \
+        | jq -e 'select((.isMeta // false) == false and (.message.content | type == "string") and (.message.content | test("^<local-command|^<command-name|^<system-") | not))' &>/dev/null; then
+        continue
+      fi
     fi
 
     local row
