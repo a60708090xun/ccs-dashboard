@@ -1401,15 +1401,15 @@ _ccs_overview_session_data() {
   ' "$jsonl" 2>/dev/null | tail -1)
   [ -z "$todos_json" ] && todos_json="[]"
 
-  # --- Deadline Context (keyword search across user messages) ---
+  # --- Deadline Context (keyword search in last 5 non-meta user messages) ---
   local deadline_ctx=""
   deadline_ctx=$(jq -r '
-    select(.type == "user" and (.message.content | type == "string")) |
+    select(.type == "user" and (.message.content | type == "string")
+      and ((.isMeta // false) == false)) |
     .message.content
   ' "$jsonl" 2>/dev/null \
-    | grep -iE '(deadline|before|週|月底|by |due|urgent|ASAP|趕|今天|明天|後天)' \
     | tail -5 \
-    | head -5 \
+    | grep -iE '(deadline|before|週|月底|by |due|urgent|ASAP|趕|今天|明天|後天)' \
     | cut -c1-150 \
     | paste -sd '|' -)
 
@@ -1531,6 +1531,8 @@ _ccs_overview_md() {
     # Context (deadline)
     if [ -n "$deadline_ctx" ]; then
       printf -- '- **Context:** %s\n' "$(echo "$deadline_ctx" | sed 's/|/; /g')"
+    else
+      printf -- '- **Context:** 無明確 deadline\n'
     fi
 
     printf '\n'
@@ -1720,7 +1722,7 @@ _ccs_overview_todos() {
     return
   fi
 
-  printf '| # | Task | Project | Status | Context |\n'
+  printf '| # | Task | Project | Status | Urgency |\n'
   printf '|---|------|---------|--------|---------|\n'
   local n=0
   for entry in "${todo_entries[@]}"; do
