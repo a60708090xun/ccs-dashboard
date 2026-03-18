@@ -456,3 +456,78 @@ HELP
   fi
   printf "\033[32mFreed ~%d MB RAM\033[0m\n" "$total_mb"
 }
+
+# ── Helper: resolve JSONL directory name → actual filesystem path ──
+# JSONL dirs encode paths as: /pool2/chenhsun/tools/ccs-dashboard → -pool2-chenhsun-tools-ccs-dashboard
+# Simple sed 's/-/\//g' fails when project names contain hyphens.
+# Strategy: greedy match — try longest path first, progressively split remaining hyphens.
+_ccs_resolve_project_path() {
+  local encoded="$1"
+  [ -z "$encoded" ] && return 1
+
+  # Special case: home directory
+  if [ "$encoded" = "-pool2-chenhsun" ]; then
+    echo "$HOME"
+    return 0
+  fi
+
+  # Convert leading dash to slash
+  local raw="/${encoded#-}"
+
+  # Try full path as-is (no hyphens in any segment)
+  [ -d "$raw" ] && { echo "$raw"; return 0; }
+
+  # Left-to-right greedy: find the longest existing directory prefix,
+  # then recurse on the remainder.
+  # Split into segments by '-'
+  local IFS='-'
+  local -a parts=($raw)
+  unset IFS
+
+  # Rebuild path greedily: accumulate segments, try extending with '-' first (keep hyphen),
+  # then try '/' (split). Prefer longest directory match.
+  local resolved=""
+  local i=0
+  local len=${#parts[@]}
+
+  while [ $i -lt $len ]; do
+    # Try extending current segment with hyphen (greedy: keep as many hyphens as possible)
+    local candidate="$resolved"
+    local best_j=$i
+    local j
+    for ((j = len; j > i; j--)); do
+      # Build candidate from parts[i..j-1] joined with '-'
+      local segment="${parts[$i]}"
+      local k
+      for ((k = i + 1; k < j; k++)); do
+        segment="${segment}-${parts[$k]}"
+      done
+      local try_path
+      if [ -z "$resolved" ]; then
+        try_path="$segment"
+      else
+        try_path="${resolved}/${segment}"
+      fi
+      # Check if this is a valid directory (or final segment)
+      if [ -d "$try_path" ]; then
+        resolved="$try_path"
+        best_j=$j
+        break
+      fi
+    done
+
+    if [ $best_j -eq $i ]; then
+      # No match found, just append with /
+      if [ -z "$resolved" ]; then
+        resolved="${parts[$i]}"
+      else
+        resolved="${resolved}/${parts[$i]}"
+      fi
+      i=$((i + 1))
+    else
+      i=$best_j
+    fi
+  done
+
+  echo "$resolved"
+}
