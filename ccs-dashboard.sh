@@ -1353,3 +1353,153 @@ PROMPT_EOF
     fi
   fi
 }
+
+# ── Helper: extract overview data from a single session JSONL ──
+# Outputs a JSON object with: last_exchange, todos, deadline_context
+_ccs_overview_session_data() {
+  local jsonl="$1"
+
+  # --- Last Exchange (last non-meta user-assistant pair) ---
+  # _ccs_get_pair expects a 1-based index into ALL user prompts (including meta).
+  # We need to find the raw index of the last non-meta, non-system user prompt.
+  # Strategy: enumerate all user prompts with their raw 1-based index,
+  # filter out meta/system, take the last one's raw index.
+  local user_text="" asst_text=""
+  local last_raw_idx
+  last_raw_idx=$(jq -c '
+    select(.type == "user" and (.message.content | type == "string"))
+  ' "$jsonl" 2>/dev/null \
+    | jq -sc '
+      [to_entries[] | {
+        raw_idx: (.key + 1),
+        is_meta: (.value.isMeta // false),
+        content: .value.message.content
+      }]
+      | [.[] | select(
+          .is_meta == false
+          and (.content | test("^\\s*/exit|^\\s*/quit|^<local-command|^<command-name|^<system-") | not)
+          and (.content | test("^\\s*$") | not)
+        )]
+      | last | .raw_idx // 0
+    ')
+
+  if [ -n "$last_raw_idx" ] && [ "$last_raw_idx" -gt 0 ]; then
+    local pair_json
+    pair_json=$(_ccs_get_pair "$jsonl" "$last_raw_idx")
+    user_text=$(echo "$pair_json" | head -1 | jq -r '.text // ""' 2>/dev/null | head -1 | cut -c1-120)
+    asst_text=$(echo "$pair_json" | tail -1 | jq -r '.text // ""' 2>/dev/null | head -2 | cut -c1-200)
+  fi
+
+  # --- Todos (last TodoWrite) ---
+  local todos_json
+  todos_json=$(jq -c '
+    select(.type == "assistant") |
+    .message.content[]? |
+    select(.type == "tool_use" and .name == "TodoWrite") |
+    [.input.todos[]? | {content, status}]
+  ' "$jsonl" 2>/dev/null | tail -1)
+  [ -z "$todos_json" ] && todos_json="[]"
+
+  # --- Deadline Context (keyword search across user messages) ---
+  local deadline_ctx=""
+  deadline_ctx=$(jq -r '
+    select(.type == "user" and (.message.content | type == "string")) |
+    .message.content
+  ' "$jsonl" 2>/dev/null \
+    | grep -iE '(deadline|before|週|月底|by |due|urgent|ASAP|趕|今天|明天|後天)' \
+    | tail -5 \
+    | head -5 \
+    | cut -c1-150 \
+    | paste -sd '|' -)
+
+  # Output JSON
+  jq -nc \
+    --arg user_text "$user_text" \
+    --arg asst_text "$asst_text" \
+    --argjson todos "$todos_json" \
+    --arg deadline "$deadline_ctx" \
+    '{
+      last_exchange: {user: $user_text, assistant: $asst_text},
+      todos: $todos,
+      deadline_context: (if $deadline == "" then null else $deadline end)
+    }'
+}
+
+# ── ccs-overview — cross-session work overview ──
+ccs-overview() {
+  if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
+    cat <<'HELP'
+ccs-overview  — cross-session work overview
+[personal tool, not official Claude Code]
+
+Usage:
+  ccs-overview              Terminal ANSI output (default)
+  ccs-overview --md         Markdown output (for Skill / Happy web)
+  ccs-overview --json       JSON output (for Skill structured parsing)
+  ccs-overview --git        Cross-project git status
+  ccs-overview --todos-only Cross-session pending todos only
+HELP
+    return 0
+  fi
+
+  local mode="terminal" todos_only=false git_mode=false
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --md)         mode="md"; shift ;;
+      --json)       mode="json"; shift ;;
+      --git)        git_mode=true; shift ;;
+      --todos-only) todos_only=true; shift ;;
+      *) echo "Unknown option: $1" >&2; return 1 ;;
+    esac
+  done
+
+  # Collect active sessions (non-archived, last 7 days)
+  local sessions_dir="$HOME/.claude/projects"
+  [ ! -d "$sessions_dir" ] && { echo "No sessions found."; return 0; }
+
+  local -a session_files=()
+  local -a session_projects=()
+  local -a session_rows=()
+
+  local cutoff
+  cutoff=$(date -d "7 days ago" +%s 2>/dev/null || date -v-7d +%s 2>/dev/null)
+
+  while IFS= read -r f; do
+    local mod
+    mod=$(stat -c "%Y" "$f" 2>/dev/null)
+    [ "$mod" -lt "$cutoff" ] 2>/dev/null && continue
+
+    # Skip archived
+    if tail -20 "$f" 2>/dev/null | grep -q '"type":"last-prompt"'; then
+      continue
+    fi
+
+    local dir row
+    dir=$(basename "$(dirname "$f")")
+    row=$(_ccs_session_row "$f")
+    [ -z "$row" ] && continue
+
+    session_files+=("$f")
+    session_projects+=("$dir")
+    session_rows+=("$row")
+  done < <(find "$sessions_dir" -name "*.jsonl" -type f 2>/dev/null)
+
+  local session_count=${#session_files[@]}
+
+  if $git_mode; then
+    _ccs_overview_git session_files session_projects "$mode"
+    return $?
+  fi
+
+  if $todos_only; then
+    _ccs_overview_todos session_files session_projects session_rows "$mode"
+    return $?
+  fi
+
+  # Full overview
+  case "$mode" in
+    md)       _ccs_overview_md session_files session_projects session_rows ;;
+    json)     _ccs_overview_json session_files session_projects session_rows ;;
+    terminal) _ccs_overview_terminal session_files session_projects session_rows ;;
+  esac
+}
