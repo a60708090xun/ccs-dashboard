@@ -58,7 +58,7 @@ ${XDG_DATA_HOME:-$HOME/.local/share}/ccs-dashboard/
 | `status` | `in_progress` / `completed` / `stale`（根據 todos + 活躍度推斷） |
 | `todos_done` / `todos_total` | 跨 session 合併的 todo 進度 |
 | `last_active_min` | 最近 session 的活躍分鐘數 |
-| `last_exchange` | 最近 session 的最後一句 Claude 回應（截取 100 字） |
+| `last_exchange` | 最近 session 的最後一句 Claude 回應（截取 200 字，與 `_ccs_overview_session_data` 一致） |
 | `git_dirty` | uncommitted files 數量 |
 | `updated` | index 更新時間 |
 
@@ -83,21 +83,40 @@ ${XDG_DATA_HOME:-$HOME/.local/share}/ccs-dashboard/
 ### 聚類邏輯（優先順序）
 
 1. **Override 優先**：`overrides.jsonl` 中的 assign/exclude
-2. **Issue 編號比對**：從 topic 和最近 5 組對話提取 `GL#N`、`#N`、`GH#N`，相同編號聚為同一 feature
+2. **Issue 編號比對**：從 topic 字串提取 issue 編號，相同編號聚為同一 feature
 3. **同專案 + 同 branch**：非 master/main/develop 的同名 branch 聚為同一 feature
 4. **未匹配 session**：不強制歸類，顯示為 "ungrouped"
 
+### Issue 編號提取規則
+
+**搜尋範圍：** 僅 topic 字串（`_ccs_topic_from_jsonl` 回傳值）。不掃對話內容（避免效能問題和誤判）。
+
+**Regex 模式：**
+- 明確前綴：`(GL|GH)#[0-9]+` — 例如 `GL#65`、`GH#12`
+- 裸 `#N` **不匹配**（markdown heading、hex color、numbered list 雜訊太多）
+
+**多 issue 情況：** 同一 topic 含多個 issue 編號時，取第一個作為 primary feature 歸類。若需歸入其他 feature，使用 `ccs-tag` 手動標記。
+
 ### Feature ID 生成
 
-- 有 issue 編號 → `gl65-wtv`（issue 編號 + topic 關鍵字 slugify）
-- 只有 branch → `specman/feat-write-then-verify`（專案 + branch slugify）
+確定性演算法，加專案前綴避免跨專案碰撞：
+
+- 有 issue 編號 → `<project>/<source><number>`（例如 `specman/gl65`）
+- 只有 branch → `<project>/<branch-slugify>`（例如 `specman/feat-write-then-verify`）
 - 都沒有 → 不生成 feature，留在 ungrouped
 
 ### Status 推斷
 
+優先順序（高→低）：`in_progress` > `stale` > `completed` > `idle`
+
 - `in_progress`：有 in_progress todo，或最近 session < 3h
-- `completed`：所有 todo 完成，且沒有 active session
-- `stale`：最近 session > 24h，有 pending todo
+- `stale`：最近 session > 24h，且有 pending todo
+- `completed`：所有 todo 完成，且沒有 active session（< 3h）
+- `idle`：不符合以上任一條件（例如無 todo、最近 session 3h~24h）
+
+### Todo 合併語意
+
+每個 session 取其最後一次 `TodoWrite`（TodoWrite 是全量覆寫語意）。跨 session 合併為 union：同一 feature 的所有 session 的 todos 合在一起計算 done/total。不做跨 session 去重（不同 session 的同名 todo 可能語意不同）。
 
 ### 重建策略
 
@@ -109,6 +128,12 @@ ${XDG_DATA_HOME:-$HOME/.local/share}/ccs-dashboard/
 
 `features.jsonl` 是 cache 性質，刪掉下次執行會自動重建。
 
+### 錯誤處理
+
+- `overrides.jsonl` 含 malformed JSON → 跳過壞行並輸出 warning 到 stderr，不中斷執行
+- `overrides.jsonl` 不存在 → 正常運作（無 override）
+- `features.jsonl` 寫入失敗 → 不影響輸出（直接從記憶體渲染），warning 到 stderr
+
 ---
 
 ## §3 新增指令
@@ -116,13 +141,15 @@ ${XDG_DATA_HOME:-$HOME/.local/share}/ccs-dashboard/
 ### `ccs-feature [name]` — Feature 進度 View
 
 ```bash
-ccs-feature                        # 列出所有 feature 摘要
+ccs-feature                        # Terminal ANSI 輸出（預設，與 ccs-overview 一致）
+ccs-feature --md                   # Markdown 輸出（給 Skill / Happy 網頁版）
+ccs-feature --json                 # JSON 輸出（供 Skill 消費）
 ccs-feature gl65                   # 展開指定 feature 的詳細 view
 ccs-feature gl65 --timeline        # 時間軸展開
-ccs-feature gl65 -n 5              # 詳細 view 裡顯示 5 個 git commit
-ccs-feature --json                 # JSON 輸出（供 Skill 消費）
-ccs-feature --md                   # Markdown 輸出
+ccs-feature gl65 -n 5              # 詳細 view 裡顯示 5 個 git commit（預設 3）
 ```
+
+> **Note:** 預設輸出為 Terminal ANSI，與 `ccs-overview`、`ccs-status` 慣例一致。Skill 應使用 `--md` 或 `--json`。
 
 **摘要 view（無參數）：**
 
@@ -191,7 +218,8 @@ ccs-feature --md                   # Markdown 輸出
 ccs-tag <session-prefix> <feature-id>              # 歸入
 ccs-tag --exclude <session-prefix> <feature-id>    # 排除
 ccs-tag --list                                     # 列出所有 override
-ccs-tag --clear <session-prefix>                   # 移除某 session 的 override
+ccs-tag --clear <session-prefix>                   # 移除該 session 的所有 override
+ccs-tag --clear <session-prefix> <feature-id>      # 移除特定 override
 ```
 
 寫入 `overrides.jsonl`，下次 `ccs-feature` 執行時生效。
@@ -202,7 +230,9 @@ ccs-tag --clear <session-prefix>                   # 移除某 session 的 overr
 
 ### `ccs-overview --git` 增強
 
-加入最近 commit messages，預設 3 個，`-n` 可調：
+加入最近 commit messages，預設 3 個，`-n` 可調。`-n` 在所有指令中統一代表「git commit 顯示數量」。
+
+> **Note:** 現有 `ccs-overview` 的 arg parser 需擴充以接受 `-n`，僅在 `--git` 模式下生效。`ccs-feature` 的 `-n` 同理。
 
 ```bash
 ccs-overview --git              # 預設 3 個 commit
@@ -259,7 +289,8 @@ ccs-overview --files --json       # JSON 輸出
 ```
 
 設計要點：
-- `Ops` 欄位：`R`=Read, `E`=Edit, `W`=Write, `B`=Bash（僅含檔案路徑的）
+- `Ops` 欄位：`R`=Read, `E`=Edit, `W`=Write（不含 Bash — 從任意 shell 指令提取檔案路徑不可靠）
+- `_ccs_recent_files_md` 提供單 session 的 jq 提取模式，但跨 session 彙整（操作計數、session 歸屬、時間排序去重）需新建 `_ccs_overview_files` helper
 - 同檔案跨 session 操作合併為一行
 - 按最近操作時間排序
 - 預設只顯示寫入操作（E/W），`--all-ops` 含 Read
@@ -331,16 +362,16 @@ fi
 
 ## §7 實作影響
 
-### 新增檔案
+### 新增函式（皆在 ccs-dashboard.sh 內）
 
-| 檔案 | 說明 |
-|------|------|
-| `_ccs_feature_cluster` | 聚類引擎（寫入 features.jsonl） |
-| `_ccs_feature_md` / `_ccs_feature_json` | feature view 格式化 |
-| `_ccs_feature_timeline` | 時間軸 view |
-| `_ccs_overview_files` / `_ccs_overview_files_json` | 跨 session 檔案操作彙整 |
-| `ccs-feature` | 公開指令 |
-| `ccs-tag` | 公開指令 |
+| 函式 | 類型 | 說明 |
+|------|------|------|
+| `ccs-feature` | 公開指令 | feature 進度 view |
+| `ccs-tag` | 公開指令 | 手動標記 session 歸屬 |
+| `_ccs_feature_cluster` | 內部 helper | 聚類引擎（寫入 features.jsonl） |
+| `_ccs_feature_md` / `_ccs_feature_json` | 內部 helper | feature view 格式化 |
+| `_ccs_feature_timeline` | 內部 helper | 時間軸 view |
+| `_ccs_overview_files` / `_ccs_overview_files_json` | 內部 helper | 跨 session 檔案操作彙整（新建，非複用 `_ccs_recent_files_md`） |
 
 ### 修改檔案
 
@@ -355,7 +386,7 @@ fi
 
 | Helper | 用途 |
 |--------|------|
-| `_ccs_recent_files_md` | `--files` view 的基礎 |
+| `_ccs_recent_files_md` | `--files` view 的 jq 提取模式參考（彙整邏輯另寫） |
 | `_ccs_session_row` | feature 聚類時取 session 基本資訊 |
 | `_ccs_overview_session_data` | 取 todos、last_exchange、deadline_context |
 | `_ccs_topic_from_jsonl` | issue 編號提取來源 |
