@@ -11,6 +11,7 @@
 #   _ccs_conversation_md    — filtered conversation pairs as markdown
 #   _ccs_recent_files_md    — recent file operations from JSONL
 #   _ccs_todos_md           — TodoWrite items from JSONL
+#   _ccs_resolve_project_path — resolve JSONL dir name → filesystem path
 #
 # Commands:
 #   ccs-sessions            — all sessions within N hours

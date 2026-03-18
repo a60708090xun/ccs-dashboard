@@ -14,6 +14,7 @@
 #   ccs-details         — interactive session conversation browser
 #   ccs-handoff         — generate session handoff note
 #   ccs-resume-prompt   — generate bootstrap prompt for new session
+#   ccs-overview        — cross-session work overview
 
 # ── Load core helpers and basic commands ──
 source "${BASH_SOURCE[0]%/*}/ccs-core.sh"
