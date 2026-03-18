@@ -980,11 +980,13 @@ _ccs_build_pairs_index() {
 
 # ── Helper: extract the Nth prompt-response pair ──
 # Output: two JSON lines: {role:"user", text:...} and {role:"assistant", text:...}
+# Faithfully shows only content between the Nth and (N+1)th user prompt.
+# Includes tool_use summaries when text is absent (interrupted turns).
 _ccs_get_pair() {
   local jsonl="$1" pair_idx="$2"
 
-  # Filter: user prompts (string content) and assistant turns with non-empty text
-  # Then find the Nth user prompt and its following assistant response
+  # Extract user prompts, assistant text, AND tool_use summaries
+  # so interrupted turns still show what the agent was doing
   jq -c '
     if .type == "user" and (.message.content | type == "string") then
       {role: "user", text: .message.content}
@@ -992,11 +994,49 @@ _ccs_get_pair() {
       (.message.content | if type == "array" then
         [.[] | select(.type == "text") | .text] | join("\n")
       else . end) as $t |
-      if ($t | length) > 0 then {role: "assistant", text: $t}
-      else empty end
+      (.message.content | if type == "array" then
+        [.[] | select(.type == "tool_use") |
+          if .name == "Read" then "📖 Read " + .input.file_path
+          elif .name == "Edit" then "✏️ Edit " + .input.file_path
+          elif .name == "Write" then "📝 Write " + .input.file_path
+          elif .name == "Bash" then "$ " + (.input.command | split("\n") | first | .[:80])
+          elif .name == "Grep" then "🔍 Grep " + .input.pattern
+          elif .name == "Glob" then "🔍 Glob " + .input.pattern
+          elif .name == "Agent" then "🤖 Agent: " + (.input.description // "")
+          else "🔧 " + .name end
+        ] | join("\n")
+      else "" end) as $tools |
+      (.message.content | if type == "array" then
+        [.[] | select(.type == "thinking") | "💭 (thinking...)"] | join("\n")
+      else "" end) as $thinking |
+      {role: "assistant", text: $t, tools: $tools, thinking: $thinking}
     else empty end
   ' "$jsonl" 2>/dev/null \
-    | awk -v idx="$pair_idx" 'BEGIN{pn=0;fp=0} /\"role\":\"user\"/{pn++;if(pn==idx){fp=1;print;next}} fp&&/\"role\":\"assistant\"/{print;exit}'
+    | jq -sc --argjson idx "$pair_idx" '
+      . as $arr |
+      [to_entries[] | select(.value.role == "user")] as $users |
+      if ($idx < 1 or $idx > ($users | length)) then empty
+      else
+        $users[$idx - 1].key as $spos |
+        (if $idx < ($users | length) then $users[$idx].key else ($arr | length) end) as $epos |
+        $arr[$spos],
+        # Merge text and tool summaries between this user and next
+        ([$arr[$spos + 1 : $epos][] | select(.role == "assistant")] | {
+          texts: ([.[].text] | map(select(length > 0)) | join("\n")),
+          tools: ([.[].tools] | map(select(length > 0)) | join("\n")),
+          thinking: ([.[].thinking] | map(select(length > 0)) | join("\n"))
+        }) as $resp |
+        if ($resp.texts | length) > 0 then
+          {role: "assistant", text: $resp.texts}
+        elif ($resp.tools | length) > 0 then
+          {role: "assistant", text: ("⚡ interrupted — agent was executing:\n" + $resp.tools)}
+        elif ($resp.thinking | length) > 0 then
+          {role: "assistant", text: "⚡ interrupted — agent was thinking"}
+        else
+          {role: "assistant", text: ""}
+        end
+      end
+    '
 }
 
 # ── ccs-details [session-id-prefix] — interactive session conversation browser ──
@@ -1066,18 +1106,59 @@ HELP
     else status="stale"; fi
   fi
 
-  # ── Build pairs index (cached in temp file for performance) ──
-  local index_file
-  index_file=$(mktemp /tmp/ccs-details-XXXXXX)
-  # Each line: sequential_num \t prompt_preview
-  jq -r 'select(.type == "user" and (.message.content | type == "string")) | .message.content | split("\n") | join(" ") | .[:100]' "$jsonl" 2>/dev/null > "$index_file"
+  # ── Build filtered pairs index ──
+  # Read both user and assistant entries in one pass to detect interrupted prompts
+  local -a real_to_raw=()
+  local -a prompts=()
+  local -a has_response=()  # "1" = has assistant text, "0" = interrupted/no text
+  local raw_idx=0 pending_real=-1
 
-  local total_prompts
-  total_prompts=$(wc -l < "$index_file")
+  # Response status: "1" = has response, "resend" = user re-sent, "0" = truly no response
+  local -a resp_status=()
+  local pending_real=-1 got_assistant=false
 
-  if [ "$total_prompts" -eq 0 ]; then
+  while IFS=$'\t' read -r role is_meta content; do
+    if [ "$role" = "U" ]; then
+      raw_idx=$((raw_idx + 1))
+      # Previous pending prompt: user sent another before getting assistant text
+      if [ "$pending_real" -ge 0 ]; then
+        resp_status[$pending_real]="resend"  # re-sent (will get response via continuation)
+      fi
+      # Filter meta/system
+      [ "$is_meta" = "true" ] && { pending_real=-1; continue; }
+      case "$content" in
+        '<local-command'*|'<command-name'*|'<system-'*) pending_real=-1; continue ;;
+      esac
+      [[ "$content" =~ ^[[:space:]]*/exit ]] && { pending_real=-1; continue; }
+      [[ "$content" =~ ^[[:space:]]*/quit ]] && { pending_real=-1; continue; }
+      [ -z "${content// /}" ] && { pending_real=-1; continue; }
+      real_to_raw+=("$raw_idx")
+      prompts+=("$content")
+      pending_real=$(( ${#real_to_raw[@]} - 1 ))
+    elif [ "$role" = "A" ] && [ "$pending_real" -ge 0 ]; then
+      # Got assistant text for the pending prompt
+      resp_status[$pending_real]="1"
+      pending_real=-1
+    fi
+  done < <(jq -r '
+    if .type == "user" and (.message.content | type == "string") then
+      ["U", (.isMeta // false | tostring), (.message.content | .[:100] | gsub("\n"; " "))] | @tsv
+    elif .type == "assistant" then
+      (.message.content | if type == "array" then
+        [.[] | select(.type == "text") | .text] | join("")
+      else . end) as $t |
+      if ($t | length) > 0 then ["A", "false", ""] | @tsv else empty end
+    else empty end
+  ' "$jsonl" 2>/dev/null)
+  # Handle last pending prompt
+  if [ "$pending_real" -ge 0 ]; then
+    resp_status[$pending_real]="0"
+  fi
+
+  local real_count=${#real_to_raw[@]}
+
+  if [ "$real_count" -eq 0 ]; then
     echo "No user prompts found in session."
-    rm -f "$index_file"
     return 1
   fi
 
@@ -1086,34 +1167,30 @@ HELP
     printf "\033[1;36m━━ Session Details ━━\033[0m\n"
     printf "  \033[1mSession:\033[0m  %s (%s)  \033[1mProject:\033[0m %s\n" "$sid" "$status" "$project"
     printf "  \033[1mTopic:\033[0m    %s  \033[1mLast:\033[0m %s\n" "$topic" "$mod_date"
-    printf "  \033[1mPrompts:\033[0m  %d\n" "$total_prompts"
+    printf "  \033[1mPrompts:\033[0m  %d\n" "$real_count"
 
+    local raw_p=${real_to_raw[$((real_count - 1))]}
     local pair_json
-    pair_json=$(_ccs_get_pair "$jsonl" "$total_prompts")
+    pair_json=$(_ccs_get_pair "$jsonl" "$raw_p")
     local user_text assistant_text
     user_text=$(echo "$pair_json" | head -1 | jq -r '.text' 2>/dev/null)
     assistant_text=$(echo "$pair_json" | tail -1 | jq -r '.text' 2>/dev/null)
+    [ -z "$assistant_text" ] && assistant_text="(no text response — interrupted or tool-only turn)"
 
     echo
-    printf "\033[1;33m━━ Last Prompt [%d/%d] ━━\033[0m\n" "$total_prompts" "$total_prompts"
+    printf "\033[1;33m━━ Last Prompt [%d/%d] ━━\033[0m\n" "$real_count" "$real_count"
     printf "\033[33m%s\033[0m\n" "$user_text"
     echo
     printf "\033[1;32m━━ Response ━━\033[0m\n"
     echo "$assistant_text" | head -30
     echo
     printf "\033[90mResume: claude --resume %s\033[0m\n" "$full_sid"
-    rm -f "$index_file"
     return 0
   fi
 
   # ── Interactive mode ──
-  local sel=$total_prompts  # start at most recent
+  local sel=$real_count  # start at most recent
   local term_lines key running=true
-
-  # Read index lines into array
-  local -a prompts=()
-  mapfile -t prompts < "$index_file"
-  rm -f "$index_file"
 
   while $running; do
     term_lines=$(tput lines 2>/dev/null || echo 24)
@@ -1122,8 +1199,8 @@ HELP
 
     # Clear screen and draw
     clear
-    printf "\033[1;36m━━ %s ━━\033[0m  \033[90m%s | %s | %d prompts\033[0m\n" "$topic" "$sid" "$status" "$total_prompts"
-    printf "\033[90m  ↑↓/jk navigate  Enter view  q quit\033[0m\n"
+    printf "\033[1;36m━━ %s ━━\033[0m  \033[90m%s | %s | %d prompts\033[0m\n" "$topic" "$sid" "$status" "$real_count"
+    printf "\033[90m  ↑↓/jk navigate  PgUp/PgDn page  g/G first/last  Enter view  q quit\033[0m\n"
     printf '%.0s─' {1..80}; echo
 
     # Calculate window: show prompts around selection
@@ -1131,7 +1208,7 @@ HELP
     win_start=$((sel - visible / 2))
     [ "$win_start" -lt 1 ] && win_start=1
     win_end=$((win_start + visible - 1))
-    [ "$win_end" -gt "$total_prompts" ] && win_end=$total_prompts
+    [ "$win_end" -gt "$real_count" ] && win_end=$real_count
     # Adjust start if end hit the limit
     win_start=$((win_end - visible + 1))
     [ "$win_start" -lt 1 ] && win_start=1
@@ -1139,46 +1216,74 @@ HELP
     local i
     for ((i = win_start; i <= win_end; i++)); do
       local prompt_text="${prompts[$((i-1))]}"
-      local display_num
+      local display_num marker="  "
       display_num=$(printf '%3d' "$i")
+      # Mark response status: 🚫 = no response, ⚡ = interrupted (re-sent)
+      case "${resp_status[$((i-1))]}" in
+        0)      marker="\033[31m🚫\033[0m " ;;
+        resend) marker="\033[33m⏸\033[0m " ;;
+      esac
       if [ "$i" -eq "$sel" ]; then
-        printf "\033[7m  %s  %s\033[0m\n" "$display_num" "$prompt_text"
+        printf "  %s %b\033[7m%s\033[0m\n" "$display_num" "$marker" "$prompt_text"
       else
-        printf "  \033[90m%s\033[0m  %s\n" "$display_num" "$prompt_text"
+        printf "  \033[90m%s\033[0m %b%s\n" "$display_num" "$marker" "$prompt_text"
       fi
     done
 
     # Footer
     printf '%.0s─' {1..80}; echo
-    printf "\033[90m[%d/%d]\033[0m" "$sel" "$total_prompts"
+    printf "\033[90m[%d/%d]\033[0m" "$sel" "$real_count"
 
     # Read key
     IFS= read -rsn1 key
     case "$key" in
       $'\x1b')  # escape sequence
-        read -rsn2 -t 0.1 key
-        case "$key" in
-          '[A') [ "$sel" -gt 1 ] && sel=$((sel - 1)) ;;           # up
-          '[B') [ "$sel" -lt "$total_prompts" ] && sel=$((sel + 1)) ;;  # down
-          '') running=false ;;  # bare Esc
-        esac
+        read -rsn1 -t 0.1 key
+        if [ "$key" = "[" ]; then
+          read -rsn1 -t 0.1 key
+          case "$key" in
+            A) [ "$sel" -gt 1 ] && sel=$((sel - 1)) ;;           # up
+            B) [ "$sel" -lt "$real_count" ] && sel=$((sel + 1)) ;;  # down
+            5) read -rsn1 -t 0.1 _  # consume '~'
+               sel=$((sel - visible)); [ "$sel" -lt 1 ] && sel=1 ;;  # PgUp
+            6) read -rsn1 -t 0.1 _  # consume '~'
+               sel=$((sel + visible)); [ "$sel" -gt "$real_count" ] && sel=$real_count ;;  # PgDn
+          esac
+        elif [ -z "$key" ]; then
+          running=false  # bare Esc
+        fi
         ;;
       k) [ "$sel" -gt 1 ] && sel=$((sel - 1)) ;;
-      j) [ "$sel" -lt "$total_prompts" ] && sel=$((sel + 1)) ;;
+      j) [ "$sel" -lt "$real_count" ] && sel=$((sel + 1)) ;;
       g) sel=1 ;;                    # go to first
-      G) sel=$total_prompts ;;       # go to last
+      G) sel=$real_count ;;       # go to last
       q) running=false ;;
       '')  # Enter: show full pair
-        local pair_json user_text assistant_text
-        pair_json=$(_ccs_get_pair "$jsonl" "$sel")
+        local raw_p=${real_to_raw[$((sel - 1))]}
+        local pair_json user_text assistant_text sel_status
+        pair_json=$(_ccs_get_pair "$jsonl" "$raw_p")
         user_text=$(echo "$pair_json" | head -1 | jq -r '.text' 2>/dev/null)
         assistant_text=$(echo "$pair_json" | tail -n +2 | jq -r '.text' 2>/dev/null)
+        sel_status="${resp_status[$((sel - 1))]}"
         {
-          printf "\033[1;33m━━ Prompt [%d/%d] ━━\033[0m\n" "$sel" "$total_prompts"
+          printf "\033[1;33m━━ Prompt [%d/%d] ━━\033[0m" "$sel" "$real_count"
+          case "$sel_status" in
+            0)      printf "  \033[31m✗ interrupted\033[0m" ;;
+            resend) printf "  \033[33m↻ re-sent\033[0m" ;;
+          esac
+          echo
           printf "\033[33m%s\033[0m\n" "$user_text"
           echo
           printf "\033[1;32m━━ Response ━━\033[0m\n"
-          echo "$assistant_text"
+          if [ -z "$assistant_text" ]; then
+            printf "\033[90m(no response)\033[0m\n"
+          else
+            echo "$assistant_text"
+            if [ "$sel_status" != "1" ]; then
+              echo
+              printf "\033[31m⚡ interrupted (response may be incomplete)\033[0m\n"
+            fi
+          fi
         } | less -R
         ;;
     esac
