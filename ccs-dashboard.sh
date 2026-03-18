@@ -1895,6 +1895,8 @@ _ccs_overview_terminal() {
     status=$(echo "$row" | cut -f3)
     color=$(echo "$row" | cut -f4)
 
+    local sid
+    sid=$(basename "$f" .jsonl | cut -c1-8)
     local topic
     topic=$(_ccs_topic_from_jsonl "$f")
 
@@ -1907,8 +1909,8 @@ _ccs_overview_terminal() {
       ago_str="$((ago_min / 1440))d"
     fi
 
-    # Brief line: [status] project (age) — topic
-    printf '  %b%-25s\033[0m \033[90m%4s\033[0m  %s\n' "$color" "$project" "$ago_str" "$topic"
+    # Brief line: [status] sid project (age) — topic
+    printf '  %b%s %-25s\033[0m \033[90m%4s\033[0m  %s\n' "$color" "$sid" "$project" "$ago_str" "$topic"
 
     # Todos (compact)
     local data
