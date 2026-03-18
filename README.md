@@ -7,8 +7,25 @@ Terminal 模式用 ANSI escape codes 渲染，Markdown 模式可在 Happy Coder 
 ## 安裝
 
 ```bash
+cd ~/tools/ccs-dashboard
+./install.sh            # 檢查依賴 + 加 source 行到 ~/.bashrc
+./install.sh --check    # 只檢查依賴和安裝狀態
+./install.sh --uninstall  # 移除
+```
+
+或手動：
+
+```bash
 # 在 .bashrc 加入：
 source ~/tools/ccs-dashboard/ccs-dashboard.sh
+```
+
+## 檔案結構
+
+```
+ccs-core.sh       # helpers + 基礎指令 (sessions/active/cleanup)
+ccs-dashboard.sh  # source ccs-core.sh + 大型指令 (status/pick/html/details/handoff/resume-prompt)
+install.sh        # 安裝腳本
 ```
 
 ## 指令一覽
@@ -23,7 +40,8 @@ source ~/tools/ccs-dashboard/ccs-dashboard.sh
 | `ccs-details [session-id]` | 互動式對話瀏覽器，類似 tig |
 | `ccs-pick N` | 展開第 N 個 session 的最近對話（搭配 `--md` 用） |
 | `ccs-html` | 產生 HTML dashboard 檔案 |
-| `ccs-handoff [project-dir]` | 產生 session 交接筆記 |
+| `ccs-handoff [project-dir]` | 產生 session 交接筆記（自動填充對話摘要、git、檔案操作、TodoWrite） |
+| `ccs-resume-prompt [session-id]` | 產生精簡 bootstrap prompt（< 2000 tokens），貼入新 session 即可接手 |
 
 ## 顏色 / 狀態圖示
 
@@ -91,6 +109,9 @@ ccs-cleanup --force   # 跳過確認直接清理
 
 互動式對話瀏覽器（Terminal），列出 session 中所有 user prompt，可上下選擇並展開完整回應。
 
+自動過濾 meta/system messages（`isMeta`、`<local-command>`、`/exit`）。
+中斷的 prompt 會在列表標記：⏸ = 使用者重送、🚫 = 完全沒回應。
+
 ```bash
 ccs-details 4e716490      # 用 session ID 前綴指定
 ccs-details               # 目前專案目錄的最近 session
@@ -101,11 +122,18 @@ ccs-details --last        # 非互動：只顯示最後一組 prompt + response
 互動模式按鍵：
 
 ```
-↑/↓, j/k   導航
-Enter       展開完整 prompt + response（用 less 翻頁）
-g/G         跳到最舊/最新
-q, Esc      退出
+↑/↓, j/k      導航
+PgUp/PgDn      翻頁
+g/G            跳到最舊/最新
+Enter          展開完整 prompt + response（用 less 翻頁）
+q, Esc         退出
 ```
+
+中斷的 prompt 按 Enter 後會忠實呈現：
+- 快速重送 → `(no response)`
+- thinking 階段中斷 → `⚡ interrupted — agent was thinking`
+- tool 執行中中斷 → `⚡ interrupted — agent was executing:` + 工具清單
+- 回應到一半中斷 → 顯示部分回應 + `⚡ interrupted (response may be incomplete)`
 
 ### ccs-html
 
@@ -118,13 +146,37 @@ ccs-html --open       # 產生後用瀏覽器開啟
 
 ### ccs-handoff [project-dir]
 
-為指定專案產生交接筆記（Markdown），包含：
+為指定專案產生交接筆記（Markdown），自動填充：
 - Open session 列表
-- 最近 session 的對話脈絡
+- 過濾後的對話摘要（user + Claude 回應，跳過 meta messages）
 - Git 狀態（branch、recent commits、uncommitted changes）
-- 待填寫的骨架：目前進度 / 下一步 / 重要決策
+- 最近操作的檔案（Read/Edit/Write/Bash）
+- TodoWrite 任務進度（如果有）
+- Bootstrap prompt（可直接貼入新 session）
 
 輸出位置：`~/docs/tmp/handoff/<date>-<topic>.md`
+
+```bash
+ccs-handoff                    # 目前目錄
+ccs-handoff /path/to/project   # 指定專案
+ccs-handoff -n 10              # 包含最近 10 組對話（預設 5）
+ccs-handoff --no-prompt        # 不附 bootstrap prompt
+```
+
+### ccs-resume-prompt [session-id-prefix]
+
+從 JSONL session 自動產生精簡 bootstrap prompt（< 2000 tokens），設計用來貼入全新 session 無縫接手。
+
+包含：project context、git 狀態、最近對話摘要、最近操作的檔案。
+
+```bash
+ccs-resume-prompt              # 目前目錄的最近 session
+ccs-resume-prompt -a           # 所有專案的最近 session
+ccs-resume-prompt 4e716490     # 指定 session
+ccs-resume-prompt --copy       # 複製到剪貼簿
+ccs-resume-prompt --stdout     # 純文字輸出（可 pipe）
+ccs-resume-prompt -n 5         # 包含最近 5 組對話（預設 3）
+```
 
 ## Topic 來源
 
@@ -134,6 +186,15 @@ Session topic 的取得優先順序：
 
 ## 依賴
 
-- bash, jq, coreutils (stat, date, find)
-- less（ccs-details 互動模式展開用）
-- 讀取 `~/.claude/projects/` 下的 JSONL session log
+| 必要 | 用途 |
+|------|------|
+| bash 4+ | mapfile, associative arrays |
+| jq | JSONL 解析 |
+| coreutils | stat, date, find |
+
+| 選用 | 用途 |
+|------|------|
+| less | ccs-details 互動模式展開 |
+| xclip / xsel | ccs-resume-prompt --copy |
+
+資料來源：`~/.claude/projects/` 下的 JSONL session log。
