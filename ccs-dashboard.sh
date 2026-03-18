@@ -1188,6 +1188,86 @@ HELP
   printf "\033[90mResume: claude --resume %s\033[0m\n" "$full_sid"
 }
 
+# ── Helper: extract filtered conversation pairs as markdown ──
+# Usage: _ccs_conversation_md <jsonl> <pair_count> <max_user_lines> <max_asst_lines>
+_ccs_conversation_md() {
+  local jsonl="$1" pair_count="${2:-5}" max_ulines="${3:-5}" max_alines="${4:-8}"
+
+  # Build filtered pair indices (reuse ccs-resume-prompt logic)
+  local -a real_to_raw=()
+  local raw_idx=0
+  while IFS=$'\t' read -r is_meta content; do
+    raw_idx=$((raw_idx + 1))
+    [ "$is_meta" = "true" ] && continue
+    case "$content" in
+      '<local-command'*|'<command-name'*|'<system-'*) continue ;;
+    esac
+    [[ "$content" =~ ^[[:space:]]*/exit ]] && continue
+    [[ "$content" =~ ^[[:space:]]*/quit ]] && continue
+    [ -z "${content// /}" ] && continue
+    real_to_raw+=("$raw_idx")
+  done < <(jq -r '
+    select(.type == "user" and (.message.content | type == "string")) |
+    [(.isMeta // false | tostring), (.message.content | .[:80] | gsub("\n"; " "))] |
+    @tsv
+  ' "$jsonl" 2>/dev/null)
+
+  local real_count=${#real_to_raw[@]}
+  local start_from=$((real_count - pair_count + 1))
+  [ "$start_from" -lt 1 ] && start_from=1
+
+  local ri
+  for ((ri = start_from; ri <= real_count; ri++)); do
+    local raw_p=${real_to_raw[$((ri - 1))]}
+    local pair_json user_text assistant_text
+    pair_json=$(_ccs_get_pair "$jsonl" "$raw_p")
+    user_text=$(echo "$pair_json" | head -1 | jq -r '.text' 2>/dev/null)
+    assistant_text=$(echo "$pair_json" | tail -1 | jq -r '.text' 2>/dev/null)
+
+    local user_preview asst_preview
+    user_preview=$(echo "$user_text" | head -"$max_ulines" | cut -c1-200)
+    local ul; ul=$(echo "$user_text" | wc -l)
+    [ "$ul" -gt "$max_ulines" ] && user_preview="${user_preview}
+..."
+
+    asst_preview=$(echo "$assistant_text" | head -"$max_alines" | cut -c1-200)
+    local al; al=$(echo "$assistant_text" | wc -l)
+    [ "$al" -gt "$max_alines" ] && asst_preview="${asst_preview}
+..."
+
+    printf '**[%d/%d] User:**\n%s\n\n' "$ri" "$real_count" "$user_preview"
+    printf '**[%d/%d] Claude:**\n%s\n\n' "$ri" "$real_count" "$asst_preview"
+  done
+}
+
+# ── Helper: extract recent file operations from JSONL ──
+_ccs_recent_files_md() {
+  local jsonl="$1"
+  jq -r '
+    select(.type == "assistant") |
+    .message.content[]? |
+    select(.type == "tool_use") |
+    if .name == "Read" then "R " + .input.file_path
+    elif .name == "Edit" then "E " + .input.file_path
+    elif .name == "Write" then "W " + .input.file_path
+    elif .name == "Bash" then "$ " + (.input.command | split("\n") | first | .[:80])
+    else empty end
+  ' "$jsonl" 2>/dev/null | tail -15 | sort -u
+}
+
+# ── Helper: extract TodoWrite items from JSONL ──
+_ccs_todos_md() {
+  local jsonl="$1"
+  # Find the last TodoWrite call and extract its items
+  jq -r '
+    select(.type == "assistant") |
+    .message.content[]? |
+    select(.type == "tool_use" and .name == "TodoWrite") |
+    .input.todos[]? |
+    (if .status == "completed" then "- [x] " elif .status == "in_progress" then "- [~] " else "- [ ] " end) + .content
+  ' "$jsonl" 2>/dev/null | tail -20
+}
+
 # ── ccs-handoff [project-dir] — generate session handoff note ──
 ccs-handoff() {
   if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
@@ -1195,12 +1275,32 @@ ccs-handoff() {
 ccs-handoff [project-dir]  — generate session handoff note (default: current dir)
 [personal tool, not official Claude Code]
 
+Generates a markdown handoff file with auto-filled:
+  - Open sessions summary
+  - Filtered conversation pairs (user + Claude, skips meta)
+  - Git state (branch, commits, uncommitted)
+  - Recent file operations (Read/Edit/Write/Bash)
+  - TodoWrite task progress (if any)
+  - Bootstrap prompt (for pasting into new session)
+
 Output: ~/docs/tmp/handoff/<date>-<topic-slug>.md
+
+Options:
+  -n COUNT    Number of conversation pairs to include (default: 5)
+  --no-prompt Skip appending bootstrap prompt section
 HELP
     return 0
   fi
 
-  local project_dir="${1:-.}"
+  local project_dir="" pair_count=5 include_prompt=true
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -n) pair_count="$2"; shift 2 ;;
+      --no-prompt) include_prompt=false; shift ;;
+      *) project_dir="$1"; shift ;;
+    esac
+  done
+  [ -z "$project_dir" ] && project_dir="."
   project_dir=$(cd "$project_dir" && pwd)
   local projects_dir="$HOME/.claude/projects"
   local handoff_dir="$HOME/docs/tmp/handoff"
@@ -1235,28 +1335,32 @@ HELP
 
   # Extract info from the most recent open session
   local latest="${open_sessions[0]}"
-  local sid mod_date topic
+  local full_sid sid mod_date topic
 
-  sid=$(basename "$latest" .jsonl | cut -c1-8)
+  full_sid=$(basename "$latest" .jsonl)
+  sid=$(echo "$full_sid" | cut -c1-8)
   mod_date=$(stat -c "%y" "$latest" | cut -d. -f1)
 
   topic=$(_ccs_topic_from_jsonl "$latest")
   [ -z "$topic" ] && topic="(no topic)"
-
-  # Get last 5 human messages (skip: meta, task notifications, XML, cd commands)
-  local last_msgs
-  last_msgs=$(tac "$latest" 2>/dev/null \
-    | jq -r 'select(.type == "user" and (.isMeta | not)) | .message.content | if type == "array" then ([.[] | select(.type == "text") | .text] | first) else . end // empty' 2>/dev/null \
-    | grep -av '^\s*$' | grep -av '^<' | grep -av '^!*cd ' \
-    | head -5 | tac | while IFS= read -r line; do
-        echo "- $(echo "$line" | cut -c1-120)"
-      done)
 
   # Git context
   local git_branch git_status git_log
   git_branch=$(cd "$project_dir" && git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "N/A")
   git_status=$(cd "$project_dir" && git status --short 2>/dev/null | head -10)
   git_log=$(cd "$project_dir" && git log --oneline -5 2>/dev/null)
+
+  # Conversation summary (filtered, with Claude responses)
+  local conversation_md
+  conversation_md=$(_ccs_conversation_md "$latest" "$pair_count")
+
+  # Recent file operations
+  local recent_files
+  recent_files=$(_ccs_recent_files_md "$latest")
+
+  # TodoWrite progress
+  local todos
+  todos=$(_ccs_todos_md "$latest")
 
   # All open sessions summary
   local sessions_summary=""
@@ -1269,12 +1373,11 @@ HELP
     elif [ "$s_ago" -lt 1440 ]; then s_age="$((s_ago/60))h"
     else s_age="$((s_ago/1440))d"; fi
     s_topic=$(_ccs_topic_from_jsonl "$f")
-    # Skip zombies: no topic, or starts with < (system message)
     if [ "$s_topic" = "-" ] || echo "$s_topic" | grep -q '^<'; then
       zombie_count=$((zombie_count + 1))
       continue
     fi
-    sessions_summary="${sessions_summary}| ${s_sid} | ${s_age} ago | ${s_topic} |
+    sessions_summary="${sessions_summary}| \`${s_sid}\` | ${s_age} ago | ${s_topic} |
 "
   done
   [ "$zombie_count" -gt 0 ] && sessions_summary="${sessions_summary}
@@ -1298,12 +1401,11 @@ HELP
 | Session ID | Last Active | Topic |
 |------------|-------------|-------|
 ${sessions_summary}
-## 最近 Session 的對話脈絡
+## 對話脈絡
 
-**Session:** ${sid} | **Branch:** ${git_branch} | **Last Active:** ${mod_date}
+**Session:** \`${sid}\` | **Branch:** \`${git_branch}\` | **Last Active:** ${mod_date}
 
-${last_msgs}
-
+${conversation_md}
 ## Git 狀態
 
 \`\`\`
@@ -1315,10 +1417,36 @@ ${git_log:-"(no commits)"}
 Uncommitted:
 ${git_status:-"(clean)"}
 \`\`\`
+EOF
+
+  # Recent files section (only if non-empty)
+  if [ -n "$recent_files" ]; then
+    cat >> "$handoff_file" << EOF
+
+## 最近操作的檔案
+
+\`\`\`
+${recent_files}
+\`\`\`
+EOF
+  fi
+
+  # TodoWrite progress (only if non-empty)
+  if [ -n "$todos" ]; then
+    cat >> "$handoff_file" << EOF
+
+## 任務進度（TodoWrite）
+
+${todos}
+EOF
+  fi
+
+  # Manual sections
+  cat >> "$handoff_file" << 'EOF'
 
 ## 目前進度
 
-<!-- 自動產生的骨架，請在結束 session 前補充 -->
+<!-- 補充自動摘要未涵蓋的部分 -->
 -
 
 ## 下一步
@@ -1328,15 +1456,35 @@ ${git_status:-"(clean)"}
 
 ## 重要決策
 
-<!-- 這個 session 做了哪些決策，為什麼 -->
+<!-- 這個 session 做了哪些重要決策，為什麼 -->
 -
 EOF
+
+  # Bootstrap prompt section
+  if $include_prompt; then
+    local bootstrap
+    bootstrap=$(ccs-resume-prompt "$sid" --stdout 2>/dev/null)
+    if [ -n "$bootstrap" ]; then
+      cat >> "$handoff_file" << EOF
+
+## Bootstrap Prompt
+
+> 直接貼入新 session 即可接手。也可以用 \`ccs-resume-prompt ${sid} --copy\` 複製。
+
+\`\`\`markdown
+${bootstrap}
+\`\`\`
+EOF
+    fi
+  fi
 
   echo "Created: $handoff_file"
   echo ""
   echo "  Topic:    ${topic}"
   echo "  Sessions: ${#open_sessions[@]} open"
   echo "  Branch:   ${git_branch}"
+  [ -n "$todos" ] && echo "  Tasks:    $(echo "$todos" | wc -l) items"
+  [ -n "$recent_files" ] && echo "  Files:    $(echo "$recent_files" | wc -l) operations"
   echo ""
   echo "Edit the file to fill in: 目前進度 / 下一步 / 重要決策"
 }
