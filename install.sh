@@ -119,6 +119,21 @@ do_install() {
     ok "Added to ${BASHRC}"
   fi
 
+  # Install skill symlink (idempotent)
+  local skill_src="${SCRIPT_DIR}/skills/ccs-orchestrator"
+  local skill_dst="$HOME/.claude/skills/ccs-orchestrator"
+  if [ -d "$skill_src" ]; then
+    if [ -L "$skill_dst" ]; then
+      warn "Skill symlink already exists: ${skill_dst}"
+    elif [ -e "$skill_dst" ]; then
+      warn "Skill path exists but is not a symlink: ${skill_dst} — skipping"
+    else
+      mkdir -p "$HOME/.claude/skills"
+      ln -s "$skill_src" "$skill_dst"
+      ok "Skill symlink: ${skill_dst} → ${skill_src}"
+    fi
+  fi
+
   echo
   echo "Done! Run 'source ~/.bashrc' or open a new terminal."
   echo
@@ -132,6 +147,10 @@ do_install() {
   echo "  ccs-html            — HTML dashboard"
   echo "  ccs-handoff         — generate handoff note"
   echo "  ccs-resume-prompt   — generate bootstrap prompt"
+  echo "  ccs-overview        — cross-session work overview"
+  echo
+  echo "Skills installed:"
+  echo "  ccs-orchestrator    — interactive work orchestrator (Claude Code skill)"
 }
 
 # ── Uninstall ──
@@ -144,6 +163,18 @@ do_uninstall() {
   # Remove the source line and its comment
   sed -i '/# ccs-dashboard/d; /ccs-dashboard\.sh/d' "$BASHRC"
   ok "Removed from ${BASHRC}"
+
+  # Remove skill symlink if it points to us
+  local skill_dst="$HOME/.claude/skills/ccs-orchestrator"
+  if [ -L "$skill_dst" ]; then
+    local target
+    target=$(readlink "$skill_dst")
+    if [[ "$target" == *"ccs-dashboard"* ]]; then
+      rm "$skill_dst"
+      ok "Removed skill symlink: ${skill_dst}"
+    fi
+  fi
+
   echo "Run 'source ~/.bashrc' or open a new terminal to take effect."
 }
 

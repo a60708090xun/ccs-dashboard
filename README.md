@@ -23,9 +23,10 @@ source ~/tools/ccs-dashboard/ccs-dashboard.sh
 ## 檔案結構
 
 ```
-ccs-core.sh       # helpers + 基礎指令 (sessions/active/cleanup)
-ccs-dashboard.sh  # source ccs-core.sh + 大型指令 (status/pick/html/details/handoff/resume-prompt)
-install.sh        # 安裝腳本
+ccs-core.sh                      # helpers + 基礎指令 (sessions/active/cleanup)
+ccs-dashboard.sh                 # source ccs-core.sh + 大型指令 (status/pick/html/details/handoff/resume-prompt/overview)
+install.sh                       # 安裝腳本（含 skill symlink）
+skills/ccs-orchestrator/SKILL.md # Claude Code skill — 互動式工作指揮台
 ```
 
 ## 指令一覽
@@ -42,6 +43,21 @@ install.sh        # 安裝腳本
 | `ccs-html` | 產生 HTML dashboard 檔案 |
 | `ccs-handoff [project-dir]` | 產生 session 交接筆記（自動填充對話摘要、git、檔案操作、TodoWrite） |
 | `ccs-resume-prompt [session-id]` | 產生精簡 bootstrap prompt（< 2000 tokens），貼入新 session 即可接手 |
+| `ccs-overview` | 跨 session 工作總覽：活躍 session + 待辦 + git 狀態 + deadline context |
+
+## Skills
+
+| Skill | 說明 |
+|-------|------|
+| `ccs-orchestrator` | 互動式工作指揮台（Claude Code Skill），提供 Command Palette、自然語言路由、context-aware options |
+
+`install.sh` 會自動建立 symlink 到 `~/.claude/skills/ccs-orchestrator`。也可手動：
+
+```bash
+ln -s ~/tools/ccs-dashboard/skills/ccs-orchestrator ~/.claude/skills/ccs-orchestrator
+```
+
+觸發方式：在 Claude Code 中輸入 `/ccs-orchestrator` 或自然語言如「工作狀態」「我在做什麼」。
 
 ## 顏色 / 狀態圖示
 
@@ -161,6 +177,19 @@ ccs-handoff                    # 目前目錄
 ccs-handoff /path/to/project   # 指定專案
 ccs-handoff -n 10              # 包含最近 10 組對話（預設 5）
 ccs-handoff --no-prompt        # 不附 bootstrap prompt
+```
+
+### ccs-overview
+
+跨 session 工作總覽，一次看完所有活躍 session 的狀態、最近對話、待辦事項、deadline context。
+
+```bash
+ccs-overview              # Terminal ANSI 輸出（預設，排除 subagent）
+ccs-overview --md         # Markdown 輸出（給 Skill / Happy 網頁版）
+ccs-overview --json       # JSON 輸出（給 Skill 做結構化推斷）
+ccs-overview --git        # 跨專案 git 狀態
+ccs-overview --todos-only # 只輸出跨 session 待辦彙整
+ccs-overview --all        # 包含 subagent session
 ```
 
 ### ccs-resume-prompt [session-id-prefix]
