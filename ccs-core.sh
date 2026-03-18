@@ -67,9 +67,14 @@ _ccs_session_row() {
       .input.title' 2>/dev/null | tail -1)
   fi
   if [ -z "$topic" ]; then
-    topic=$(grep -m1 '"type":"user"' "$f" 2>/dev/null \
-      | jq -r '.message.content | if type == "array" then .[0].text else . end' 2>/dev/null \
-      | head -1 | tr '\n' ' ')
+    # Find first real user message (skip meta, local-command, system tags, slash commands)
+    topic=$(jq -r '
+      select(.type == "user" and (.message.content | type == "string")
+        and ((.isMeta // false) == false)
+        and (.message.content | test("^<local-command|^<command-name|^<system-|^\\s*/exit|^\\s*/quit") | not)
+        and (.message.content | test("^\\s*$") | not))
+      | .message.content
+    ' "$f" 2>/dev/null | head -1 | tr '\n' ' ' | cut -c1-120)
   fi
   [ -z "$topic" ] && topic="-"
   # Sanitize for display (no truncation — let terminal wrap)
@@ -90,9 +95,14 @@ _ccs_topic_from_jsonl() {
       .input.title' 2>/dev/null | tail -1)
   fi
   if [ -z "$topic" ]; then
-    topic=$(grep -m1 '"type":"user"' "$f" 2>/dev/null \
-      | jq -r '.message.content | if type == "array" then .[0].text else . end' 2>/dev/null \
-      | head -1 | tr '\n' ' ')
+    # Find first real user message (skip meta, local-command, system tags, slash commands)
+    topic=$(jq -r '
+      select(.type == "user" and (.message.content | type == "string")
+        and ((.isMeta // false) == false)
+        and (.message.content | test("^<local-command|^<command-name|^<system-|^\\s*/exit|^\\s*/quit") | not)
+        and (.message.content | test("^\\s*$") | not))
+      | .message.content
+    ' "$f" 2>/dev/null | head -1 | tr '\n' ' ' | cut -c1-120)
   fi
   [ -z "$topic" ] && topic="-"
   echo "$topic"
