@@ -1569,16 +1569,21 @@ _ccs_overview_md() {
 }
 
 # ── Helper: render overview as JSON ──
+# Uses temp files to avoid "Argument list too long" with many sessions.
 _ccs_overview_json() {
   local -n _files=$1 _projects=$2 _rows=$3
   local count=${#_files[@]}
   local now_str
   now_str=$(date -Iseconds)
 
-  local sessions_json="[]"
-  local all_todos_json="[]"
-  local i
+  local tmpdir="${BASH_SOURCE[0]%/*}/tmp"
+  mkdir -p "$tmpdir"
+  local sessions_tmp="$tmpdir/.overview-sessions.jsonl"
+  local todos_tmp="$tmpdir/.overview-todos.jsonl"
+  : > "$sessions_tmp"
+  : > "$todos_tmp"
 
+  local i
   for ((i = 0; i < count; i++)); do
     local f="${_files[$i]}"
     local dir="${_projects[$i]}"
@@ -1607,9 +1612,8 @@ _ccs_overview_json() {
       git_dirty=$(git -C "$resolved_path" status --porcelain 2>/dev/null | wc -l)
     fi
 
-    # Build session JSON
-    local session_obj
-    session_obj=$(jq -nc \
+    # Write session object to temp file (one JSON per line)
+    jq -nc \
       --arg sid "$sid" \
       --arg project "$project" \
       --arg path "$resolved_path" \
@@ -1630,24 +1634,25 @@ _ccs_overview_json() {
         last_exchange: $data.last_exchange,
         todos: $data.todos,
         deadline_context: $data.deadline_context
-      }')
-
-    sessions_json=$(echo "$sessions_json" | jq --argjson s "$session_obj" '. + [$s]')
+      }' >> "$sessions_tmp"
 
     # Collect pending todos
-    local pending
-    pending=$(echo "$data" | jq -c --arg proj "$project" '[.todos[]? | select(.status != "completed") | {content, status, project: $proj}]')
-    all_todos_json=$(echo "$all_todos_json" | jq --argjson p "$pending" '. + $p')
+    echo "$data" | jq -c --arg proj "$project" '.todos[]? | select(.status != "completed") | {content, status, project: $proj}' >> "$todos_tmp"
   done
 
   # Zombie count
   local stopped_count
   stopped_count=$(ps -eo pid,stat,comm 2>/dev/null | awk '$2 ~ /T/ && $3 ~ /claude/' | wc -l)
 
+  # Assemble final JSON from temp files
+  local sessions_arr todos_arr
+  sessions_arr=$(jq -sc '.' "$sessions_tmp" 2>/dev/null || echo '[]')
+  todos_arr=$(jq -sc '.' "$todos_tmp" 2>/dev/null || echo '[]')
+
   jq -nc \
     --arg timestamp "$now_str" \
-    --argjson sessions "$sessions_json" \
-    --argjson pending_todos "$all_todos_json" \
+    --argjson sessions "$sessions_arr" \
+    --argjson pending_todos "$todos_arr" \
     --argjson zombie_count "$stopped_count" \
     '{
       timestamp: $timestamp,
@@ -1656,6 +1661,8 @@ _ccs_overview_json() {
       pending_todos: $pending_todos,
       zombie_processes: $zombie_count
     }'
+
+  rm -f "$sessions_tmp" "$todos_tmp"
 }
 
 # ── Helper: render todos-only view ──
@@ -1684,17 +1691,21 @@ _ccs_overview_todos() {
   done
 
   if [ "$mode" = "json" ]; then
-    local json="[]"
+    local tmpdir="${BASH_SOURCE[0]%/*}/tmp"
+    mkdir -p "$tmpdir"
+    local tmp="$tmpdir/.overview-todos-json.jsonl"
+    : > "$tmp"
     for entry in "${todo_entries[@]}"; do
       local c p s d
       c=$(echo "$entry" | cut -f1)
       p=$(echo "$entry" | cut -f2)
       s=$(echo "$entry" | cut -f3)
       d=$(echo "$entry" | cut -f4)
-      json=$(echo "$json" | jq --arg c "$c" --arg p "$p" --arg s "$s" --arg d "$d" \
-        '. + [{content: $c, project: $p, status: $s, deadline_context: (if $d == "" then null else $d end)}]')
+      jq -nc --arg c "$c" --arg p "$p" --arg s "$s" --arg d "$d" \
+        '{content: $c, project: $p, status: $s, deadline_context: (if $d == "" then null else $d end)}' >> "$tmp"
     done
-    echo "$json" | jq .
+    jq -sc '.' "$tmp" 2>/dev/null || echo '[]'
+    rm -f "$tmp"
     return
   fi
 
@@ -1764,18 +1775,21 @@ _ccs_overview_git() {
 
     local porcelain
     porcelain=$(git -C "$resolved" status --porcelain 2>/dev/null)
-    dirty_count=$(echo "$porcelain" | grep -c '.' || echo 0)
-    local modified_count untracked_count
-    modified_count=$(echo "$porcelain" | grep -c '^ *[MADRCU]' || echo 0)
-    untracked_count=$(echo "$porcelain" | grep -c '^?' || echo 0)
+    dirty_count=0
+    local modified_count=0 untracked_count=0
+    if [ -n "$porcelain" ]; then
+      dirty_count=$(echo "$porcelain" | wc -l)
+      modified_count=$(echo "$porcelain" | grep -c '^ *[MADRCU]' || true)
+      untracked_count=$(echo "$porcelain" | grep -c '^?' || true)
+    fi
 
     # Ahead/behind
     ahead=0; behind=0
     if git -C "$resolved" rev-parse --verify '@{u}' &>/dev/null; then
       local lr
       lr=$(git -C "$resolved" rev-list --left-right --count '@{u}...HEAD' 2>/dev/null)
-      behind=$(echo "$lr" | cut -f1)
-      ahead=$(echo "$lr" | cut -f2)
+      behind=$(echo "$lr" | awk '{print $1+0}')
+      ahead=$(echo "$lr" | awk '{print $2+0}')
     fi
 
     stash_count=$(git -C "$resolved" stash list 2>/dev/null | wc -l)
@@ -1801,7 +1815,7 @@ _ccs_overview_git() {
       [ "$stash_count" -gt 0 ] && printf -- '- **Stash:** %d entry/entries\n' "$stash_count"
       if [ "$dirty_count" -gt 0 ]; then
         local modified_files
-        modified_files=$(echo "$porcelain" | awk '{print $NF}' | head -5 | paste -sd ', ' -)
+        modified_files=$(echo "$porcelain" | cut -c4- | head -5 | paste -sd ', ' -)
         printf -- '- **Modified:** %s\n' "$modified_files"
         [ "$dirty_count" -gt 5 ] && printf '  ... and %d more\n' "$((dirty_count - 5))"
       fi
