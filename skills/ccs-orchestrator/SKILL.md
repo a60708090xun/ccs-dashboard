@@ -1,13 +1,13 @@
 ---
 name: ccs-orchestrator
-description: Cross-session work orchestrator — view all active Claude Code sessions, todos, git status, and navigate between session details. Use when user wants a work overview, session management, task prioritization, or handoff notes. Trigger phrases include ccs, orchestrator, sessions overview, work dashboard, what am I working on.
+description: Cross-session work orchestrator — view all active Claude Code sessions, todos, git status, and navigate between session details. Use when user wants a work overview, session management, task prioritization, handoff notes, or dispatch tasks. Trigger phrases include ccs, orchestrator, sessions overview, work dashboard, what am I working on, dispatch, 派工.
 ---
 
 # CCS Orchestrator
 
 跨 session 工作指揮台。觀察所有 active Claude Code session 的狀態、待辦事項、git 狀態，並提供互動式導覽。
 
-**定位：觀察者 + 顧問**——只讀取和呈現資訊，不控制其他 session。
+**定位：指揮官**——觀察所有 session 狀態，並可透過 dispatch 派工給新 session。
 
 ## Prerequisites
 
@@ -47,6 +47,9 @@ description: Cross-session work orchestrator — view all active Claude Code ses
 | cleanup | cl | `ccs-cleanup --dry-run` — 殭屍偵測 |
 | refresh | r | 重新執行上一個 view |
 | recap | rc | `ccs-recap --json` + AI analysis — daily work recap |
+| dispatch --project <dir> "task" | dp | `ccs-dispatch --project <dir> "task"` — 派工（強制非同步） |
+| jobs | j | `ccs-jobs` — dispatch 歷史 |
+| job <id> | | `ccs-jobs <id>` — 單筆 dispatch 結果 |
 
 ## Routing Rules
 
@@ -67,8 +70,16 @@ description: Cross-session work orchestrator — view all active Claude Code ses
 - 「refresh」「r」「重新整理」→ refresh（重跑上一個指令）
 - 「排優先順序」「今天該做什麼」「prioritize」→ 根據 JSON 資料做優先順序推斷
 - 「recap」「daily recap」「昨天做了什麼」「早安」「morning」「recap --project」→ recap
+- 「派工」「dispatch」「跑一下」→ dispatch（直接執行 `ccs-dispatch`，強制非同步）
+- 「任務狀態」「dispatch 結果」「jobs」→ jobs
 
 數字輸入（如 "1" "2" "3"）→ 在 overview 後等同 `detail N`，在 detail 後等同 `conversation N`。
+
+### Dispatch Execution Rules
+
+- `dispatch` (dp)：**直接透過 Bash tool 執行** `ccs-dispatch`（不帶 `--sync`），回傳 job-id
+- `jobs` (j) / `job <id>`：**直接執行**，只讀取檔案
+- Orchestrator 內一律非同步，`--sync` 僅供 shell 手動使用
 
 ## Context-Aware Options Logic
 
@@ -86,6 +97,8 @@ description: Cross-session work orchestrator — view all active Claude Code ses
 | 剛看完 todos | 「回到總覽」「產生交接筆記」 |
 | 有殭屍 process | 加入「清理殭屍」 |
 | 沒有 active session | 「看最近所有 session（含 subagent）」 |
+| 有 dispatch jobs 在 running | 加入「查看 dispatch 狀態」 |
+| dispatch job 完成 | 加入「看 job 結果」 |
 | git view 後有 unpushed commits | 提醒使用者哪些專案有 unpushed |
 
 Options 數量控制在 3-6 個，不超過 7 個。
