@@ -151,6 +151,8 @@ do_install() {
   echo "  ccs-feature         — feature progress tracking"
   echo "  ccs-tag             — manual session-to-feature assignment"
   echo "  ccs-recap           — daily work recap"
+  echo "  ccs-dispatch        — dispatch task to new Claude Code session"
+  echo "  ccs-jobs            — view dispatch job history and results"
   echo
   echo "Skills installed:"
   echo "  ccs-orchestrator    — interactive work orchestrator (Claude Code skill)"
