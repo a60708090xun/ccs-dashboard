@@ -3879,6 +3879,7 @@ _ccs_dispatch_finish() {
   dispatch_dir="$(_ccs_dispatch_dir)"
 
   # Determine status
+  [[ "$exit_code" =~ ^[0-9]+$ ]] || exit_code=1
   local status="completed"
   [ "$exit_code" -eq 124 ] && status="timeout"
   [ "$exit_code" -ne 0 ] && [ "$exit_code" -ne 124 ] && status="failed"
@@ -3895,17 +3896,14 @@ _ccs_dispatch_finish() {
     fi
   fi
 
-  # Read original job info for append
-  local original
-  original=$(jq -sc --arg id "$job_id" '
-    [.[] | select(.job_id == $id)] | last
-  ' "$dispatch_dir/jobs.jsonl")
+  # Read original job info for append (single jq call)
   local project task context_injected mode orig_created_at
-  project=$(echo "$original" | jq -r '.project')
-  task=$(echo "$original" | jq -r '.task')
-  context_injected=$(echo "$original" | jq -r '.context_injected')
-  mode=$(echo "$original" | jq -r '.mode')
-  orig_created_at=$(echo "$original" | jq -r '.created_at')
+  read -r project task context_injected mode orig_created_at < <(
+    jq -rsc --arg id "$job_id" '
+      [.[] | select(.job_id == $id)] | last |
+      [.project, .task, (.context_injected|tostring), .mode, .created_at] | @tsv
+    ' "$dispatch_dir/jobs.jsonl"
+  )
 
   _ccs_dispatch_jsonl_append "$dispatch_dir" "$job_id" "$project" "$task" \
     "$context_injected" "$mode" "$status" "" "$exit_code" "$summary" "$orig_created_at"
@@ -3929,8 +3927,10 @@ _ccs_dispatch_sync_status() {
   [ -z "$running_jobs" ] && return
 
   echo "$running_jobs" | while IFS= read -r job; do
+    [ -z "$job" ] && continue
     local job_id pid
     job_id=$(echo "$job" | jq -r '.job_id')
+    [ "$job_id" = "null" ] || [ -z "$job_id" ] && continue
     pid=$(echo "$job" | jq -r '.pid // empty')
     [ -z "$pid" ] && continue
 
@@ -3950,8 +3950,8 @@ ccs-dispatch() {
       --sync)          sync=true; shift ;;
       --context)       context=true; shift ;;
       --notify)        notify=true; shift ;;
-      --timeout)       timeout_secs="$2"; shift 2 ;;
-      --project)       project="$2"; shift 2 ;;
+      --timeout)       [ $# -ge 2 ] || { echo "Error: --timeout requires a value" >&2; return 1; }; timeout_secs="$2"; shift 2 ;;
+      --project)       [ $# -ge 2 ] || { echo "Error: --project requires a value" >&2; return 1; }; project="$2"; shift 2 ;;
       --help|-h)
         cat <<HELP
 ccs-dispatch [--sync] [--context] [--notify] [--timeout <secs>] --project <dir> "task"

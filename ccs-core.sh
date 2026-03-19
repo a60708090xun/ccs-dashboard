@@ -429,45 +429,48 @@ HELP
 
   if [ ${#pids[@]} -eq 0 ]; then
     echo "No stopped claude processes found."
-    return 0
+    # Fall through to dispatch cleanup instead of returning early
   fi
 
-  printf "Found \033[1m%d\033[0m stopped process(es), total \033[1m%d MB\033[0m RAM\n" "${#pids[@]}" "$total_mb"
+  if [ ${#pids[@]} -gt 0 ]; then
+    printf "Found \033[1m%d\033[0m stopped process(es), total \033[1m%d MB\033[0m RAM\n" "${#pids[@]}" "$total_mb"
 
-  if $dry_run; then
-    echo "(dry-run: no processes killed)"
-    return 0
-  fi
-
-  if ! $force; then
-    printf "Kill all %d stopped process(es)? [y/N] " "${#pids[@]}"
-    read -r confirm
-    case "$confirm" in
-      [yY]*) ;;
-      *) echo "Aborted."; return 0 ;;
-    esac
-  fi
-
-  echo "Sending SIGTERM..."
-  for pid in "${pids[@]}"; do
-    kill -CONT "$pid" 2>/dev/null  # resume first so it can handle SIGTERM
-    kill -TERM "$pid" 2>/dev/null
-  done
-  sleep 1
-
-  # Check survivors, SIGKILL if needed
-  local survivors=0
-  for pid in "${pids[@]}"; do
-    if kill -0 "$pid" 2>/dev/null; then
-      kill -KILL "$pid" 2>/dev/null
-      survivors=$((survivors + 1))
+    local do_kill=true
+    if $dry_run; then
+      echo "(dry-run: no processes killed)"
+      do_kill=false
+    elif ! $force; then
+      printf "Kill all %d stopped process(es)? [y/N] " "${#pids[@]}"
+      read -r confirm
+      case "$confirm" in
+        [yY]*) ;;
+        *) echo "Aborted."; do_kill=false ;;
+      esac
     fi
-  done
 
-  if [ "$survivors" -gt 0 ]; then
-    printf "  %d process(es) needed SIGKILL\n" "$survivors"
+    if $do_kill; then
+      echo "Sending SIGTERM..."
+      for pid in "${pids[@]}"; do
+        kill -CONT "$pid" 2>/dev/null  # resume first so it can handle SIGTERM
+        kill -TERM "$pid" 2>/dev/null
+      done
+      sleep 1
+
+      # Check survivors, SIGKILL if needed
+      local survivors=0
+      for pid in "${pids[@]}"; do
+        if kill -0 "$pid" 2>/dev/null; then
+          kill -KILL "$pid" 2>/dev/null
+          survivors=$((survivors + 1))
+        fi
+      done
+
+      if [ "$survivors" -gt 0 ]; then
+        printf "  %d process(es) needed SIGKILL\n" "$survivors"
+      fi
+      printf "\033[32mFreed ~%d MB RAM\033[0m\n" "$total_mb"
+    fi
   fi
-  printf "\033[32mFreed ~%d MB RAM\033[0m\n" "$total_mb"
 
   # ── Dispatch result cleanup ──
   local dispatch_dir="${XDG_DATA_HOME:-$HOME/.local/share}/ccs-dashboard/dispatch"
