@@ -46,6 +46,7 @@ description: Cross-session work orchestrator — view all active Claude Code ses
 | handoff [dir] | h [dir] | `ccs-handoff [project-dir]` — 產生交接筆記 |
 | cleanup | cl | `ccs-cleanup --dry-run` — 殭屍偵測 |
 | refresh | r | 重新執行上一個 view |
+| recap | rc | `ccs-recap --json` + AI analysis — daily work recap |
 
 ## Routing Rules
 
@@ -65,6 +66,7 @@ description: Cross-session work orchestrator — view all active Claude Code ses
 - 「清理」「cleanup」「殭屍」→ cleanup
 - 「refresh」「r」「重新整理」→ refresh（重跑上一個指令）
 - 「排優先順序」「今天該做什麼」「prioritize」→ 根據 JSON 資料做優先順序推斷
+- 「recap」「daily recap」「昨天做了什麼」「早安」「morning」「recap --project」→ recap
 
 數字輸入（如 "1" "2" "3"）→ 在 overview 後等同 `detail N`，在 detail 後等同 `conversation N`。
 
@@ -107,3 +109,17 @@ Options 數量控制在 3-6 個，不超過 7 個。
    - 最近活躍的 session 優先於閒置的
 5. **Refresh：** 使用者說「refresh」「r」「重新整理」→ 重跑上一個指令。靠 conversation context 記住上一個 view。
 6. **輸出簡潔：** 直接輸出 `--md` 結果，不加額外解釋或 wrapper。只在有 actionable 資訊時加簡短備註（如「有 2 個 unpushed commit」）。
+
+### Recap 流程
+
+1. 執行 `ccs-recap --json` 取得結構化數據
+2. 列出有活動的專案，用 `<options>` 問使用者要看哪些（預設全選）
+   - YOLO mode 下直接全選，不提問
+3. 對每個 pending/in_progress session，用 `_ccs_get_pair` 讀取最後 2-3 對話
+4. 輸出分析：
+   - 數據摘要
+   - 各工作項分析（進展/卡住原因）
+   - 優先順序建議（deadline > 卡住需決策 > 接近完成 > 低優先）
+5. 用 `<options>` 問：「要升級到完整規劃嗎？」
+   - 是 → 生成今日工作計畫（任務/專案/建議時段/說明）
+   - 否 → 結束
