@@ -224,3 +224,34 @@ _ccs_dispatch_lazy_cleanup() {
 - **專案目錄驗證**：`--project` 路徑必須存在；使用 `--context` 時需為 git repo
 - **新 code 位置**：dispatch 相關函式放在 `ccs-dashboard.sh` 內，與現有指令一致
 - **不自動 commit/push**：dispatch 的 task prompt 不會自動加入 commit/push 指令，除非使用者明確寫在 task 裡
+
+---
+
+## §7 可配置參數
+
+所有可調整參數透過 shell 變數定義預設值，使用者可在 `.bashrc` 或環境變數中覆蓋。
+
+```bash
+# 任務超時秒數（--timeout 預設值）
+CCS_DISPATCH_TIMEOUT=${CCS_DISPATCH_TIMEOUT:-600}
+
+# ccs-jobs 預設列出筆數
+CCS_DISPATCH_JOBS_LIMIT=${CCS_DISPATCH_JOBS_LIMIT:-20}
+
+# ccs-jobs 任務摘要顯示字數
+CCS_DISPATCH_TASK_DISPLAY_LEN=${CCS_DISPATCH_TASK_DISPLAY_LEN:-60}
+
+# result 檔 TTL 天數
+CCS_DISPATCH_RESULT_TTL_DAYS=${CCS_DISPATCH_RESULT_TTL_DAYS:-7}
+
+# summary 提取：從 .out 末尾取幾行
+CCS_DISPATCH_SUMMARY_LINES=${CCS_DISPATCH_SUMMARY_LINES:-30}
+
+# summary 截斷字元數上限
+CCS_DISPATCH_SUMMARY_MAX_CHARS=${CCS_DISPATCH_SUMMARY_MAX_CHARS:-200}
+
+# 並行 running job 警告門檻
+CCS_DISPATCH_MAX_CONCURRENT_WARN=${CCS_DISPATCH_MAX_CONCURRENT_WARN:-3}
+```
+
+實作中所有對應的 hard-coded 值一律引用這些變數，不直接寫死數字。
