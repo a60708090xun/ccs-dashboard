@@ -3273,9 +3273,9 @@ _ccs_recap_collect() {
           pending)      (( td_pending++ )); pending_items+=("$t_content") ;;
           in_progress)  (( td_ip++ )); pending_items+=("$t_content") ;;
         esac
-      done < <(jq -r 'select(.type == "assistant") | .message.content[]? |
+      done < <(jq -s -r '[.[] | select(.type == "assistant") | .message.content[]? |
         select(.type == "tool_use" and .name == "TodoWrite") |
-        .input.todos[]? | [.status, .content] | @tsv' "$jsonl" 2>/dev/null | tail -20)
+        .input.todos] | last // [] | .[]? | [.status, .content] | @tsv' "$jsonl" 2>/dev/null)
 
       # Last exchange preview
       local preview=""
@@ -3394,7 +3394,7 @@ _ccs_recap_collect() {
       topic=$(_ccs_topic_from_jsonl "$jsonl")
       dl_text=$(jq -r 'select(.type == "user" and .isMeta != true) |
         .message.content | if type == "string" then . else "" end' "$jsonl" 2>/dev/null |
-        grep -iE '(deadline|before|週|月底|by |due|urgent|ASAP|趕|今天|明天|後天)' |
+        grep -iE '(deadline|due|urgent|ASAP|月底|趕|今天|明天|後天|這週|下週|本週|by (monday|tuesday|wednesday|thursday|friday|tomorrow|end of))' |
         head -1 | sed 's/^[[:space:]]*//' | cut -c1-80)
       if [ -n "$dl_text" ]; then
         deadlines_json=$(echo "$deadlines_json" | jq \
@@ -3527,7 +3527,7 @@ _ccs_recap_terminal() {
 
   # Git
   printf "\n${C_BOLD}── Git Activity ──${C_RESET}\n"
-  echo "$json" | jq -r '.projects[] |
+  echo "$json" | jq -r '.projects[] | select(.git.branch != null) |
     "  " + .name + " (" + .git.branch + ")  " +
     (.git.commits_in_period|tostring) + " commits, " +
     (.git.uncommitted|tostring) + " uncommitted" +
@@ -3613,7 +3613,7 @@ _ccs_recap_md() {
   # Git
   echo "## Git Activity"
   echo ""
-  echo "$json" | jq -r '.projects[] |
+  echo "$json" | jq -r '.projects[] | select(.git.branch != null) |
     "- **" + .name + "** (" + .git.branch + ") — " +
     (.git.commits_in_period|tostring) + " commits, " +
     (.git.uncommitted|tostring) + " uncommitted" +
