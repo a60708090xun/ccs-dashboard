@@ -35,23 +35,25 @@
 ### ccs-dispatch
 
 ```bash
-ccs-dispatch [--sync] [--context] --project <dir> "task description"
+ccs-dispatch [--sync] [--context] [--timeout <secs>] --project <dir> "task description"
 ```
 
 | 參數 | 預設 | 說明 |
 |------|------|------|
-| `--sync` | 否（非同步） | Blocking 等結果，stdout 印輸出 |
-| `--context` | 否 | 注入目標專案的 git 狀態 + active session 待辦 |
+| `--sync` | 否（非同步） | Blocking 等結果，stdout 印 .out 和 .err |
+| `--context` | 否 | 注入目標專案的 git 狀態 + active session 待辦（需 git repo） |
+| `--timeout <secs>` | 600 | 任務超時秒數，超時狀態為 `timeout` |
 | `--project <dir>` | **必填** | 目標專案目錄，claude 會在該目錄執行 |
 | `"task"` | **必填** | 任務描述，作為 `claude -p` 的 prompt |
 
 ### ccs-jobs
 
 ```bash
-ccs-jobs [<job-id>]
+ccs-jobs [--all] [<job-id>]
 ```
 
-- 無參數：列出所有 jobs（最近 20 筆），顯示 job-id、狀態、age、專案、任務摘要前 60 字
+- 無參數：列出最近 20 筆 jobs，顯示 job-id、狀態、age、專案、任務摘要前 60 字
+- `--all`：列出所有 jobs
 - 有 job-id：印出該 job 的完整結果（若 result 檔已過期則顯示 JSONL 中的 summary）
 
 ---
@@ -62,7 +64,7 @@ ccs-jobs [<job-id>]
 
 ```
 ${XDG_DATA_HOME:-~/.local/share}/ccs-dashboard/dispatch/
-├── jobs.jsonl              # Index（永久保留）
+├── jobs.jsonl              # Index（indefinitely retained，可手動清除）
 ├── results/
 │   ├── <job-id>.out        # 完整 stdout（7 天 TTL）
 │   └── <job-id>.err        # stderr（7 天 TTL）
@@ -95,9 +97,14 @@ ${XDG_DATA_HOME:-~/.local/share}/ccs-dashboard/dispatch/
 ### 狀態流轉
 
 ```
-created → running → completed (exit 0)
-                  → failed (exit ≠ 0)
+running → completed (exit 0)
+        → failed (exit ≠ 0)
+        → timeout (exit 124, by timeout command)
 ```
+
+### JSONL 更新策略
+
+採用 **append-latest-wins**：更新狀態時 append 新行（同 job_id），讀取時以最後一筆為準。避免多個背景 process 同時 read-modify-write 的 race condition。`ccs-jobs` 以 `job_id` 去重取最後出現的記錄。
 
 ---
 
@@ -111,10 +118,10 @@ ccs-dispatch --sync --project /path "fix lint"
   ├─ 產生 job-id
   ├─ [--context] → 組合 context prompt（git status + todos）
   ├─ 寫 jobs.jsonl（status: running）
-  ├─ cd <project> && claude -p "prompt" > results/<job-id>.out 2> results/<job-id>.err
-  ├─ 等待完成
-  ├─ 更新 jobs.jsonl（status, exit_code, finished_at, summary）
-  ├─ stdout 印出結果
+  ├─ cd <project> && timeout <secs> claude -p "prompt" > results/<job-id>.out 2> results/<job-id>.err
+  ├─ 等待完成（exit 124 = timeout）
+  ├─ Append jobs.jsonl（status, exit_code, finished_at, summary）
+  ├─ stdout 印出 .out 內容，若有 .err 也一併顯示
   └─ 刪除 PID file（若有）
 ```
 
@@ -127,18 +134,18 @@ ccs-dispatch --project /path "fix lint"
   ├─ [--context] → 組合 context prompt
   ├─ 寫 jobs.jsonl（status: running）
   ├─ 背景執行：
-  │    (cd <project> && claude -p "prompt" \
+  │    (cd <project> && timeout <secs> claude -p "prompt" \
   │      > results/<job-id>.out 2> results/<job-id>.err; \
-  │      _ccs_dispatch_finish <job-id>) &
+  │      _ccs_dispatch_finish <job-id> $?) &
   ├─ 寫 PID file
   └─ 印出 "Job dispatched: d-20260319-143052-a1b2"
 ```
 
 ### `_ccs_dispatch_finish` 回呼
 
-- 更新 jobs.jsonl（status、exit_code、finished_at）
-- 從 .out 最後 30 行提取 summary（取前 200 字）
-- 刪除 PID file
+- Append jobs.jsonl 新行（status、exit_code、finished_at、summary）
+- Summary 提取：取 .out 最後 30 行，截斷至 200 字元（含不完整行則去尾）
+- `rm -f` PID file（冪等，避免 fast-finish race）
 
 ### Context 組合（`--context`）
 
@@ -153,7 +160,7 @@ ccs-dispatch --project /path "fix lint"
 Task: fix lint warnings in ccs-core.sh
 ```
 
-用現有的 `_ccs_overview_json` 提取 git 和 todos 資訊，格式化成 prompt prefix。
+用專用 helper `_ccs_dispatch_context` 提取指定專案的 git 狀態和 active session todos，格式化成 prompt prefix。不呼叫完整 `_ccs_overview_json`（避免掃描所有專案）。
 
 ---
 
@@ -193,7 +200,7 @@ _ccs_dispatch_lazy_cleanup() {
 
 | 指令 | 別名 | 執行方式 | 說明 |
 |------|------|---------|------|
-| `dispatch --project <dir> "task"` | `d` | **直接執行**（強制非同步） | Bash tool 執行 `ccs-dispatch`，回傳 job-id |
+| `dispatch --project <dir> "task"` | `dp` | **直接執行**（強制非同步） | Bash tool 執行 `ccs-dispatch`，回傳 job-id |
 | `jobs` | `j` | **直接執行** | 執行 `ccs-jobs`，顯示 dispatch 歷史 |
 | `job <id>` | | **直接執行** | 執行 `ccs-jobs <id>`，顯示單筆結果 |
 
@@ -214,5 +221,6 @@ _ccs_dispatch_lazy_cleanup() {
 
 - **Task prompt 傳遞**：task 作為 `claude -p` 的引號參數傳入，不經過 `eval`
 - **並行數警告**：`ccs-dispatch` 檢查目前 running jobs 數量，超過 3 個時警告（不硬擋）
-- **專案目錄驗證**：`--project` 路徑必須存在且是 git repo，否則拒絕
+- **專案目錄驗證**：`--project` 路徑必須存在；使用 `--context` 時需為 git repo
+- **新 code 位置**：dispatch 相關函式放在 `ccs-dashboard.sh` 內，與現有指令一致
 - **不自動 commit/push**：dispatch 的 task prompt 不會自動加入 commit/push 指令，除非使用者明確寫在 task 裡
