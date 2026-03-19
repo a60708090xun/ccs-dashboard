@@ -148,6 +148,8 @@ do_install() {
   echo "  ccs-handoff         — generate handoff note"
   echo "  ccs-resume-prompt   — generate bootstrap prompt"
   echo "  ccs-overview        — cross-session work overview"
+  echo "  ccs-feature         — feature progress tracking"
+  echo "  ccs-tag             — manual session-to-feature assignment"
   echo
   echo "Skills installed:"
   echo "  ccs-orchestrator    — interactive work orchestrator (Claude Code skill)"
@@ -172,6 +174,24 @@ do_uninstall() {
     if [[ "$target" == *"ccs-dashboard"* ]]; then
       rm "$skill_dst"
       ok "Removed skill symlink: ${skill_dst}"
+    fi
+  fi
+
+  # Remove data directory
+  local data_dir="${XDG_DATA_HOME:-$HOME/.local/share}/ccs-dashboard"
+  if [ -d "$data_dir" ]; then
+    if [ -f "$data_dir/overrides.jsonl" ]; then
+      warn "Manual feature tags found: ${data_dir}/overrides.jsonl"
+      read -rp "Delete data directory? [y/N] " confirm
+      if [[ "$confirm" =~ ^[yY]$ ]]; then
+        rm -rf "$data_dir"
+        ok "Removed ${data_dir}"
+      else
+        warn "Kept ${data_dir}"
+      fi
+    else
+      rm -rf "$data_dir"
+      ok "Removed ${data_dir}"
     fi
   fi
 
