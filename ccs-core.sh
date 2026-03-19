@@ -368,11 +368,12 @@ HELP
 
 # ── ccs-cleanup [--dry-run|-n|--force|-f] — kill stopped claude processes ──
 ccs-cleanup() {
-  local dry_run=false force=false
+  local dry_run=false force=false dispatch_all=false
   for arg in "$@"; do
     case "$arg" in
       --dry-run|-n) dry_run=true ;;
       --force|-f) force=true ;;
+      --dispatch-all) dispatch_all=true ;;
       --help|-h)
         cat <<'HELP'
 ccs-cleanup [--dry-run|-n] [--force|-f]  — kill stopped (suspended) claude processes
@@ -384,6 +385,7 @@ Shows PID, RAM, working directory, start/last-active time, and session topic.
 
   --dry-run, -n   Show what would be killed without doing it
   --force, -f     Skip confirmation prompt
+  --dispatch-all  Clear ALL dispatch history (jobs.jsonl + results + pids)
 HELP
         return 0 ;;
     esac
@@ -466,6 +468,41 @@ HELP
     printf "  %d process(es) needed SIGKILL\n" "$survivors"
   fi
   printf "\033[32mFreed ~%d MB RAM\033[0m\n" "$total_mb"
+
+  # ── Dispatch result cleanup ──
+  local dispatch_dir="${XDG_DATA_HOME:-$HOME/.local/share}/ccs-dashboard/dispatch"
+  if [ -d "$dispatch_dir" ]; then
+    if $dispatch_all; then
+      printf '\n\033[1mDispatch cleanup:\033[0m clearing ALL dispatch history\n'
+      if ! $dry_run; then
+        rm -f "$dispatch_dir/jobs.jsonl"
+        rm -rf "$dispatch_dir/results" "$dispatch_dir/pids"
+        mkdir -p "$dispatch_dir/results" "$dispatch_dir/pids"
+      fi
+    else
+      local ttl=${CCS_DISPATCH_RESULT_TTL_DAYS:-7}
+      local expired_count
+      expired_count=$(find "$dispatch_dir/results" -type f -mtime +"$ttl" 2>/dev/null | wc -l)
+      local orphan_pids=0
+      local pidfile
+      for pidfile in "$dispatch_dir/pids"/*.pid; do
+        [ ! -f "$pidfile" ] && continue
+        kill -0 "$(cat "$pidfile" 2>/dev/null)" 2>/dev/null || orphan_pids=$((orphan_pids + 1))
+      done
+
+      if [ "$expired_count" -gt 0 ] || [ "$orphan_pids" -gt 0 ]; then
+        printf '\n\033[1mDispatch cleanup:\033[0m %d expired result(s), %d orphan PID(s)\n' \
+          "$expired_count" "$orphan_pids"
+        if ! $dry_run; then
+          find "$dispatch_dir/results" -type f -mtime +"$ttl" -delete 2>/dev/null
+          for pidfile in "$dispatch_dir/pids"/*.pid; do
+            [ ! -f "$pidfile" ] && continue
+            kill -0 "$(cat "$pidfile" 2>/dev/null)" 2>/dev/null || rm -f "$pidfile"
+          done
+        fi
+      fi
+    fi
+  fi
 }
 
 # ── Helper: resolve JSONL directory name → actual filesystem path ──
