@@ -3198,9 +3198,11 @@ _ccs_recap_scan_projects() {
 # _ccs_recap_collect — 收集 recap 數據，輸出 JSON
 # $1: from_epoch
 # $2: "all" 或 "project" (專案範圍)
+# $3: "true" 或 "false" (auto_detected)
 _ccs_recap_collect() {
   local from_epoch=${1:?missing from_epoch}
   local scope=${2:-all}
+  local auto_detected=${3:-true}
   local now_iso
   now_iso=$(date -Iseconds)
   local from_iso
@@ -3283,7 +3285,11 @@ _ccs_recap_collect() {
 
       # 組裝 session JSON
       local pending_json
-      pending_json=$(printf '%s\n' "${pending_items[@]}" | jq -R . | jq -s .)
+      if [ ${#pending_items[@]} -eq 0 ]; then
+        pending_json="[]"
+      else
+        pending_json=$(printf '%s\n' "${pending_items[@]}" | jq -R . | jq -s .)
+      fi
       sessions_json=$(echo "$sessions_json" | jq \
         --arg id "$sid" \
         --arg topic "$topic" \
@@ -3342,6 +3348,7 @@ _ccs_recap_collect() {
 
     # Hot files（聚合 JSONL 中的 tool_use Read/Edit/Write）
     local hot_json="[]"
+    unset file_edits file_reads all_hot_files 2>/dev/null
     local -A file_edits=() file_reads=()
     while IFS= read -r jsonl; do
       local mtime
@@ -3363,6 +3370,7 @@ _ccs_recap_collect() {
     done < <(find "$session_dir" -maxdepth 1 -name "*.jsonl" ! -path "*/subagents/*" 2>/dev/null)
 
     # 排序取 top 5（合併 edits + reads 的所有 key，避免遺漏只有 Read 的檔案）
+    unset all_hot_files 2>/dev/null
     local -A all_hot_files=()
     for fname in "${!file_edits[@]}" "${!file_reads[@]}"; do
       all_hot_files["$fname"]=1
@@ -3416,7 +3424,7 @@ _ccs_recap_collect() {
   jq -n \
     --arg from "$from_iso" \
     --arg to "$now_iso" \
-    --argjson auto true \
+    --argjson auto "$auto_detected" \
     --argjson projects "$projects_array" \
     --argjson ts "$total_sessions" \
     --argjson ac "$active_count" \
@@ -3548,7 +3556,7 @@ _ccs_recap_terminal() {
 
 _ccs_recap_md() {
   local json="$1"
-  local from to
+  local from
   from=$(echo "$json" | jq -r '.recap_period.from')
   local from_date
   from_date=$(date -d "$from" '+%Y-%m-%d (%a)' 2>/dev/null)
@@ -3661,14 +3669,16 @@ HELP
   done
 
   # 解析時間範圍
-  local from_epoch
+  local from_epoch auto_detected=true
   if [ -z "$time_arg" ]; then
     from_epoch=$(_ccs_detect_last_workday)
   elif [[ "$time_arg" =~ ^[0-9]+d$ ]]; then
     local days=${time_arg%d}
     from_epoch=$(date -d "$days days ago 00:00" +%s)
+    auto_detected=false
   elif [[ "$time_arg" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
     from_epoch=$(date -d "$time_arg 00:00" +%s)
+    auto_detected=false
   else
     echo "Error: invalid time range '$time_arg' (use: 2d, 2026-03-18, or omit)" >&2
     return 1
@@ -3676,7 +3686,7 @@ HELP
 
   # 收集數據
   local json
-  json=$(_ccs_recap_collect "$from_epoch" "$scope")
+  json=$(_ccs_recap_collect "$from_epoch" "$scope" "$auto_detected")
 
   # 檢查空結果
   local total
