@@ -45,6 +45,7 @@ description: Cross-session work orchestrator — view all active Claude Code ses
 | tag | tag | 引導使用者執行 `ccs-tag`（assign/exclude/list/clear） |
 | handoff [dir] | h [dir] | `ccs-handoff [project-dir]` — 產生交接筆記 |
 | cleanup | cl | `ccs-cleanup --dry-run` — 殭屍偵測 |
+| crash | cr | `ccs-crash --md` — crash-interrupted session 偵測 |
 | refresh | r | 重新執行上一個 view |
 | recap | rc | `ccs-recap --json` + AI analysis — daily work recap |
 
@@ -64,6 +65,7 @@ description: Cross-session work orchestrator — view all active Claude Code ses
 - 「tag」「標記」「歸類」→ tag（引導 ccs-tag 操作）
 - 「交接」「handoff」→ handoff
 - 「清理」「cleanup」「殭屍」→ cleanup
+- 「crash」「中斷」「重開機」「crash-detect」→ crash
 - 「refresh」「r」「重新整理」→ refresh（重跑上一個指令）
 - 「排優先順序」「今天該做什麼」「prioritize」→ 根據 JSON 資料做優先順序推斷
 - 「recap」「daily recap」「昨天做了什麼」「早安」「morning」「recap --project」→ recap

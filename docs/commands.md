@@ -178,3 +178,36 @@ ccs-resume-prompt --copy       # 複製到剪貼簿
 ccs-resume-prompt --stdout     # 純文字輸出（可 pipe）
 ccs-resume-prompt -n 5         # 包含最近 5 組對話（預設 3）
 ```
+
+## ccs-crash
+
+偵測被 crash 或非預期重開機中斷的 session。
+
+```bash
+ccs-crash                      # Markdown 輸出，僅顯示 high confidence（預設）
+ccs-crash --json               # JSON 輸出
+ccs-crash --all                # 包含 low confidence + subagent sessions
+ccs-crash --reboot-window N    # Path 1 window（分鐘，預設 30）
+ccs-crash --idle-window N      # Path 2 window（分鐘，預設 1440）
+```
+
+### 偵測路徑
+
+| Path | 觸發條件 | Confidence |
+|------|----------|------------|
+| Path 1 (reboot) | session mtime 在 [boot_time - window, boot_time + 120s) | high |
+| Path 2 (non-reboot) | process 已死 + 最後回應無 text content | high |
+| Path 2 (non-reboot) | process 已死 + 最後回應有 text content | low |
+
+### 輸出範例
+
+```
+## ⚠️ Crash-Interrupted Sessions (boot: 2026-03-20 09:47)
+
+### 🔴 b9acc81f — specman/cases — Exp-G5 分析
+- **Confidence:** high (reboot)
+- **最後活動：** 09:38（9m ago）
+- **最後訊息：** 好
+- **Git：** master (4 uncommitted files)
+- **Resume：** `claude --resume b9acc81f-...`
+```
