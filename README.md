@@ -106,7 +106,7 @@ ccs-dashboard has two layers:
 |---------|-------------|
 | `ccs` / `ccs-status` | Unified dashboard: active sessions + zombies + stale sessions |
 | `ccs-cleanup` | Find and kill suspended zombie processes |
-| `ccs-crash` | Detect sessions interrupted by crash or unexpected reboot |
+| `ccs-crash` | Detect crash-interrupted sessions + `--clean`/`--clean-all` cleanup |
 | `ccs-resume-prompt` | Generate bootstrap prompt (< 2000 tokens) for new session |
 | `ccs-feature` | Track progress by feature/issue across sessions |
 | `ccs-recap` | Daily work review across all projects |
@@ -147,6 +147,7 @@ Green             🟢          active      < 10 min since last activity
 Yellow            🟡          recent      < 1 hour
 Blue              🔵          idle        < 1 day (open but idle)
 Gray              💤          stale       > 1 day (zombie candidate)
+Red 💀            💀          crashed     crash-interrupted (reboot/hung/dead process)
 Strikethrough     -           archived    has last-prompt marker
 ```
 

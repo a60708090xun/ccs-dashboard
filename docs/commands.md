@@ -181,23 +181,69 @@ ccs-resume-prompt -n 5         # 包含最近 5 組對話（預設 3）
 
 ## ccs-crash
 
-偵測被 crash 或非預期重開機中斷的 session。
+偵測被 crash 或非預期重開機中斷的 session，並提供清理功能。
+
+`ccs-active` 會以紅色 💀 標記 crash session，底部顯示清理指引。
 
 ```bash
 ccs-crash                      # Markdown 輸出，僅顯示 high confidence（預設）
 ccs-crash --json               # JSON 輸出
 ccs-crash --all                # 包含 low confidence + subagent sessions
+ccs-crash --clean              # 互動式清理（逐一 archive/skip/quit）
+ccs-crash --clean-all          # 一鍵 archive 所有 high confidence crash sessions
 ccs-crash --reboot-window N    # Path 1 window（分鐘，預設 30）
 ccs-crash --idle-window N      # Path 2 window（分鐘，預設 1440）
 ```
 
 ### 偵測路徑
 
-| Path | 觸發條件 | Confidence |
-|------|----------|------------|
-| Path 1 (reboot) | session mtime 在 [boot_time - window, boot_time + 120s) | high |
-| Path 2 (non-reboot) | process 已死 + 最後回應無 text content | high |
-| Path 2 (non-reboot) | process 已死 + 最後回應有 text content | low |
+| Path | 觸發條件 | Confidence | 類型 |
+|------|----------|------------|------|
+| Path 1 (reboot) | session mtime 在 boot 前 30 分鐘內，無 running process | high | `reboot` |
+| Path 1 (reboot-idle) | session mtime 在 boot 之前（idle 狀態被 reboot 殺掉） | high | `reboot-idle` |
+| Path 2 (non-reboot) | process 已死 + 最後回應無 text content | high | `non-reboot` |
+| Path 2 (non-reboot-idle) | process 已死 + 最後回應有 text（閒置後中斷） | high | `non-reboot-idle` |
+| Path 2 (hung) | process 在但 JSONL 超過 1 小時沒更新 | high | `hung` |
+
+### Running process 偵測
+
+判斷 session 是否仍在執行使用兩種方法：
+
+1. **精確匹配**：`ps` 抓 `--resume <session-id>`（適用 `claude --resume` 啟動的 session）
+2. **cwd 匹配**：比對 claude process 的工作目錄與 session 的 project 路徑（適用 Happy 啟動或 terminal 直接開的 session）。路徑使用正規化比對（`/._` 統一為 `-`）解決 Claude Code 路徑編碼歧義。
+
+Hung detection 僅對精確匹配的 session 生效，cwd 匹配因無法確定 process 對應哪個 session，不做 hung 判斷。
+
+### 清理功能
+
+`--clean` 和 `--clean-all` 透過寫入 `last-prompt` marker 到 JSONL 來 archive crash session，清理後 `ccs-active` 不再顯示該 session。
+
+```bash
+# 互動式：逐一確認
+$ ccs-crash --clean
+[1/14] 60a75dec — ~(home)
+  Topic: 分析一下目前我的 happy daemon 狀態
+  Type:  high:reboot
+  (a)rchive  (s)kip  (q)uit? a
+  ✓ Archived
+
+# 批次：全部 archive
+$ ccs-crash --clean-all
+Archiving 14 crashed sessions...
+  ✓ 60a75dec
+  ✓ 1266d974
+  ...
+Done: 14 sessions archived.
+```
+
+### Archived 判斷
+
+`_ccs_is_archived()` 共用函式判斷 session 是否已結束：
+
+1. JSONL 最後一行是 `/exit` 的 stdout event（`Goodbye!` 或 `See ya!`）
+2. `last-prompt` marker 存在且之後無 `assistant` event
+
+> **已知問題**：Claude Code 在 resume → `/exit` 時可能不寫 `last-prompt` marker。Check 1 處理此情況。
 
 ### 輸出範例
 
@@ -210,6 +256,10 @@ ccs-crash --idle-window N      # Path 2 window（分鐘，預設 1440）
 - **最後訊息：** 好
 - **Git：** master (4 uncommitted files)
 - **Resume：** `claude --resume b9acc81f-...`
+- **Detail：** `ccs-session b9acc81f`
+
+---
+cleanup: `ccs-crash --clean` (interactive) | `ccs-crash --clean-all` (batch)
 ```
 
 ## ccs-checkpoint
