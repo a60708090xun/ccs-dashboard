@@ -3267,15 +3267,16 @@ _ccs_recap_collect() {
       # Todos
       td_done=0 td_pending=0 td_ip=0
       pending_items=()
+      completed_items=()
       while IFS=$'\t' read -r t_status t_content; do
         case "$t_status" in
-          completed)    (( td_done++ )) ;;
+          completed)    (( td_done++ )); completed_items+=("$t_content") ;;
           pending)      (( td_pending++ )); pending_items+=("$t_content") ;;
           in_progress)  (( td_ip++ )); pending_items+=("$t_content") ;;
         esac
-      done < <(jq -r 'select(.type == "assistant") | .message.content[]? |
+      done < <(jq -s -r '[.[] | select(.type == "assistant") | .message.content[]? |
         select(.type == "tool_use" and .name == "TodoWrite") |
-        .input.todos[]? | [.status, .content] | @tsv' "$jsonl" 2>/dev/null | tail -20)
+        .input.todos] | last // [] | .[]? | [.status, .content] | @tsv' "$jsonl" 2>/dev/null)
 
       # Last exchange preview
       local preview=""
@@ -3284,11 +3285,16 @@ _ccs_recap_collect() {
         gsub("\n"; " ") | .[:80]' "$jsonl" 2>/dev/null | tail -1)
 
       # 組裝 session JSON
-      local pending_json
+      local pending_json completed_json
       if [ ${#pending_items[@]} -eq 0 ]; then
         pending_json="[]"
       else
         pending_json=$(printf '%s\n' "${pending_items[@]}" | jq -R . | jq -s .)
+      fi
+      if [ ${#completed_items[@]} -eq 0 ]; then
+        completed_json="[]"
+      else
+        completed_json=$(printf '%s\n' "${completed_items[@]}" | jq -R . | jq -s .)
       fi
       sessions_json=$(echo "$sessions_json" | jq \
         --arg id "$sid" \
@@ -3299,12 +3305,14 @@ _ccs_recap_collect() {
         --argjson pend "$td_pending" \
         --argjson ip "$td_ip" \
         --argjson items "$pending_json" \
+        --argjson citems "$completed_json" \
         --arg preview "$preview" \
         '. += [{
           id: $id, topic: $topic, status: $status,
           last_active: $last,
           todos: { done: ($done|tonumber), pending: ($pend|tonumber), in_progress: ($ip|tonumber) },
           pending_items: $items,
+          completed_items: $citems,
           last_exchange_preview: $preview
         }]')
 
@@ -3394,7 +3402,7 @@ _ccs_recap_collect() {
       topic=$(_ccs_topic_from_jsonl "$jsonl")
       dl_text=$(jq -r 'select(.type == "user" and .isMeta != true) |
         .message.content | if type == "string" then . else "" end' "$jsonl" 2>/dev/null |
-        grep -iE '(deadline|before|週|月底|by |due|urgent|ASAP|趕|今天|明天|後天)' |
+        grep -iE '(deadline|due|urgent|ASAP|月底|趕|今天|明天|後天|這週|下週|本週|by (monday|tuesday|wednesday|thursday|friday|tomorrow|end of))' |
         head -1 | sed 's/^[[:space:]]*//' | cut -c1-80)
       if [ -n "$dl_text" ]; then
         deadlines_json=$(echo "$deadlines_json" | jq \
@@ -3509,6 +3517,17 @@ _ccs_recap_terminal() {
     head -10
   fi
 
+  # Completed items (per-project dedup, top 5 each)
+  local has_completed
+  has_completed=$(echo "$json" | jq '[.projects[].sessions[] | select(.todos.done > 0)] | length')
+  if (( has_completed > 0 )); then
+    printf "\n  Completed:\n"
+    echo "$json" | jq -r '.projects[] | .name as $p |
+      [.sessions[].completed_items[]?] | unique | .[:5][] |
+      "  • [" + $p + "] " + .' |
+    head -10
+  fi
+
   # Features
   local feat_count
   feat_count=$(echo "$json" | jq '[.projects[].features[]] | length')
@@ -3527,7 +3546,7 @@ _ccs_recap_terminal() {
 
   # Git
   printf "\n${C_BOLD}── Git Activity ──${C_RESET}\n"
-  echo "$json" | jq -r '.projects[] |
+  echo "$json" | jq -r '.projects[] | select(.git.branch != null) |
     "  " + .name + " (" + .git.branch + ")  " +
     (.git.commits_in_period|tostring) + " commits, " +
     (.git.uncommitted|tostring) + " uncommitted" +
@@ -3594,6 +3613,17 @@ _ccs_recap_md() {
     .sessions[] | select(.todos.pending > 0) |
     .pending_items[]? | "- [" + $p + "] " + .'
   echo ""
+  # Completed items (per-project dedup, top 5 each)
+  local md_has_completed
+  md_has_completed=$(echo "$json" | jq '[.projects[].sessions[] | select(.todos.done > 0)] | length')
+  if (( md_has_completed > 0 )); then
+    echo "**Completed highlights:**"
+    echo ""
+    echo "$json" | jq -r '.projects[] | .name as $p |
+      [.sessions[].completed_items[]?] | unique | .[:5][] |
+      "- [" + $p + "] " + .'
+    echo ""
+  fi
 
   # Features
   local feat_count
@@ -3613,7 +3643,7 @@ _ccs_recap_md() {
   # Git
   echo "## Git Activity"
   echo ""
-  echo "$json" | jq -r '.projects[] |
+  echo "$json" | jq -r '.projects[] | select(.git.branch != null) |
     "- **" + .name + "** (" + .git.branch + ") — " +
     (.git.commits_in_period|tostring) + " commits, " +
     (.git.uncommitted|tostring) + " uncommitted" +

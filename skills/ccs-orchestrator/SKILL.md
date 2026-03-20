@@ -117,7 +117,7 @@ Options 數量控制在 3-6 個，不超過 7 個。
    - YOLO mode 下直接全選，不提問
 3. 對每個 pending/in_progress session，用 `_ccs_get_pair` 讀取最後 2-3 對話
 4. 輸出分析：
-   - 數據摘要
+   - 數據摘要（含完成項重點：從 `completed_items` 取 per-project top highlights）
    - 各工作項分析（進展/卡住原因）
    - 優先順序建議（deadline > 卡住需決策 > 接近完成 > 低優先）
 5. 用 `<options>` 問：「要升級到完整規劃嗎？」
