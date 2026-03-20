@@ -91,6 +91,8 @@ description: Cross-session work orchestrator — view all active Claude Code ses
 | 有殭屍 process | 加入「清理殭屍」 |
 | 沒有 active session | 「看最近所有 session（含 subagent）」 |
 | git view 後有 unpushed commits | 提醒使用者哪些專案有 unpushed |
+| 剛看完 checkpoint | 「匯出為 markdown 檔」「回到總覽」「看 git 狀態」 |
+| 剛看完 recap 分析 | 「匯出為 markdown 檔」「要升級到完整規劃嗎？」 |
 
 Options 數量控制在 3-6 個，不超過 7 個。
 
