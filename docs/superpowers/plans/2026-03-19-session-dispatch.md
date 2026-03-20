@@ -236,7 +236,7 @@ _ccs_dispatch_context() {
 Run:
 ```bash
 source ~/tools/ccs-dashboard/ccs-dashboard.sh
-_ccs_dispatch_context /pool2/chenhsun/tools/ccs-dashboard
+_ccs_dispatch_context ~/tools/ccs-dashboard
 ```
 
 Expected: Project path, git branch/uncommitted info, and any active todos printed.
@@ -825,7 +825,7 @@ Expected: Both report as functions.
 - [ ] **Step 2: Test async dispatch (dry run with a simple task)**
 
 ```bash
-ccs-dispatch --project /pool2/chenhsun/tools/ccs-dashboard "echo hello from dispatch test"
+ccs-dispatch --project ~/tools/ccs-dashboard "echo hello from dispatch test"
 ```
 
 Expected: `Job dispatched: d-XXXXXXXX-XXXXXX-XXXX (PID NNNNN)`
@@ -850,7 +850,7 @@ Expected: Full job detail with output shown.
 - [ ] **Step 5: Test sync dispatch**
 
 ```bash
-ccs-dispatch --sync --project /pool2/chenhsun/tools/ccs-dashboard "list the files in the current directory"
+ccs-dispatch --sync --project ~/tools/ccs-dashboard "list the files in the current directory"
 ```
 
 Expected: Blocks until done, prints result.
@@ -858,7 +858,7 @@ Expected: Blocks until done, prints result.
 - [ ] **Step 6: Test --context flag**
 
 ```bash
-ccs-dispatch --sync --context --project /pool2/chenhsun/tools/ccs-dashboard "summarize the project status based on the context provided"
+ccs-dispatch --sync --context --project ~/tools/ccs-dashboard "summarize the project status based on the context provided"
 ```
 
 Expected: Context injected (git + todos), result includes project-specific info.

@@ -77,7 +77,7 @@ ${XDG_DATA_HOME:-~/.local/share}/ccs-dashboard/dispatch/
 ```json
 {
   "job_id": "d-20260319-143052-a1b2",
-  "project": "/pool2/chenhsun/tools/ccs-dashboard",
+  "project": "~/tools/ccs-dashboard",
   "task": "fix lint warnings in ccs-core.sh",
   "context_injected": true,
   "mode": "async",
@@ -150,7 +150,7 @@ ccs-dispatch --project /path "fix lint"
 ### Context 組合（`--context`）
 
 ```
-[Project: /pool2/chenhsun/tools/ccs-dashboard]
+[Project: ~/tools/ccs-dashboard]
 [Git branch: feat/dispatch, uncommitted: 3 files]
 [Active todos from recent sessions:]
 - [ ] implement dispatch command

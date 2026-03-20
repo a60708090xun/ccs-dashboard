@@ -126,8 +126,8 @@ ccs-overview --todos-only # 只輸出跨 session 待辦彙整
 **正確做法：** 使用 `$HOME` + 目錄名的第一段做前綴比對，找到實際存在的最長路徑：
 
 ```bash
-# 目錄名範例：-pool2-chenhsun-tools-ccs-dashboard
-# 1. 還原前綴 → /pool2/chenhsun/
+# 目錄名範例：-home-user-tools-ccs-dashboard
+# 1. 還原前綴 → $HOME/
 # 2. 剩餘部分逐段嘗試：tools-ccs-dashboard → tools/ccs-dashboard? tools/ccs/dashboard?
 # 3. 選擇實際存在的路徑
 _ccs_resolve_project_path() {
@@ -169,7 +169,7 @@ _ccs_resolve_project_path() {
 
 - 只掃有 active/recent session 的 project 目錄，不掃全機器
 - `⚠️` = 有未 commit 或 unpushed，`✅` = clean
-- 從 JSONL 目錄名反推實際路徑（`-pool2-chenhsun-works-git-specman` → `/pool2/chenhsun/works/git/specman`）
+- 從 JSONL 目錄名反推實際路徑（`-home-user-projects-specman` → `~/projects/specman`）
 - 每目錄跑 `git status --porcelain` + `git rev-list --left-right @{u}...HEAD` + `git stash list`
 
 ---

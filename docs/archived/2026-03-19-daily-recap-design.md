@@ -251,7 +251,7 @@ vs fixed interval，尚未決定。建議今天先做決策再繼續。
   "projects": [
     {
       "name": "ccs-dashboard",
-      "path": "/pool2/chenhsun/tools/ccs-dashboard",
+      "path": "~/tools/ccs-dashboard",
       "sessions": [
         {
           "id": "abc-123",

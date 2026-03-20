@@ -2,6 +2,9 @@
 # ccs-core.sh — Claude Code Session core helpers and basic commands
 # Part of ccs-dashboard. Sourced by ccs-dashboard.sh automatically.
 #
+# Computed at source time — used to strip $HOME prefix from JSONL directory names.
+_CCS_HOME_ENCODED=$(echo "$HOME" | sed 's/\//-/g')
+#
 # Helpers:
 #   _ccs_session_row        — parse JSONL session → tab-separated row
 #   _ccs_topic_from_jsonl   — extract topic from JSONL
@@ -24,7 +27,7 @@ _ccs_session_row() {
   local dir project sid mod now ago ago_str color topic status
 
   dir=$(basename "$(dirname "$f")")
-  project=$(echo "$dir" | sed 's/^-pool2-chenhsun-*//; s/-/\//g')
+  project=$(echo "$dir" | sed "s/^${_CCS_HOME_ENCODED}-*//; s/-/\//g")
   [ -z "$project" ] && project="~(home)"
 
   sid=$(basename "$f" .jsonl | cut -c1-8)
@@ -469,7 +472,7 @@ HELP
 }
 
 # ── Helper: resolve JSONL directory name → actual filesystem path ──
-# JSONL dirs encode paths as: /pool2/chenhsun/tools/ccs-dashboard → -pool2-chenhsun-tools-ccs-dashboard
+# JSONL dirs encode paths as: $HOME/tools/ccs-dashboard → -home-user-tools-ccs-dashboard
 # Simple sed 's/-/\//g' fails when project names contain hyphens.
 # Strategy: greedy match — try longest path first, progressively split remaining hyphens.
 _ccs_resolve_project_path() {
@@ -477,7 +480,7 @@ _ccs_resolve_project_path() {
   [ -z "$encoded" ] && return 1
 
   # Special case: home directory
-  if [ "$encoded" = "-pool2-chenhsun" ]; then
+  if [ "$encoded" = "$_CCS_HOME_ENCODED" ]; then
     echo "$HOME"
     return 0
   fi

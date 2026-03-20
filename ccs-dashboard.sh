@@ -176,7 +176,7 @@ _ccs_status_md() {
       mod=$(stat -c "%Y" "$f")
       ago=$(( (now - mod) / 60 ))
       dir=$(basename "$(dirname "$f")")
-      project=$(echo "$dir" | sed 's/^-pool2-chenhsun-*//; s/-/\//g')
+      project=$(echo "$dir" | sed "s/^${_CCS_HOME_ENCODED}-*//; s/-/\//g")
       [ -z "$project" ] && project="~(home)"
       printf '%s\t%d\t%s\n' "$project" "$ago" "$f"
     done | sort -t$'\t' -k1,1 -k2,2n)
@@ -377,7 +377,7 @@ HELP
     full_sid=$(basename "$jsonl" .jsonl)
     mod_date=$(stat -c "%y" "$jsonl" | cut -d. -f1)
     dir=$(basename "$(dirname "$jsonl")")
-    project=$(echo "$dir" | sed 's/^-pool2-chenhsun-*//; s/-/\//g')
+    project=$(echo "$dir" | sed "s/^${_CCS_HOME_ENCODED}-*//; s/-/\//g")
     [ -z "$project" ] && project="~(home)"
 
     if tail -20 "$jsonl" 2>/dev/null | grep -q '"type":"last-prompt"'; then
@@ -500,7 +500,7 @@ HELP
 
     local dir
     dir=$(basename "$(dirname "$f")")
-    project=$(echo "$dir" | sed 's/^-pool2-chenhsun-*//; s/-/\//g')
+    project=$(echo "$dir" | sed "s/^${_CCS_HOME_ENCODED}-*//; s/-/\//g")
     [ -z "$project" ] && project="~(home)"
 
     topic=$(_ccs_topic_from_jsonl "$f")
@@ -744,7 +744,7 @@ HELP
   mod_date=$(stat -c "%y" "$jsonl" | cut -d. -f1)
 
   dir=$(basename "$(dirname "$jsonl")")
-  project=$(echo "$dir" | sed 's/^-pool2-chenhsun-*//; s/-/\//g')
+  project=$(echo "$dir" | sed "s/^${_CCS_HOME_ENCODED}-*//; s/-/\//g")
   [ -z "$project" ] && project="~(home)"
   topic=$(_ccs_topic_from_jsonl "$jsonl")
 
@@ -1219,7 +1219,7 @@ HELP
   topic=$(_ccs_topic_from_jsonl "$jsonl")
 
   dir=$(basename "$(dirname "$jsonl")")
-  project=$(echo "$dir" | sed 's/^-pool2-chenhsun-*//; s/-/\//g')
+  project=$(echo "$dir" | sed "s/^${_CCS_HOME_ENCODED}-*//; s/-/\//g")
   [ -z "$project" ] && project="~(home)"
   # Reconstruct project_dir from encoded dir name
   project_dir=$(echo "$dir" | sed 's/-/\//g')
@@ -1818,7 +1818,7 @@ _ccs_overview_files() {
   for proj_dir in "${projects[@]}"; do
     [ -z "$proj_dir" ] && continue
     local proj_name
-    proj_name=$(echo "$proj_dir" | sed 's/^-pool2-chenhsun-*//; s/-/\//g')
+    proj_name=$(echo "$proj_dir" | sed "s/^${_CCS_HOME_ENCODED}-*//; s/-/\//g")
     [ -z "$proj_name" ] && proj_name="~(home)"
 
     # Get files for this project, sorted by last timestamp desc

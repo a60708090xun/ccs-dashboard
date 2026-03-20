@@ -28,7 +28,7 @@
 **Files:**
 - Modify: `ccs-core.sh:459` (append)
 
-**目的：** 從 JSONL 目錄名（如 `-pool2-chenhsun-tools-ccs-dashboard`）反推實際 filesystem path。現有 `_ccs_session_row` 的 `sed 's/-/\//g'` 無法處理專案名含 `-` 的情況。
+**目的：** 從 JSONL 目錄名（如 `-home-user-tools-ccs-dashboard`）反推實際 filesystem path。現有 `_ccs_session_row` 的 `sed 's/-/\//g'` 無法處理專案名含 `-` 的情況。
 
 - [ ] **Step 1: 實作 `_ccs_resolve_project_path`**
 
@@ -36,7 +36,7 @@
 
 ```bash
 # ── Helper: resolve JSONL directory name → actual filesystem path ──
-# JSONL dirs encode paths as: /pool2/chenhsun/tools/ccs-dashboard → -pool2-chenhsun-tools-ccs-dashboard
+# JSONL dirs encode paths as: ~/tools/ccs-dashboard → -home-user-tools-ccs-dashboard
 # Simple sed 's/-/\//g' fails when project names contain hyphens.
 # Strategy: greedy match — try longest path first, progressively split remaining hyphens.
 _ccs_resolve_project_path() {
@@ -44,7 +44,7 @@ _ccs_resolve_project_path() {
   [ -z "$encoded" ] && return 1
 
   # Special case: home directory
-  if [ "$encoded" = "-pool2-chenhsun" ]; then
+  if [ "$encoded" = "$_CCS_HOME_ENCODED" ]; then
     echo "$HOME"
     return 0
   fi
@@ -113,12 +113,12 @@ _ccs_resolve_project_path() {
 
 - [ ] **Step 2: 驗證 helper**
 
-Run: `source ~/tools/ccs-dashboard/ccs-core.sh && _ccs_resolve_project_path "-pool2-chenhsun-tools-ccs-dashboard" && _ccs_resolve_project_path "-pool2-chenhsun-works-git-specman" && _ccs_resolve_project_path "-pool2-chenhsun"`
+Run: `source ~/tools/ccs-dashboard/ccs-core.sh && _ccs_resolve_project_path "-home-user-tools-ccs-dashboard" && _ccs_resolve_project_path "-home-user-projects-specman" && _ccs_resolve_project_path "$_CCS_HOME_ENCODED"`
 
 Expected:
-- `/pool2/chenhsun/tools/ccs-dashboard`
-- `/pool2/chenhsun/works/git/specman`（或類似真實路徑）
-- `/pool2/chenhsun`
+- `~/tools/ccs-dashboard`
+- `~/projects/specman`（或類似真實路徑）
+- `$HOME`
 
 - [ ] **Step 3: Commit**
 
@@ -1048,7 +1048,7 @@ Expected: 所有模式正確輸出，JSON 可被 jq 解析，無 error
 # 空目錄（backup ~/.claude/projects 後測試）— 略，靠程式碼 review 確認
 # 確認 _ccs_resolve_project_path 處理 edge cases
 _ccs_resolve_project_path ""        # should return error (exit 1)
-_ccs_resolve_project_path "-pool2-chenhsun"  # $HOME
+_ccs_resolve_project_path "$_CCS_HOME_ENCODED"  # $HOME
 ```
 
 - [ ] **Step 3: 修正發現的問題（如果有）**

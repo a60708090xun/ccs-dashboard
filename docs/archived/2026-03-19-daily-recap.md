@@ -884,7 +884,7 @@ ccs-recap --json | jq '.projects[0].sessions[0].todos'
 ccs-recap --md | head -30
 
 # 4. 單專案模式
-cd /pool2/chenhsun/tools/ccs-dashboard && ccs-recap --project
+cd ~/tools/ccs-dashboard && ccs-recap --project
 
 # 5. 時間範圍
 ccs-recap 7d
