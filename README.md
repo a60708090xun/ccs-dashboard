@@ -112,6 +112,7 @@ ccs-dashboard has two layers:
 | `ccs-recap` | Daily work review across all projects |
 | `ccs-details` | Interactive conversation browser (tig-like TUI) |
 | `ccs-overview` | Cross-session overview: sessions + todos + git status |
+| `ccs-checkpoint` | Lightweight progress snapshot: Done / In Progress / Blocked |
 | `ccs-handoff` | Generate handoff notes with conversation summary, git, file ops |
 
 All commands support both **Terminal ANSI** and **Markdown** (`--md`) output modes.
