@@ -25,6 +25,13 @@ fail() { printf "${RED}✗${RESET} %s\n" "$1"; }
 check_deps() {
   local missing=0
 
+  # Linux platform check
+  if [[ "$(uname -s)" == "Linux" ]]; then
+    ok "Platform: Linux"
+  else
+    warn "Non-Linux platform detected ($(uname -s)) — currently only Linux/WSL is tested"
+  fi
+
   # bash 4+ (for associative arrays, mapfile)
   local bash_ver="${BASH_VERSINFO[0]}"
   if [ "$bash_ver" -ge 4 ]; then

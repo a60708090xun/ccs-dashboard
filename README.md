@@ -150,6 +150,8 @@ Strikethrough     -           archived    has last-prompt marker
 
 ## Requirements
 
+**Platform:** Linux environment (remote server via SSH, local Linux, or WSL). Native Windows and macOS are not supported.
+
 | Required | Purpose |
 |----------|---------|
 | bash 4+ | mapfile, associative arrays |

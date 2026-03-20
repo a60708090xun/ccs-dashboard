@@ -150,6 +150,8 @@ Terminal          Markdown    狀態        說明
 
 ## 依賴
 
+**適用環境：** Linux 環境（透過 SSH 連線的遠端 server、本地 Linux、或 WSL）。不支援原生 Windows 和 macOS。
+
 | 必要 | 用途 |
 |------|------|
 | bash 4+ | mapfile, associative arrays |
