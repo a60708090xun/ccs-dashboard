@@ -59,7 +59,7 @@ HELP
   # ── Collect data (shared by both modes) ──
   local open_files=()
   while IFS= read -r -d '' f; do
-    tail -20 "$f" 2>/dev/null | grep -q '"type":"last-prompt"' || open_files+=("$f")
+    _ccs_is_archived "$f" || open_files+=("$f")
   done < <(find "$projects_dir" -maxdepth 2 -name "*.jsonl" -mmin -$((7 * 1440)) ! -path "*/subagents/*" -print0 2>/dev/null)
 
   local fresh_files=() stale_files=()
@@ -381,7 +381,7 @@ HELP
     project=$(echo "$dir" | sed "s/^${_CCS_HOME_ENCODED}-*//; s/-/\//g")
     [ -z "$project" ] && project="~(home)"
 
-    if tail -20 "$jsonl" 2>/dev/null | grep -q '"type":"last-prompt"'; then
+    if _ccs_is_archived "$jsonl"; then
       status="archived"
     else
       local now ago
@@ -484,7 +484,7 @@ HELP
   # ── Collect session data ──
   local open_files=()
   while IFS= read -r -d '' f; do
-    tail -20 "$f" 2>/dev/null | grep -q '"type":"last-prompt"' || open_files+=("$f")
+    _ccs_is_archived "$f" || open_files+=("$f")
   done < <(find "$projects_dir" -maxdepth 2 -name "*.jsonl" -mmin -$((7 * 1440)) ! -path "*/subagents/*" -print0 2>/dev/null)
 
   # Split fresh / stale
@@ -749,7 +749,7 @@ HELP
   [ -z "$project" ] && project="~(home)"
   topic=$(_ccs_topic_from_jsonl "$jsonl")
 
-  if tail -20 "$jsonl" 2>/dev/null | grep -q '"type":"last-prompt"'; then
+  if _ccs_is_archived "$jsonl"; then
     status="archived"
   else
     local now ago
@@ -1002,7 +1002,7 @@ HELP
   done < <(
     find "$session_dir" -maxdepth 1 -name "*.jsonl" -mmin -10080 ! -path "*/subagents/*" -print0 2>/dev/null \
     | while IFS= read -r -d '' f; do
-        tail -20 "$f" 2>/dev/null | grep -q '"type":"last-prompt"' && continue
+        _ccs_is_archived "$f" && continue
         printf '%s\t%s\n' "$(stat -c '%Y' "$f")" "$f"
       done | sort -rn
   )
@@ -2511,7 +2511,7 @@ _ccs_collect_sessions() {
     [ "$mod" -lt "$cutoff" ] 2>/dev/null && continue
 
     # Skip archived
-    if tail -20 "$f" 2>/dev/null | grep -q '"type":"last-prompt"'; then
+    if _ccs_is_archived "$f"; then
       continue
     fi
 
@@ -3200,8 +3200,12 @@ _ccs_crash_md() {
     [ -n "$todo_summary" ] && echo "- **Todos：** $todo_summary"
     [ -n "$git_branch" ] && echo "- **Git：** $git_branch ($git_dirty uncommitted files)"
     echo "- **Resume：** \`claude --resume $sid\`"
+    echo "- **Detail：** \`ccs-session ${sid:0:8}\`"
     echo ""
   done
+
+  echo "---"
+  echo "cleanup: \`ccs-crash --clean\` (interactive) | \`ccs-crash --clean-all\` (batch)"
 }
 
 _ccs_crash_json() {
@@ -3289,6 +3293,82 @@ _ccs_crash_json() {
   rm -f "$tmpf"
 }
 
+# ── ccs-crash: archive helper ──
+# Write last-prompt marker to JSONL to mark session as archived.
+_ccs_archive_session() {
+  local f="$1"
+  [ -f "$f" ] || return 1
+  printf '{"type":"last-prompt"}\n' >> "$f"
+}
+
+# ── ccs-crash: interactive cleanup ──
+_ccs_crash_clean() {
+  local -n _map=$1 _files=$2 _projects=$3 _rows=$4
+  local count=${#_files[@]}
+  local archived=0 skipped=0 total=0
+
+  for ((i = 0; i < count; i++)); do
+    local f="${_files[$i]}"
+    local sid=$(basename "$f" .jsonl)
+    [ -n "${_map[$sid]+x}" ] || continue
+    total=$((total + 1))
+
+    local conf_path="${_map[$sid]}"
+    local row="${_rows[$i]}"
+    local project=$(echo "$row" | cut -f1)
+    local topic=$(_ccs_topic_from_jsonl "$f")
+
+    printf '\n\033[1m[%d/%d]\033[0m \033[31m%s\033[0m — %s\n' \
+      "$total" "${#_map[@]}" "${sid:0:8}" "$project"
+    printf '  Topic: %s\n' "$topic"
+    printf '  Type:  %s\n' "$conf_path"
+
+    printf '  \033[33m(a)\033[0mrchive  \033[33m(s)\033[0mkip  \033[33m(q)\033[0muit? '
+    local choice
+    read -r -n1 choice
+    echo ""
+
+    case "$choice" in
+      a|A)
+        _ccs_archive_session "$f"
+        printf '  \033[32m✓ Archived\033[0m\n'
+        archived=$((archived + 1))
+        ;;
+      q|Q)
+        printf '  Quit.\n'
+        break
+        ;;
+      *)
+        printf '  Skipped.\n'
+        skipped=$((skipped + 1))
+        ;;
+    esac
+  done
+
+  printf '\n\033[1mDone:\033[0m %d archived, %d skipped, %d total\n' "$archived" "$skipped" "${#_map[@]}"
+}
+
+# ── ccs-crash: batch cleanup ──
+_ccs_crash_clean_all() {
+  local -n _map=$1 _files=$2
+  local count=${#_files[@]}
+  local archived=0
+
+  printf 'Archiving %d crashed sessions...\n' "${#_map[@]}"
+
+  for ((i = 0; i < count; i++)); do
+    local f="${_files[$i]}"
+    local sid=$(basename "$f" .jsonl)
+    [ -n "${_map[$sid]+x}" ] || continue
+
+    _ccs_archive_session "$f"
+    printf '  ✓ %s\n' "${sid:0:8}"
+    archived=$((archived + 1))
+  done
+
+  printf '\n\033[1mDone:\033[0m %d sessions archived.\n' "$archived"
+}
+
 # ── ccs-crash — detect sessions interrupted by crash or unexpected reboot ──
 ccs-crash() {
   local mode="md" reboot_window=30 idle_window=1440 show_all=false
@@ -3299,6 +3379,8 @@ ccs-crash() {
       --md)            mode="md"; shift ;;
       --json)          mode="json"; shift ;;
       --all|-a)        show_all=true; shift ;;
+      --clean)         mode="clean"; shift ;;
+      --clean-all)     mode="clean-all"; shift ;;
       --help|-h)
         cat <<'HELP'
 ccs-crash  — detect sessions interrupted by crash or unexpected reboot
@@ -3308,6 +3390,8 @@ Usage:
   ccs-crash                  Markdown output, high confidence only (default)
   ccs-crash --json           JSON output
   ccs-crash --all            Include low confidence + subagent sessions
+  ccs-crash --clean          Interactive cleanup (archive crashed sessions one by one)
+  ccs-crash --clean-all      Archive all high-confidence crashed sessions at once
   ccs-crash --reboot-window N  Path 1 window in minutes (default: 30)
   ccs-crash --idle-window N    Path 2 window in minutes (default: 1440)
 
@@ -3345,8 +3429,10 @@ HELP
   fi
 
   case "$mode" in
-    md)   _ccs_crash_md crash_map session_files session_projects session_rows ;;
-    json) _ccs_crash_json crash_map session_files session_projects session_rows "$reboot_window" "$idle_window" ;;
+    md)        _ccs_crash_md crash_map session_files session_projects session_rows ;;
+    json)      _ccs_crash_json crash_map session_files session_projects session_rows "$reboot_window" "$idle_window" ;;
+    clean)     _ccs_crash_clean crash_map session_files session_projects session_rows ;;
+    clean-all) _ccs_crash_clean_all crash_map session_files ;;
   esac
 }
 
@@ -3540,7 +3626,7 @@ _ccs_recap_collect() {
       elif (( age_min < 60 )); then status="recent"
       fi
       # 檢查 archived（使用 last-prompt marker，與 ccs-core.sh 一致）
-      if tail -20 "$jsonl" 2>/dev/null | grep -q '"type":"last-prompt"'; then
+      if _ccs_is_archived "$jsonl"; then
         status="completed"
       fi
 
@@ -4106,7 +4192,7 @@ _ccs_checkpoint_collect() {
 
       # Check archived
       is_archived=false
-      if tail -20 "$jsonl" 2>/dev/null | grep -q '"type":"last-prompt"'; then
+      if _ccs_is_archived "$jsonl"; then
         is_archived=true
       fi
 

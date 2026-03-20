@@ -23,6 +23,32 @@ _CCS_HOME_ENCODED=$(echo "$HOME" | sed 's/\//-/g')
 #   ccs-active              — non-archived sessions within N days
 #   ccs-cleanup             — kill stopped (suspended) claude processes
 
+# ── Helper: check if a session JSONL is truly archived ──
+# A session is archived if:
+#   1. last-prompt exists AND no assistant event follows it, OR
+#   2. Last user events are /exit commands (Claude Code bug: resume→/exit may not write last-prompt)
+# Returns 0 if archived, 1 if not.
+_ccs_is_archived() {
+  local f="$1"
+  # Check 1: /exit pattern (handles missing last-prompt after resume→/exit)
+  # The /exit sequence writes 3 user events at the very end: caveat, command, stdout.
+  # Key signal: last line is a user event containing "Goodbye!" or "See ya!" (exit stdout).
+  # No assistant event should follow a real /exit.
+  local _last_type _last_content
+  _last_type=$(tail -1 "$f" 2>/dev/null | python3 -c "import sys,json; d=json.loads(next(sys.stdin)); print(d.get('type',''))" 2>/dev/null)
+  if [ "$_last_type" = "user" ]; then
+    _last_content=$(tail -1 "$f" 2>/dev/null | python3 -c "import sys,json; d=json.loads(next(sys.stdin)); c=d.get('message',{}).get('content',''); print(c[:200] if isinstance(c,str) else str(c)[:200])" 2>/dev/null)
+    if [[ "$_last_content" == *"local-command-stdout"*"ya!"* ]] || [[ "$_last_content" == *"local-command-stdout"*"Goodbye!"* ]]; then
+      return 0
+    fi
+  fi
+  # Check 2: last-prompt with no subsequent resume
+  tail -20 "$f" 2>/dev/null | grep -q '"type":"last-prompt"' || return 1
+  local has_resume
+  has_resume=$(tac "$f" 2>/dev/null | awk '/"type":"last-prompt"/{exit} /"type":"assistant"/{a=1} END{print a+0}')
+  [ "${has_resume:-0}" = "0" ]  # return 0 (archived) if no resume
+}
+
 # ── Helper: parse one JSONL session file → tab-separated row ──
 _ccs_session_row() {
   local f="$1"
@@ -45,8 +71,7 @@ _ccs_session_row() {
     ago_str=$(printf '%3dd ago' "$((ago / 1440))")
   fi
 
-  # Check if session is archived (has last-prompt event near end of file)
-  if tail -20 "$f" 2>/dev/null | grep -q '"type":"last-prompt"'; then
+  if _ccs_is_archived "$f"; then
     status="archived"
     color="\033[90m\033[9m"  # gray + strikethrough
   elif [ "$ago" -lt 10 ]; then
@@ -335,6 +360,7 @@ Colors:
   yellow       recent (< 1 hour)
   blue         idle, open (< 1 day)
   gray         stale, open (> 1 day)
+  red 💀       crash-interrupted (detected by ccs-crash logic)
 
 Archived sessions (with last-prompt marker) are excluded.
 Topic source: Happy Coder title if set, otherwise first user message.
@@ -351,24 +377,72 @@ HELP
   printf '%.0s─' {1..100}; echo
 
   # Pass 1: collect non-archived files (fast: only tail | grep)
+  # A session is archived if last-prompt exists AND no user/assistant events follow it.
+  # Simple check: if last-prompt is in tail -20 but user/assistant comes after → resumed, not archived.
   local open_files=()
   while IFS= read -r -d '' f; do
-    tail -20 "$f" 2>/dev/null | grep -q '"type":"last-prompt"' || open_files+=("$f")
+    if _ccs_is_archived "$f"; then
+      continue
+    fi
+    open_files+=("$f")
   done < <(find "$projects_dir" -maxdepth 2 -name "*.jsonl" -mmin -"$mins" ! -path "*/subagents/*" -print0 2>/dev/null)
 
-  # Pass 2: full row extraction only for non-archived sessions
-  for f in "${open_files[@]}"; do
+  # Pass 1.5: detect crash-interrupted sessions
+  declare -A crash_map
+  local -a _active_projects=()
+  local _af
+  for _af in "${open_files[@]}"; do
+    local _dir_name
+    _dir_name=$(basename "$(dirname "$_af")")
+    _active_projects+=("$(_ccs_resolve_project_path "$_dir_name" 2>/dev/null)")
+  done
+  _ccs_detect_crash crash_map open_files _active_projects 2>/dev/null
+
+  # Build 8-char sid prefix → crash info lookup
+  declare -A crash_short
+  local _csid
+  for _csid in "${!crash_map[@]}"; do
+    crash_short["${_csid:0:8}"]="${crash_map[$_csid]}"
+  done
+
+  # Pass 2: full row extraction + sort
+  local sorted_rows
+  sorted_rows=$(for f in "${open_files[@]}"; do
     _ccs_session_row "$f"
-  done | sort -t$'\t' -k1,1 -k2,2n | while IFS=$'\t' read -r proj _ _ color display; do
+  done | sort -t$'\t' -k1,1 -k2,2n)
+
+  # Pass 3: display with crash override
+  local crash_count=0
+  while IFS=$'\t' read -r proj _ _ color display; do
+    [ -z "$proj" ] && continue
     if [ -n "$prev_project" ] && [ "$proj" != "$prev_project" ]; then
       echo
     fi
     prev_project="$proj"
+
+    # Override color for crashed sessions (extract 8-char sid from display field 2)
+    local short_sid
+    short_sid=$(echo "$display" | awk '{print $2}')
+    if [ -n "${crash_short[$short_sid]+x}" ]; then
+      local crash_info="${crash_short[$short_sid]}"
+      local confidence="${crash_info%%:*}"
+      if [ "$confidence" = "high" ]; then
+        color="\033[31m"  # red
+        display="${display} 💀"
+        crash_count=$((crash_count + 1))
+      fi
+    fi
+
     printf "${color}%s\033[0m\n" "$display"
     count=$((count + 1))
-  done
+  done <<< "$sorted_rows"
 
-  printf "\n\033[90m%d open sessions (last %d days)\033[0m\n" "${#open_files[@]}" "$days"
+  local summary="${#open_files[@]} open sessions (last ${days} days)"
+  [ "$crash_count" -gt 0 ] && summary="${summary}, ${crash_count} crashed"
+  printf "\n\033[90m%s\033[0m\n" "$summary"
+  if [ "$crash_count" -gt 0 ]; then
+    printf "\033[90m💀 detail: ccs-crash | cleanup: ccs-crash --clean | batch: ccs-crash --clean-all\033[0m\n"
+  fi
 }
 
 # ── ccs-cleanup [--dry-run|-n|--force|-f] — kill stopped claude processes ──
@@ -491,16 +565,17 @@ _ccs_get_boot_epoch() {
 }
 
 # ── Helper: detect crash-interrupted sessions ──
-# Usage: declare -A crash_map; _ccs_detect_crash crash_map [--reboot-window N] [--idle-window N] [files_array] [projects_array]
-# crash_map[session_id] = "high:reboot" | "high:non-reboot" | "low:non-reboot"
+# Usage: declare -A crash_map; _ccs_detect_crash crash_map [--reboot-window N] [--idle-window N] [--hung-threshold N] [files_array] [projects_array]
+# crash_map[session_id] = "high:reboot" | "high:reboot-idle" | "high:non-reboot" | "high:non-reboot-idle" | "high:hung"
 _ccs_detect_crash() {
   local -n _crash_out=$1; shift
-  local reboot_window=30 idle_window=1440
+  local reboot_window=30 idle_window=1440 hung_threshold=3600
 
   while [ $# -gt 0 ]; do
     case "$1" in
       --reboot-window) reboot_window="$2"; shift 2 ;;
       --idle-window) idle_window="$2"; shift 2 ;;
+      --hung-threshold) hung_threshold="$2"; shift 2 ;;
       *) break ;;
     esac
   done
@@ -532,9 +607,20 @@ _ccs_detect_crash() {
 
   local idle_window_start=$((now - idle_window * 60))
 
-  # Path 2: get list of running claude session IDs (once)
+  # Get running session info (once)
+  # Method 1: session IDs from --resume args
   local running_sids=""
   running_sids=$(ps -eo args 2>/dev/null | grep -oP '(?<=--resume )[0-9a-f-]{36}' | sort -u)
+  # Method 2: normalized cwds of all claude processes
+  # Claude Code encodes paths by replacing /._  with -, so we normalize both sides
+  # to alphanumeric segments joined by - for comparison.
+  local running_cwds_normalized=""
+  running_cwds_normalized=$({
+    for p in $(pgrep -u "$(id -u)" -f "claude.*--output-format" 2>/dev/null) \
+             $(pgrep -u "$(id -u)" -x "claude" 2>/dev/null); do
+      readlink "/proc/$p/cwd" 2>/dev/null
+    done
+  } | sort -u | sed 's/[\/._]/-/g; s/--*/-/g; s/^-//')
 
   local count=${#_cd_files[@]}
   local i
@@ -547,8 +633,19 @@ _ccs_detect_crash() {
     sid=$(basename "$f" .jsonl)
 
     # Path 1: Reboot detection
-    if [ "$boot_epoch" -gt 0 ] && [ "$mtime" -ge "$reboot_window_start" ] && [ "$mtime" -lt "$reboot_upper" ]; then
-      _crash_out["$sid"]="high:reboot"
+    # Any pre-boot session without a running process was killed by reboot.
+    # Sessions idle before reboot (waiting for user input) have old mtime but
+    # their process was still alive until the reboot killed it.
+    # --reboot-window controls the "high:reboot" vs "high:reboot-idle" distinction:
+    #   within window = was actively writing near boot time
+    #   outside window = was idle but process killed by reboot
+    if [ "$boot_epoch" -gt 0 ] && [ "$mtime" -lt "$reboot_upper" ]; then
+      echo "$running_sids" | grep -q "$sid" && continue
+      if [ "$mtime" -ge "$reboot_window_start" ]; then
+        _crash_out["$sid"]="high:reboot"
+      else
+        _crash_out["$sid"]="high:reboot-idle"
+      fi
       continue
     fi
 
@@ -558,7 +655,36 @@ _ccs_detect_crash() {
     [ "$boot_epoch" -eq 0 ] || [ "$mtime" -ge "$reboot_upper" ] || continue
 
     # Check if process is still running
-    echo "$running_sids" | grep -q "$sid" && continue
+    # Method 1: exact session ID match (--resume sessions) — precise
+    # Method 2: cwd match (Happy-launched sessions without --resume) — approximate
+    local is_running_exact=false is_running_cwd=false
+    if echo "$running_sids" | grep -q "$sid"; then
+      is_running_exact=true
+    elif [ -n "${_cd_projects[$i]}" ]; then
+      # Normalize project dir name to match normalized cwds
+      # Both sides: replace /._  with -, collapse multiple -, strip leading -
+      local _proj_normalized
+      _proj_normalized=$(echo "${_cd_projects[$i]}" | sed 's/[\/._]/-/g; s/--*/-/g; s/^-//')
+      [ -n "$_proj_normalized" ] && echo "$running_cwds_normalized" | grep -qF "$_proj_normalized" &&
+      is_running_cwd=true
+    fi
+
+    # Skip if modified very recently — likely still active (covers fresh non-resume sessions)
+    local age=$(( now - mtime ))
+    if [ "$age" -lt 120 ]; then
+      continue
+    fi
+
+    # Hung detection: only for exact process match (--resume).
+    # cwd match is approximate — can't tell which session a process belongs to,
+    # so skip crash detection entirely for cwd-matched sessions.
+    if "$is_running_exact" && [ "$age" -ge "$hung_threshold" ]; then
+      _crash_out["$sid"]="high:hung"
+      continue
+    fi
+
+    # Process running (exact or cwd) — not crashed
+    ("$is_running_exact" || "$is_running_cwd") && continue
 
     # Check for interrupt signals in last assistant message (raw JSONL)
     # Last assistant message: content array with no text entries = mid-execution crash
@@ -574,7 +700,7 @@ _ccs_detect_crash() {
     if [ "${has_text:-0}" = "0" ]; then
       _crash_out["$sid"]="high:non-reboot"
     else
-      _crash_out["$sid"]="low:non-reboot"
+      _crash_out["$sid"]="high:non-reboot-idle"
     fi
   done
 }
