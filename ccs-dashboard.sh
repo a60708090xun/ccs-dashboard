@@ -1441,6 +1441,26 @@ _ccs_overview_md() {
   now_str=$(date '+%Y-%m-%d %H:%M')
 
   printf '# Work Overview (%s)\n\n' "$now_str"
+
+  # Crash banner (high confidence only, 4th arg is optional)
+  local crash_high=0
+  if [ -n "${4:-}" ]; then
+    local -n _crash_md=$4
+    for sid in "${!_crash_md[@]}"; do
+      [[ "${_crash_md[$sid]}" == high:* ]] && crash_high=$((crash_high + 1))
+    done
+  fi
+  if [ "$crash_high" -gt 0 ]; then
+    local boot_epoch
+    boot_epoch=$(_ccs_get_boot_epoch) || boot_epoch=0
+    local boot_str="unknown"
+    [ "$boot_epoch" -gt 0 ] && boot_str=$(date -d "@$boot_epoch" '+%H:%M')
+    echo ""
+    echo "> **偵測到 ${crash_high} 個 crash-interrupted session**（系統重開機 ${boot_str}）"
+    echo "> 執行 \`ccs-crash\` 查看詳情，或 \`ccs-crash --all\` 含低信心結果"
+    echo ""
+  fi
+
   printf '## Active Sessions (%d)\n\n' "$count"
 
   if [ "$count" -eq 0 ]; then
@@ -1476,6 +1496,12 @@ _ccs_overview_md() {
       idle)    emoji="🔵" ;;
       stale)   emoji="⚪" ;;
     esac
+
+    # Override status icon if crash-interrupted (high confidence)
+    local full_sid=$(basename "$f" .jsonl)
+    if [ -n "${4:-}" ] && [ -n "${_crash_md[$full_sid]+x}" ] && [[ "${_crash_md[$full_sid]}" == high:* ]]; then
+      emoji="🔴"
+    fi
 
     # Age string
     local ago_str
@@ -1592,6 +1618,10 @@ _ccs_overview_md() {
 # Uses temp files to avoid "Argument list too long" with many sessions.
 _ccs_overview_json() {
   local -n _files=$1 _projects=$2 _rows=$3
+  # Set up crash nameref if 4th arg provided
+  if [ -n "${4:-}" ]; then
+    local -n _crash_json=$4
+  fi
   local count=${#_files[@]}
   local now_str
   now_str=$(date -Iseconds)
@@ -1632,6 +1662,14 @@ _ccs_overview_json() {
       git_dirty=$(git -C "$resolved_path" status --porcelain 2>/dev/null | wc -l)
     fi
 
+    # Per-session crash fields (4th arg is optional)
+    local crash_interrupted=false crash_confidence=""
+    local full_sid=$(basename "$f" .jsonl)
+    if [ -n "${4:-}" ] && [ -n "${_crash_json[$full_sid]+x}" ]; then
+      crash_interrupted=true
+      crash_confidence="${_crash_json[$full_sid]%%:*}"
+    fi
+
     # Write session object to temp file (one JSON per line)
     jq -nc \
       --arg sid "$sid" \
@@ -1643,6 +1681,8 @@ _ccs_overview_json() {
       --arg git_branch "$git_branch" \
       --argjson git_dirty "$git_dirty" \
       --argjson data "$data" \
+      --argjson c_int "$crash_interrupted" \
+      --arg c_conf "$crash_confidence" \
       '{
         session_id: $sid,
         project: $project,
@@ -1653,8 +1693,10 @@ _ccs_overview_json() {
         git: {branch: $git_branch, uncommitted_files: $git_dirty},
         last_exchange: $data.last_exchange,
         todos: $data.todos,
-        deadline_context: $data.deadline_context
-      }' >> "$sessions_tmp"
+        deadline_context: $data.deadline_context,
+      }
+      + if $c_int then {crash_interrupted: true, crash_confidence: $c_conf} else {} end
+      ' >> "$sessions_tmp"
 
     # Collect pending todos
     echo "$data" | jq -c --arg proj "$project" '.todos[]? | select(.status != "completed") | {content, status, project: $proj}' >> "$todos_tmp"
@@ -1663,6 +1705,26 @@ _ccs_overview_json() {
   # Zombie count
   local stopped_count
   stopped_count=$(ps -eo pid,stat,comm 2>/dev/null | awk '$2 ~ /T/ && $3 ~ /claude/' | wc -l)
+
+  # crash_detected field (4th arg is optional)
+  local -a crash_high_sids=()
+  if [ -n "${4:-}" ]; then
+    for sid in "${!_crash_json[@]}"; do
+      [[ "${_crash_json[$sid]}" == high:* ]] && crash_high_sids+=("$sid")
+    done
+  fi
+
+  local crash_json="null"
+  if [ ${#crash_high_sids[@]} -gt 0 ]; then
+    local boot_epoch
+    boot_epoch=$(_ccs_get_boot_epoch) || boot_epoch=0
+    local boot_iso="null"
+    [ "$boot_epoch" -gt 0 ] && boot_iso="\"$(date -d "@$boot_epoch" --iso-8601=seconds)\""
+
+    local sids_json=$(printf '%s\n' "${crash_high_sids[@]}" | jq -R '[.,inputs]')
+    crash_json=$(jq -nc --argjson boot "$boot_iso" --argjson sids "$sids_json" \
+      '{boot_time: $boot, affected_sessions: $sids, count: ($sids | length)}')
+  fi
 
   # Assemble final JSON from temp files
   local sessions_arr todos_arr
@@ -1674,12 +1736,14 @@ _ccs_overview_json() {
     --argjson sessions "$sessions_arr" \
     --argjson pending_todos "$todos_arr" \
     --argjson zombie_count "$stopped_count" \
+    --argjson crash "$crash_json" \
     '{
       timestamp: $timestamp,
       active_sessions: ($sessions | length),
       sessions: $sessions,
       pending_todos: $pending_todos,
-      zombie_processes: $zombie_count
+      zombie_processes: $zombie_count,
+      crash_detected: $crash
     }'
 
   rm -f "$sessions_tmp" "$todos_tmp"
@@ -3074,6 +3138,217 @@ HELP
   esac
 }
 
+# ── ccs-crash helpers ──
+_ccs_crash_md() {
+  local -n _map=$1 _files=$2 _projects=$3 _rows=$4
+
+  local boot_epoch
+  boot_epoch=$(_ccs_get_boot_epoch) || boot_epoch=0
+  local boot_str="unknown"
+  [ "$boot_epoch" -gt 0 ] && boot_str=$(date -d "@$boot_epoch" '+%Y-%m-%d %H:%M')
+
+  printf '## %s Crash-Interrupted Sessions (boot: %s)\n' "⚠️" "$boot_str"
+  echo ""
+
+  local count=${#_files[@]}
+  local i
+  for ((i = 0; i < count; i++)); do
+    local f="${_files[$i]}"
+    local sid=$(basename "$f" .jsonl)
+    [ -n "${_map[$sid]+x}" ] || continue
+
+    local conf_path="${_map[$sid]}"
+    local confidence="${conf_path%%:*}"
+    local path="${conf_path#*:}"
+    local icon="🔴"
+    [ "$confidence" = "low" ] && icon="🟡"
+
+    local row="${_rows[$i]}"
+    local project=$(echo "$row" | cut -f1)
+    local ago_min=$(echo "$row" | cut -f2)
+    local topic=$(_ccs_topic_from_jsonl "$f")
+
+    # Session data (last message, todos, git)
+    local data
+    data=$(_ccs_overview_session_data "$f")
+    local last_user
+    last_user=$(echo "$data" | jq -r '.last_exchange.user // "(none)"' 2>/dev/null)
+
+    local todo_summary=""
+    local todo_count=$(echo "$data" | jq '[.todos[]?] | length' 2>/dev/null)
+    local todo_done=$(echo "$data" | jq '[.todos[]? | select(.status == "completed")] | length' 2>/dev/null)
+    [ "${todo_count:-0}" -gt 0 ] && todo_summary="${todo_done}/${todo_count}"
+
+    # Git info
+    local dir="${_projects[$i]}"
+    local resolved_path
+    resolved_path=$(_ccs_resolve_project_path "$dir" 2>/dev/null) || resolved_path=""
+    local git_branch="" git_dirty=0
+    if [ -n "$resolved_path" ] && [ -d "$resolved_path/.git" ]; then
+      git_branch=$(git -C "$resolved_path" rev-parse --abbrev-ref HEAD 2>/dev/null)
+      git_dirty=$(git -C "$resolved_path" status --porcelain 2>/dev/null | wc -l)
+    fi
+
+    local mtime=$(stat -c "%Y" "$f" 2>/dev/null)
+    local last_time=$(date -d "@$mtime" '+%H:%M' 2>/dev/null)
+
+    echo "### $icon ${sid:0:8} — $project — $topic"
+    echo "- **Confidence:** $confidence ($path)"
+    echo "- **最後活動：** $last_time（${ago_min}m ago）"
+    echo "- **最後訊息：** $last_user"
+    [ -n "$todo_summary" ] && echo "- **Todos：** $todo_summary"
+    [ -n "$git_branch" ] && echo "- **Git：** $git_branch ($git_dirty uncommitted files)"
+    echo "- **Resume：** \`claude --resume $sid\`"
+    echo ""
+  done
+}
+
+_ccs_crash_json() {
+  local -n _map=$1 _files=$2 _projects=$3 _rows=$4
+  local reboot_window="${5:-30}" idle_window="${6:-1440}"
+
+  local boot_epoch
+  boot_epoch=$(_ccs_get_boot_epoch) || boot_epoch=0
+  local boot_iso="null"
+  [ "$boot_epoch" -gt 0 ] && boot_iso="\"$(date -d "@$boot_epoch" --iso-8601=seconds)\""
+
+  local tmpdir="${BASH_SOURCE[0]%/*}/tmp"
+  mkdir -p "$tmpdir"
+  local tmpf="$tmpdir/.crash-sessions.jsonl"
+  : > "$tmpf"  # truncate
+
+  local count=${#_files[@]}
+  local i
+  for ((i = 0; i < count; i++)); do
+    local f="${_files[$i]}"
+    local sid=$(basename "$f" .jsonl)
+    [ -n "${_map[$sid]+x}" ] || continue
+
+    local conf_path="${_map[$sid]}"
+    local confidence="${conf_path%%:*}"
+    local detection_path="${conf_path#*:}"
+
+    local row="${_rows[$i]}"
+    local project=$(echo "$row" | cut -f1)
+    local topic=$(_ccs_topic_from_jsonl "$f")
+
+    local data
+    data=$(_ccs_overview_session_data "$f")
+    local last_user
+    last_user=$(echo "$data" | jq -r '.last_exchange.user // ""' 2>/dev/null)
+    local todos
+    todos=$(echo "$data" | jq '[.todos[]?]' 2>/dev/null)
+
+    local dir="${_projects[$i]}"
+    local resolved_path
+    resolved_path=$(_ccs_resolve_project_path "$dir" 2>/dev/null) || resolved_path=""
+    local git_branch="" git_dirty=0
+    if [ -n "$resolved_path" ] && [ -d "$resolved_path/.git" ]; then
+      git_branch=$(git -C "$resolved_path" rev-parse --abbrev-ref HEAD 2>/dev/null)
+      git_dirty=$(git -C "$resolved_path" status --porcelain 2>/dev/null | wc -l)
+    fi
+
+    local mtime=$(stat -c "%Y" "$f" 2>/dev/null)
+    local last_iso=$(date -d "@$mtime" --iso-8601=seconds 2>/dev/null)
+
+    jq -nc \
+      --arg sid "$sid" \
+      --arg conf "$confidence" \
+      --arg dpath "$detection_path" \
+      --arg proj "$project" \
+      --arg topic "$topic" \
+      --arg last_act "$last_iso" \
+      --arg last_msg "$last_user" \
+      --argjson todos "${todos:-[]}" \
+      --arg git_br "$git_branch" \
+      --argjson git_d "$git_dirty" \
+      --arg resume "claude --resume $sid" \
+      '{
+        session_id: $sid[0:8],
+        session_uuid: $sid,
+        confidence: $conf,
+        detection_path: $dpath,
+        project: $proj,
+        topic: $topic,
+        last_activity: $last_act,
+        last_user_message: $last_msg,
+        todos: $todos,
+        git: {branch: $git_br, uncommitted_files: $git_d},
+        resume_command: $resume
+      }' >> "$tmpf"
+  done
+
+  jq -nc \
+    --argjson boot "$boot_iso" \
+    --argjson rw "$reboot_window" \
+    --argjson iw "$idle_window" \
+    --argjson sessions "$(jq -sc '.' "$tmpf")" \
+    '{boot_time: $boot, reboot_window_minutes: $rw, idle_window_minutes: $iw, sessions: $sessions}'
+
+  rm -f "$tmpf"
+}
+
+# ── ccs-crash — detect sessions interrupted by crash or unexpected reboot ──
+ccs-crash() {
+  local mode="md" reboot_window=30 idle_window=1440 show_all=false
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --reboot-window) reboot_window="$2"; shift 2 ;;
+      --idle-window)   idle_window="$2"; shift 2 ;;
+      --md)            mode="md"; shift ;;
+      --json)          mode="json"; shift ;;
+      --all|-a)        show_all=true; shift ;;
+      --help|-h)
+        cat <<'HELP'
+ccs-crash  — detect sessions interrupted by crash or unexpected reboot
+[personal tool, not official Claude Code]
+
+Usage:
+  ccs-crash                  Markdown output, high confidence only (default)
+  ccs-crash --json           JSON output
+  ccs-crash --all            Include low confidence + subagent sessions
+  ccs-crash --reboot-window N  Path 1 window in minutes (default: 30)
+  ccs-crash --idle-window N    Path 2 window in minutes (default: 1440)
+
+Detection paths:
+  Path 1 (reboot):     mtime in [boot_time - window, boot_time + 120s)
+  Path 2 (non-reboot): dead process + JSONL interrupt signal analysis
+
+Confidence levels:
+  high  Reboot-window match OR explicit interrupt signal (no text in last response)
+  low   Dead process but last response has text (could be manual Ctrl+C)
+HELP
+        return 0 ;;
+      *) echo "Unknown option: $1" >&2; return 1 ;;
+    esac
+  done
+
+  # Collect sessions (include subagents if --all)
+  local -a session_files=() session_projects=() session_rows=()
+  _ccs_collect_sessions $($show_all && echo "--all") session_files session_projects session_rows
+
+  # Run detection
+  local -A crash_map=()
+  _ccs_detect_crash crash_map --reboot-window "$reboot_window" --idle-window "$idle_window" session_files session_projects
+
+  # Filter low confidence unless --all
+  if ! $show_all; then
+    for sid in "${!crash_map[@]}"; do
+      [[ "${crash_map[$sid]}" == low:* ]] && unset 'crash_map[$sid]'
+    done
+  fi
+
+  if [ ${#crash_map[@]} -eq 0 ]; then
+    echo "No crash-interrupted sessions detected."
+    return 0
+  fi
+
+  case "$mode" in
+    md)   _ccs_crash_md crash_map session_files session_projects session_rows ;;
+    json) _ccs_crash_json crash_map session_files session_projects session_rows "$reboot_window" "$idle_window" ;;
+  esac
+}
+
 # ── ccs-overview — cross-session work overview ──
 ccs-overview() {
   if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
@@ -3116,6 +3391,10 @@ HELP
 
   local session_count=${#session_files[@]}
 
+  # Crash detection (high confidence only, for overview banner)
+  local -A crash_map=()
+  _ccs_detect_crash crash_map session_files session_projects
+
   if $git_mode; then
     _ccs_overview_git session_files session_projects "$mode" "$git_commits"
     return $?
@@ -3133,9 +3412,9 @@ HELP
 
   # Full overview
   case "$mode" in
-    md)       _ccs_overview_md session_files session_projects session_rows ;;
-    json)     _ccs_overview_json session_files session_projects session_rows ;;
-    terminal) _ccs_overview_terminal session_files session_projects session_rows ;;
+    md)       _ccs_overview_md session_files session_projects session_rows crash_map ;;
+    json)     _ccs_overview_json session_files session_projects session_rows crash_map ;;
+    terminal) _ccs_overview_terminal session_files session_projects session_rows ;;  # terminal mode does not yet support crash display
   esac
 }
 
