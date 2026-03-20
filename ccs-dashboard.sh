@@ -29,8 +29,9 @@ ccs-status (ccs)  — unified session dashboard
 
 Sections:
   1. Active sessions   — open, non-archived (last 7 days, < 1 day old)
-  2. Zombie processes  — stopped claude processes eating RAM
-  3. Stale sessions    — open but untouched > 1 day
+  2. Crashed sessions  — crash-interrupted (detected by ccs-crash logic)
+  3. Zombie processes  — stopped claude processes eating RAM
+  4. Stale sessions    — open but untouched > 1 day
 
 Options:
   --md [--list|--table]   Output as Markdown (for Happy web / Claude Code rendering)
@@ -62,14 +63,36 @@ HELP
     _ccs_is_archived "$f" || open_files+=("$f")
   done < <(find "$projects_dir" -maxdepth 2 -name "*.jsonl" -mmin -$((7 * 1440)) ! -path "*/subagents/*" -print0 2>/dev/null)
 
-  local fresh_files=() stale_files=()
+  # Crash detection
+  declare -A crash_map
+  local -a _status_projects=()
+  local _sf
+  for _sf in "${open_files[@]}"; do
+    local _dname
+    _dname=$(basename "$(dirname "$_sf")")
+    _status_projects+=("$(_ccs_resolve_project_path "$_dname" 2>/dev/null)")
+  done
+  _ccs_detect_crash crash_map open_files _status_projects 2>/dev/null
+
+  # Build crash lookup (full sid)
+  declare -A crash_full
+  local _ck
+  for _ck in "${!crash_map[@]}"; do
+    [[ "${crash_map[$_ck]}" == high:* ]] && crash_full["$_ck"]=1
+  done
+
+  # Split into fresh / crashed / stale
+  local fresh_files=() crashed_files=() stale_files=()
   local now
   now=$(date +%s)
   for f in "${open_files[@]}"; do
-    local mod ago
+    local mod ago full_sid
     mod=$(stat -c "%Y" "$f")
     ago=$(( (now - mod) / 60 ))
-    if [ "$ago" -lt 1440 ]; then
+    full_sid=$(basename "$f" .jsonl)
+    if [ -n "${crash_full[$full_sid]+x}" ]; then
+      crashed_files+=("$f")
+    elif [ "$ago" -lt 1440 ]; then
       fresh_files+=("$f")
     else
       stale_files+=("$f")
@@ -78,7 +101,7 @@ HELP
 
   # ── Markdown mode ──
   if $md; then
-    _ccs_status_md "$md_fmt" "$now" "${fresh_files[@]}" "---" "${stale_files[@]}"
+    _ccs_status_md "$md_fmt" "$now" "${fresh_files[@]}" "---" "${crashed_files[@]}" "---" "${stale_files[@]}"
     return 0
   fi
 
@@ -100,6 +123,20 @@ HELP
       printf "  ${color}%s\033[0m\n" "$display"
       active_count=$((active_count + 1))
     done
+  fi
+
+  echo
+  printf "\033[1;31m━━ Crashed Sessions ━━\033[0m\n"
+  if [ ${#crashed_files[@]} -eq 0 ]; then
+    printf "  \033[32m(none)\033[0m\n"
+  else
+    printf "\033[1m  %-30s %-10s %-10s %s\033[0m\n" "PROJECT" "SESSION" "LAST ACTIVE" "TOPIC"
+    for f in "${crashed_files[@]}"; do
+      _ccs_session_row "$f"
+    done | sort -t$'\t' -k1,1 -k2,2n | while IFS=$'\t' read -r proj _ _ _ display; do
+      printf "  \033[31m%s 💀\033[0m\n" "$display"
+    done
+    printf "\n  \033[1m%d crashed\033[0m → \033[33mccs-crash\033[0m for detail, \033[33mccs-crash --clean\033[0m to dismiss\n" "${#crashed_files[@]}"
   fi
 
   echo
@@ -157,11 +194,16 @@ _ccs_status_md() {
   local now="$1"; shift
   local projects_dir="$HOME/.claude/projects"
 
-  # Split args by "---" separator into fresh_files and stale_files
-  local fresh_files=() stale_files=() past_sep=false
+  # Split args by "---" separators into fresh_files, crashed_files, stale_files
+  local fresh_files=() crashed_files=() stale_files=()
+  local _section=0
   for arg in "$@"; do
-    if [ "$arg" = "---" ]; then past_sep=true; continue; fi
-    if $past_sep; then stale_files+=("$arg"); else fresh_files+=("$arg"); fi
+    if [ "$arg" = "---" ]; then _section=$((_section + 1)); continue; fi
+    case "$_section" in
+      0) fresh_files+=("$arg") ;;
+      1) crashed_files+=("$arg") ;;
+      2) stale_files+=("$arg") ;;
+    esac
   done
 
   echo "### ⚡ Active Sessions"
@@ -235,6 +277,50 @@ _ccs_status_md() {
       fi
     done <<< "$sorted_rows"
   fi
+
+  # Crashed sessions
+  echo "### 💀 Crashed Sessions"
+  echo
+  if [ ${#crashed_files[@]} -eq 0 ]; then
+    echo "_(none)_ ✓"
+  else
+    local crash_sorted
+    crash_sorted=$(for f in "${crashed_files[@]}"; do
+      local mod ago project dir
+      mod=$(stat -c "%Y" "$f")
+      ago=$(( (now - mod) / 60 ))
+      dir=$(basename "$(dirname "$f")")
+      project=$(echo "$dir" | sed "s/^${_CCS_HOME_ENCODED}-*//; s/-/\//g")
+      [ -z "$project" ] && project="~(home)"
+      printf '%s\t%d\t%s\n' "$project" "$ago" "$f"
+    done | sort -t$'\t' -k1,1 -k2,2n)
+
+    while IFS=$'\t' read -r project ago f; do
+      local ago_str sid topic full_sid
+      session_idx=$((session_idx + 1))
+      full_sid=$(basename "$f" .jsonl)
+      sid=$(echo "$full_sid" | cut -c1-8)
+      topic=$(_ccs_topic_from_jsonl "$f")
+
+      if [ "$ago" -lt 60 ]; then ago_str="${ago}m ago"
+      elif [ "$ago" -lt 1440 ]; then ago_str="$((ago / 60))h ago"
+      else ago_str="$((ago / 1440))d ago"; fi
+
+      printf '%d\t%s\t%s\n' "$session_idx" "$sid" "$topic" >> "$pick_file"
+
+      if [ "$fmt" = "table" ]; then
+        topic=$(echo "$topic" | sed 's/|/\\|/g')
+        project=$(echo "$project" | sed 's/|/\\|/g')
+        echo "| ${session_idx} | ${project} | \`${sid}\` | ${ago_str} | 💀 crashed | ${topic} |"
+      else
+        echo "💀 **${session_idx}.** **${topic}** \`${sid}\` ${ago_str}"
+        echo
+      fi
+    done <<< "$crash_sorted"
+
+    echo "> **${#crashed_files[@]}** crashed → \`ccs-crash\` for detail, \`ccs-crash --clean\` to dismiss"
+  fi
+  echo
 
   # Zombie processes
   echo "### 🧟 Zombie Processes"
@@ -2137,6 +2223,16 @@ _ccs_overview_terminal() {
   local now_str
   now_str=$(date '+%Y-%m-%d %H:%M')
 
+  # Crash detection (4th arg is optional)
+  local crash_high=0
+  if [ -n "${4:-}" ]; then
+    local -n _crash_term=$4
+    local _csid
+    for _csid in "${!_crash_term[@]}"; do
+      [[ "${_crash_term[$_csid]}" == high:* ]] && crash_high=$((crash_high + 1))
+    done
+  fi
+
   printf '\033[1m── Work Overview (%s) ──\033[0m\n\n' "$now_str"
 
   if [ "$count" -eq 0 ]; then
@@ -2145,6 +2241,10 @@ _ccs_overview_terminal() {
   fi
 
   printf '\033[1mActive Sessions (%d)\033[0m\n' "$count"
+
+  if [ "$crash_high" -gt 0 ]; then
+    printf '  \033[31m💀 %d crash-interrupted session(s) — ccs-crash for detail\033[0m\n' "$crash_high"
+  fi
 
   local i
   for ((i = 0; i < count; i++)); do
@@ -2157,8 +2257,16 @@ _ccs_overview_terminal() {
     status=$(echo "$row" | cut -f3)
     color=$(echo "$row" | cut -f4)
 
-    local sid
-    sid=$(basename "$f" .jsonl | cut -c1-8)
+    # Override color for crash-interrupted sessions (high confidence)
+    local full_sid
+    full_sid=$(basename "$f" .jsonl)
+    local crash_suffix=""
+    if [ -n "${4:-}" ] && [ -n "${_crash_term[$full_sid]+x}" ] && [[ "${_crash_term[$full_sid]}" == high:* ]]; then
+      color="\033[31m"
+      crash_suffix=" 💀"
+    fi
+
+    local sid="${full_sid:0:8}"
     local topic
     topic=$(_ccs_topic_from_jsonl "$f")
 
@@ -2172,7 +2280,7 @@ _ccs_overview_terminal() {
     fi
 
     # Brief line: [status] sid project (age) — topic
-    printf '  %b%s %-25s\033[0m \033[90m%4s\033[0m  %s\n' "$color" "$sid" "$project" "$ago_str" "$topic"
+    printf '  %b%s %-25s\033[0m \033[90m%4s\033[0m  %s%s\n' "$color" "$sid" "$project" "$ago_str" "$topic" "$crash_suffix"
 
     # Todos (compact)
     local data
@@ -3501,7 +3609,7 @@ HELP
   case "$mode" in
     md)       _ccs_overview_md session_files session_projects session_rows crash_map ;;
     json)     _ccs_overview_json session_files session_projects session_rows crash_map ;;
-    terminal) _ccs_overview_terminal session_files session_projects session_rows ;;  # terminal mode does not yet support crash display
+    terminal) _ccs_overview_terminal session_files session_projects session_rows crash_map ;;
   esac
 }
 

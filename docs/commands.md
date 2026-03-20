@@ -4,10 +4,11 @@
 
 ## ccs-status (ccs)
 
-一眼掌握所有 session 狀態，分三個區塊：
+一眼掌握所有 session 狀態，分四個區塊：
 1. **Active Sessions** — 近 1 天內有活動的未封存 session
-2. **Zombie Processes** — 被 suspend 的 claude process（吃 RAM）
-3. **Stale Sessions** — 超過 1 天未動的未封存 session
+2. **Crashed Sessions** — crash-interrupted session（由 `ccs-crash` 偵測邏輯判定）
+3. **Zombie Processes** — 被 suspend 的 claude process（吃 RAM）
+4. **Stale Sessions** — 超過 1 天未動的未封存 session
 
 ```bash
 ccs-status          # Terminal ANSI 輸出
