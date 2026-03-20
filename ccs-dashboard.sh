@@ -3712,7 +3712,8 @@ _ccs_recap_collect() {
   for proj_dir in "${proj_dirs[@]}"; do
     local proj_path
     proj_path=$(_ccs_resolve_project_path "$proj_dir" 2>/dev/null) || continue
-    local proj_name=${proj_path##*/}
+    local proj_name
+    proj_name=$(_ccs_friendly_project_name "$proj_dir")
     local session_dir="$HOME/.claude/projects/$proj_dir"
 
     # 收集此專案在時間範圍內的 sessions
@@ -4280,7 +4281,8 @@ _ccs_checkpoint_collect() {
   for proj_dir in "${proj_dirs[@]}"; do
     local proj_path
     proj_path=$(_ccs_resolve_project_path "$proj_dir" 2>/dev/null) || continue
-    local proj_name=${proj_path##*/}
+    local proj_name
+    proj_name=$(_ccs_friendly_project_name "$proj_dir")
     local session_dir="$HOME/.claude/projects/$proj_dir"
 
     while IFS= read -r jsonl; do
