@@ -1,103 +1,178 @@
 # ccs-dashboard
 
-Claude Code Session 管理的輕量 TUI 工具。個人工具，非官方。
+[中文版 (zh-TW)](docs/README.zh-TW.md)
 
-Terminal 模式用 ANSI escape codes 渲染，Markdown 模式可在 Happy Coder 網頁版直接顯示。
+Mission control for your Claude Code sessions — track, review, and hand off across repos.
 
-## 安裝
+Claude Code stores conversations as JSONL files under `~/.claude/projects/`, but provides no built-in tools to review or manage them. ccs-dashboard parses these JSONL files so you can see what's going on across all your sessions — either by asking Claude directly or from the command line.
 
-```bash
-cd ~/tools/ccs-dashboard
-./install.sh            # 檢查依賴 + 加 source 行到 ~/.bashrc + 建立 skill symlink
-./install.sh --check    # 只檢查依賴和安裝狀態
-./install.sh --uninstall  # 移除
+## Background
+
+If you use Claude Code heavily — multiple repos, multiple terminals, multiple tasks in flight — you'll quickly hit these walls:
+
+- **Sessions are invisible.** No built-in way to list, search, or compare sessions. Each terminal is its own silo. Close the tab and the context is gone.
+- **Multi-repo chaos.** Working on a backend fix, a frontend feature, and a docs update simultaneously? Good luck remembering which session was doing what, in which repo.
+- **Zombie processes pile up.** Suspended claude processes (from terminal multiplexers, crashed tabs, or `Ctrl+Z`) silently eat 190-500 MB each. No warning, no cleanup.
+- **Context doesn't transfer.** Starting a new session means re-explaining everything. The old session's knowledge — files touched, decisions made, remaining todos — is trapped in a JSONL file nobody reads.
+- **No cross-session view.** A single feature might span 5 sessions across 3 days. There's no way to see the full picture without manually digging through logs.
+
+## Before / After
+
+**Before:** You're left staring at raw JSONL files.
+
+```
+$ ls ~/.claude/projects/
+-home-alice-backend-api/    -home-alice-frontend/    -home-alice-docs/
+$ ls ~/.claude/projects/-home-alice-backend-api/
+3a8f1c42-...jsonl  7b2e9d15-...jsonl  a1c4f8e2-...jsonl
+# Now what? Open each 50MB JSONL in vim?
 ```
 
-或手動：
+**After:** Just ask Claude. The included [custom skill](https://docs.anthropic.com/en/docs/claude-code/skills) gives you an interactive orchestrator — no commands to memorize.
+
+```
+You: What am I working on?
+
+Claude: (runs /ccs-orchestrator)
+
+### ⚡ Active Sessions (4)
+
+📁 backend-api (2)
+🟢 1. Fix auth middleware regression    a1c4f8e2  3m ago
+🔵 2. Add rate limiting endpoint       7b2e9d15  5h ago
+
+📁 frontend (1)
+🟡 3. Dashboard redesign v2            9f3b7a21  45m ago
+
+### 📋 Pending Todos (3)
+☐ Add rate limit headers to response          (backend-api)
+☐ Write integration tests                     (backend-api)
+☐ Update sidebar component                    (frontend)
+
+### 🧟 Zombie Processes (2)
+PID 28341  Tl  490 MB  2d ago
+PID 31022  Tl  312 MB  1d ago
+
+<options>
+- d 1 — Expand session #1 recent conversations
+- f gh65 — View rate limiting feature progress
+- rc — Daily work recap
+- cl — Clean up zombie processes
+</options>
+```
+
+The skill handles routing, context, and follow-up options automatically. You can also drill down:
+
+```
+You: Show me what's left on the rate limiting feature
+
+Claude: (runs ccs-feature gh65)
+
+### 🟡 GH#65 Add rate limiting [backend-api]
+    Todos: 2/5 | Sessions: 3 | Last: 45m ago
+
+    Recent commits:
+    a3f1c82  feat: add token bucket rate limiter
+    9b2e7d1  feat: add Redis-backed rate limit store
+
+    Remaining todos:
+    ☐ Add rate limit headers to response
+    ☐ Write integration tests
+    ☐ Update API docs
+```
+
+Every feature is also available as a shell command for scripting or quick lookups:
+
+```
+$ ccs-status --md                     # Session dashboard
+$ ccs-resume-prompt --stdout          # Bootstrap prompt for new session
+$ ccs-feature gh65                    # Cross-session feature tracking
+$ ccs-recap                           # Daily work review
+```
+
+## How it works
+
+ccs-dashboard has two layers:
+
+**1. Claude Code Skill** (`/ccs-orchestrator`) — the primary interface. Ask in natural language, get an interactive orchestrator with context-aware options. No commands to remember.
+
+- Trigger: `/ccs-orchestrator`, or natural language like "work status", "what am I working on"
+- Read-only — observes and presents information, does not control other sessions
+- Features: Command Palette, natural language routing, context-aware follow-up options
+
+**2. CLI commands** — shell functions you can call directly from terminal. Useful for scripting, piping, or quick one-off lookups.
+
+| Command | What it does |
+|---------|-------------|
+| `ccs` / `ccs-status` | Unified dashboard: active sessions + zombies + stale sessions |
+| `ccs-cleanup` | Find and kill suspended zombie processes |
+| `ccs-resume-prompt` | Generate bootstrap prompt (< 2000 tokens) for new session |
+| `ccs-feature` | Track progress by feature/issue across sessions |
+| `ccs-recap` | Daily work review across all projects |
+| `ccs-details` | Interactive conversation browser (tig-like TUI) |
+| `ccs-overview` | Cross-session overview: sessions + todos + git status |
+| `ccs-handoff` | Generate handoff notes with conversation summary, git, file ops |
+
+All commands support both **Terminal ANSI** and **Markdown** (`--md`) output modes.
+
+See **[docs/commands.md](docs/commands.md)** for detailed usage, flags, and examples.
+
+## Install
 
 ```bash
-# 在 .bashrc 加入：
+git clone https://github.com/a60708090xun/ccs-dashboard.git ~/tools/ccs-dashboard
+cd ~/tools/ccs-dashboard
+./install.sh            # Check deps + add source line to ~/.bashrc + create skill symlink
+./install.sh --check    # Check dependencies and installation status
+./install.sh --uninstall  # Remove
+```
+
+Or manually:
+
+```bash
+# Add to .bashrc:
 source ~/tools/ccs-dashboard/ccs-dashboard.sh
 
-# Skill symlink：
+# Skill symlink (optional):
 ln -s ~/tools/ccs-dashboard/skills/ccs-orchestrator ~/.claude/skills/ccs-orchestrator
 ```
 
-## 檔案結構
+## Status indicators
 
 ```
-ccs-core.sh                      # helpers + 基礎指令 (sessions/active/cleanup)
-ccs-dashboard.sh                 # source ccs-core.sh + 大型指令 (status/pick/html/details/handoff/resume-prompt/overview)
-install.sh                       # 安裝腳本（含 skill symlink）
-skills/ccs-orchestrator/SKILL.md # Claude Code skill — 互動式工作指揮台
-docs/commands.md                 # 各指令詳細使用方式
+Terminal          Markdown    State       Meaning
+Green             🟢          active      < 10 min since last activity
+Yellow            🟡          recent      < 1 hour
+Blue              🔵          idle        < 1 day (open but idle)
+Gray              💤          stale       > 1 day (zombie candidate)
+Strikethrough     -           archived    has last-prompt marker
 ```
 
-## 指令一覽
+## Requirements
 
-| 指令 | 說明 |
-|------|------|
-| `ccs` / `ccs-status` | 統一 dashboard：活躍 session + 殭屍 process + 過期 session |
-| `ccs-status --md` | Markdown 輸出（Happy 網頁版友善） |
-| `ccs-sessions [hours]` | 列出指定時間內所有 session（預設 24 小時，含 archived） |
-| `ccs-active [days]` | 列出未封存 session（預設 7 天） |
-| `ccs-cleanup [--dry-run\|--force]` | 清理 Stopped 狀態的殭屍 process |
-| `ccs-details [session-id]` | 互動式對話瀏覽器，類似 tig |
-| `ccs-pick N` | 展開第 N 個 session 的最近對話（搭配 `--md` 用） |
-| `ccs-html` | 產生 HTML dashboard 檔案 |
-| `ccs-handoff [project-dir]` | 產生 session 交接筆記（自動填充對話摘要、git、檔案操作、TodoWrite） |
-| `ccs-resume-prompt [session-id]` | 產生精簡 bootstrap prompt（< 2000 tokens），貼入新 session 即可接手 |
-| `ccs-overview` | 跨 session 工作總覽：活躍 session + 待辦 + git 狀態 + deadline context |
-| `ccs-feature` | 以 feature/issue 為單位的跨 session 進度追蹤 |
-| `ccs-tag` | 手動標記 session 歸屬到指定 feature |
-| `ccs-recap` | 每日工作回顧 — 跨專案 session/todo/feature/git 摘要 |
-
-各指令的詳細用法、參數、範例請見 **[docs/commands.md](docs/commands.md)**。
-
-## Skills
-
-| Skill | 說明 |
-|-------|------|
-| `ccs-orchestrator` | 互動式工作指揮台（Claude Code Skill） |
-
-### ccs-orchestrator
-
-跨 session 工作指揮台。觀察所有 active Claude Code session 的狀態、待辦事項、git 狀態，並提供互動式導覽。
-
-- **定位：** 觀察者 + 顧問 — 只讀取和呈現資訊，不控制其他 session
-- **觸發方式：** 在 Claude Code 中輸入 `/ccs-orchestrator`，或自然語言如「工作狀態」「我在做什麼」
-- **功能：** Command Palette、自然語言路由、context-aware options
-
-`install.sh` 會自動建立 symlink 到 `~/.claude/skills/ccs-orchestrator`。
-
-## 顏色 / 狀態圖示
-
-```
-Terminal          Markdown
-綠色              🟢          active    < 10 分鐘
-黃色              🟡          recent    < 1 小時
-藍色              🔵          idle      < 1 天（開著但閒置）
-灰色              💤          stale     > 1 天（殭屍候選）
-灰色刪除線         -          archived  有 last-prompt 標記
-```
-
-## Topic 來源
-
-Session topic 的取得優先順序：
-1. Happy Coder title（`mcp__happy__change_title` 最後一次設定的值）
-2. 第一則 user message
-
-## 依賴
-
-| 必要 | 用途 |
-|------|------|
+| Required | Purpose |
+|----------|---------|
 | bash 4+ | mapfile, associative arrays |
-| jq | JSONL 解析 |
+| jq | JSONL parsing |
 | coreutils | stat, date, find |
 
-| 選用 | 用途 |
-|------|------|
-| less | ccs-details 互動模式展開 |
+| Optional | Purpose |
+|----------|---------|
+| less | ccs-details interactive viewer |
 | xclip / xsel | ccs-resume-prompt --copy |
 
-資料來源：`~/.claude/projects/` 下的 JSONL session log。
+Data source: JSONL session logs under `~/.claude/projects/`.
+
+## File structure
+
+```
+ccs-core.sh                      # Helpers + basic commands (sessions/active/cleanup)
+ccs-dashboard.sh                 # Sources ccs-core.sh + advanced commands
+install.sh                       # Installer (deps check + bashrc + skill symlink)
+skills/ccs-orchestrator/SKILL.md # Claude Code skill — primary interface
+docs/commands.md                 # Detailed CLI command reference
+```
+
+## License
+
+[MIT](LICENSE)
