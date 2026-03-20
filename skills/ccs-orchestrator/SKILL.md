@@ -38,6 +38,11 @@ description: Cross-session work orchestrator — view all active Claude Code ses
 | conversation N | c N | `ccs-pick --md --full N:last` — 最近對話 |
 | todos | t | `ccs-overview --md --todos-only` — 跨 session 待辦 |
 | git | g | `ccs-overview --git` — 跨專案 git 狀態 |
+| features | f | `ccs-feature --md` — feature 進度總覽 |
+| feature N | f N | `ccs-feature --md <name>` — 展開第 N 個 feature |
+| timeline N | tl N | `ccs-feature --md <name> --timeline` — 時間軸 |
+| files | fl | `ccs-overview --files --md` — 跨 session 檔案操作 |
+| tag | tag | 引導使用者執行 `ccs-tag`（assign/exclude/list/clear） |
 | handoff [dir] | h [dir] | `ccs-handoff [project-dir]` — 產生交接筆記 |
 | cleanup | cl | `ccs-cleanup --dry-run` — 殭屍偵測 |
 | refresh | r | 重新執行上一個 view |
@@ -52,6 +57,10 @@ description: Cross-session work orchestrator — view all active Claude Code ses
 - 「對話」「conversation」→ conversation N
 - 「待辦」「todos」「todo」→ todos
 - 「git」「git 狀態」→ git
+- 「feature」「features」「進度」→ features
+- 「時間軸」「timeline」→ timeline N
+- 「files」「檔案操作」→ files
+- 「tag」「標記」「歸類」→ tag（引導 ccs-tag 操作）
 - 「交接」「handoff」→ handoff
 - 「清理」「cleanup」「殭屍」→ cleanup
 - 「refresh」「r」「重新整理」→ refresh（重跑上一個指令）
@@ -66,7 +75,11 @@ description: Cross-session work orchestrator — view all active Claude Code ses
 | 情境 | 建議 options |
 |------|-------------|
 | 剛看完 overview，有 N 個 active session | 每個 session 一個「展開 #N topic」+ 「跨 session 待辦」 |
+| 剛看完 overview，有 features 提示 | 加入「看 feature 進度」 |
 | 剛看完 overview，有 ⚠️ git 狀態 | 加入「看 git 狀態」 |
+| 剛看完 feature 摘要 | 每個 feature 一個「展開 #N」+ 「看時間軸」 |
+| 剛看完 feature 詳細 view | 「看時間軸」「回到 feature 列表」「看檔案操作」 |
+| 有 ungrouped session 疑似屬於某 feature | 建議「標記 session X 到 feature Y」 |
 | 剛看完 detail #N，有 pending todos | 「看 #N 完整對話」「回到總覽」「看待辦清單」 |
 | 剛看完 todos | 「回到總覽」「產生交接筆記」 |
 | 有殭屍 process | 加入「清理殭屍」 |
@@ -74,6 +87,14 @@ description: Cross-session work orchestrator — view all active Claude Code ses
 | git view 後有 unpushed commits | 提醒使用者哪些專案有 unpushed |
 
 Options 數量控制在 3-6 個，不超過 7 個。
+
+## Feature Semantic Enhancement
+
+在 Interactive phase 中，agent 可根據 `ccs-feature --json` 資料做語意增強：
+
+1. **語意聚類修正：** 讀取 JSON 後，若 ungrouped session 的 topic 與某 feature 相關，建議使用者用 `ccs-tag` 歸入
+2. **進階狀態摘要：** 理解「等 MR approve」「blocked by 上游」等需要語境的判斷
+3. **優先順序建議：** 結合 deadline context + feature status + 活躍度推斷（僅在使用者要求時）
 
 ## Agent Behavior
 
