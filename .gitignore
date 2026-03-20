@@ -1,2 +1,5 @@
 dashboard.html
 tmp/
+*.swp
+*.bak
+*~
