@@ -779,3 +779,98 @@ _ccs_resolve_project_path() {
 
   echo "$resolved"
 }
+
+# _ccs_friendly_project_name — human-readable short name from encoded dir
+# Usage: _ccs_friendly_project_name <encoded_dir>
+# Returns: friendly name string
+#   home dir        → "~(home)"
+#   worktree        → "repo-basename/worktree-name"
+#   normal project  → basename of resolved path
+_ccs_friendly_project_name() {
+  local encoded="$1"
+  [ -z "$encoded" ] && return 1
+
+  # 1. Home directory
+  if [ "$encoded" = "$_CCS_HOME_ENCODED" ]; then
+    echo "~(home)"
+    return 0
+  fi
+
+  # 2. Worktree detection: known prefixes after "--"
+  local wt_prefix wt_name repo_encoded repo_path
+  for wt_prefix in "--worktrees-" "--claude-worktrees-" "--dev-worktree-"; do
+    if [[ "$encoded" == *"$wt_prefix"* ]]; then
+      # Split: repo part (before --) and worktree name (after prefix)
+      repo_encoded="${encoded%%--*}"
+      wt_name="${encoded#*"$wt_prefix"}"
+
+      # Resolve repo part to get its basename
+      repo_path=$(_ccs_resolve_project_path "$repo_encoded" 2>/dev/null) || repo_path=""
+      local repo_basename
+      repo_basename=$(_ccs_friendly_basename "$repo_path" "$repo_encoded")
+      echo "${repo_basename}/${wt_name}"
+      return 0
+    fi
+  done
+
+  # 3. Normal project: resolve and take basename
+  local proj_path
+  proj_path=$(_ccs_resolve_project_path "$encoded" 2>/dev/null) || proj_path=""
+  _ccs_friendly_basename "$proj_path" "$encoded"
+}
+
+# _ccs_friendly_basename — extract human-readable basename from resolved path + encoded fallback
+# When resolved path is a real directory, use its basename directly.
+# When not (resolver guessed wrong due to hyphens-vs-underscores), find the actual
+# directory in the nearest existing ancestor by matching the trailing encoded segments.
+_ccs_friendly_basename() {
+  local resolved="$1"
+  local encoded="$2"
+
+  # If resolved path exists and is a directory, use its basename directly
+  if [ -n "$resolved" ] && [ -d "$resolved" ]; then
+    echo "${resolved##*/}"
+    return 0
+  fi
+
+  # Resolved path doesn't exist — walk up to find nearest existing ancestor,
+  # then search it for a directory whose name matches the remaining segments
+  # joined with hyphen or underscore (greedy, longest-suffix match).
+  if [ -n "$resolved" ]; then
+    local parent="$resolved"
+    local suffix=""
+    while [ -n "$parent" ] && [ "$parent" != "/" ]; do
+      local seg="${parent##*/}"
+      parent="${parent%/*}"
+      suffix="${seg}${suffix:+-${suffix}}"
+      if [ -d "$parent" ]; then
+        # Try to find a real child directory matching suffix with _ or - variants
+        local candidate
+        # Try hyphen form
+        if [ -d "${parent}/${suffix}" ]; then
+          echo "${suffix}"
+          return 0
+        fi
+        # Try underscore form (replace - with _)
+        local underscore_suffix="${suffix//-/_}"
+        if [ -d "${parent}/${underscore_suffix}" ]; then
+          echo "${underscore_suffix}"
+          return 0
+        fi
+        # Scan the parent dir for best match
+        for candidate in "$parent"/*/; do
+          candidate="${candidate%/}"
+          candidate="${candidate##*/}"
+          local norm_candidate="${candidate//_/-}"
+          if [ "$norm_candidate" = "$suffix" ]; then
+            echo "$candidate"
+            return 0
+          fi
+        done
+      fi
+    done
+  fi
+
+  # Final fallback: strip home prefix from encoded, take last hyphen segment
+  echo "${encoded##*-}"
+}
