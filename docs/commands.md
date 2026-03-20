@@ -178,3 +178,24 @@ ccs-resume-prompt --copy       # 複製到剪貼簿
 ccs-resume-prompt --stdout     # 純文字輸出（可 pipe）
 ccs-resume-prompt -n 5         # 包含最近 5 組對話（預設 3）
 ```
+
+## ccs-checkpoint
+
+輕量級進度快照，三欄式分類（Done / In Progress / Blocked）。用於早上 recap 或會議前彙報。
+
+```bash
+ccs-checkpoint                    # 上次 checkpoint 到現在（首次用今天 00:00）
+ccs-checkpoint --since 9:00       # 今天 09:00 起
+ccs-checkpoint --since yesterday  # 昨天 00:00 起
+ccs-checkpoint --since "2h ago"   # 2 小時前起
+ccs-checkpoint --md               # Markdown 條列式輸出
+ccs-checkpoint --md --table       # Markdown 表格式輸出
+ccs-checkpoint --project          # 只看當前目錄的專案
+```
+
+三欄分類邏輯：
+- **Done** — 區間內已封存的 session
+- **In Progress** — 區間內有活動、未封存的 session（展開 todos）
+- **Blocked** — In Progress 中 inactive > 2h 或含 blocked/卡住 等 keyword
+
+時間戳持久化：每次預設區間執行後記錄時間，下次自動接續。
