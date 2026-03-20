@@ -15,6 +15,8 @@ _CCS_HOME_ENCODED=$(echo "$HOME" | sed 's/\//-/g')
 #   _ccs_recent_files_md    — recent file operations from JSONL
 #   _ccs_todos_md           — TodoWrite items from JSONL
 #   _ccs_resolve_project_path — resolve JSONL dir name → filesystem path
+#   _ccs_get_boot_epoch     — system boot time as epoch
+#   _ccs_detect_crash       — detect crash-interrupted sessions
 #
 # Commands:
 #   ccs-sessions            — all sessions within N hours
@@ -469,6 +471,112 @@ HELP
     printf "  %d process(es) needed SIGKILL\n" "$survivors"
   fi
   printf "\033[32mFreed ~%d MB RAM\033[0m\n" "$total_mb"
+}
+
+# ── Helper: get system boot time as epoch ──
+# Returns epoch via stdout. Returns 1 if unavailable (e.g., containers).
+_ccs_get_boot_epoch() {
+  local boot_str
+  # Primary: uptime -s
+  boot_str=$(uptime -s 2>/dev/null)
+  if [ -n "$boot_str" ]; then
+    date -d "$boot_str" +%s 2>/dev/null && return 0
+  fi
+  # Fallback: who -b
+  boot_str=$(who -b 2>/dev/null | awk '{print $3, $4}')
+  if [ -n "$boot_str" ]; then
+    date -d "$boot_str" +%s 2>/dev/null && return 0
+  fi
+  return 1
+}
+
+# ── Helper: detect crash-interrupted sessions ──
+# Usage: declare -A crash_map; _ccs_detect_crash crash_map [--reboot-window N] [--idle-window N] [files_array] [projects_array]
+# crash_map[session_id] = "high:reboot" | "high:non-reboot" | "low:non-reboot"
+_ccs_detect_crash() {
+  local -n _crash_out=$1; shift
+  local reboot_window=30 idle_window=1440
+
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --reboot-window) reboot_window="$2"; shift 2 ;;
+      --idle-window) idle_window="$2"; shift 2 ;;
+      *) break ;;
+    esac
+  done
+
+  # Remaining args: files_array_name projects_array_name
+  # Use a flag to track standalone mode and avoid double nameref
+  local _standalone=false
+  local -a _standalone_files=() _standalone_projects=() _standalone_rows=()
+  if [ $# -ge 2 ]; then
+    local -n _cd_files=$1 _cd_projects=$2
+  else
+    _standalone=true
+    _ccs_collect_sessions _standalone_files _standalone_projects _standalone_rows
+    local -n _cd_files=_standalone_files _cd_projects=_standalone_projects
+  fi
+
+  local now=$(date +%s)
+  local boot_epoch
+  if ! boot_epoch=$(_ccs_get_boot_epoch); then
+    boot_epoch=0
+    echo "ccs-crash: warning: cannot determine boot time (container?), Path 1 disabled" >&2
+  fi
+
+  local reboot_window_start=0 reboot_upper=0
+  if [ "$boot_epoch" -gt 0 ]; then
+    reboot_window_start=$((boot_epoch - reboot_window * 60))
+    reboot_upper=$((boot_epoch + 120))
+  fi
+
+  local idle_window_start=$((now - idle_window * 60))
+
+  # Path 2: get list of running claude session IDs (once)
+  local running_sids=""
+  running_sids=$(ps -eo args 2>/dev/null | grep -oP '(?<=--resume )[0-9a-f-]{36}' | sort -u)
+
+  local count=${#_cd_files[@]}
+  local i
+  for ((i = 0; i < count; i++)); do
+    local f="${_cd_files[$i]}"
+    [ -f "$f" ] || continue
+
+    local mtime sid
+    mtime=$(stat -c "%Y" "$f" 2>/dev/null) || continue
+    sid=$(basename "$f" .jsonl)
+
+    # Path 1: Reboot detection
+    if [ "$boot_epoch" -gt 0 ] && [ "$mtime" -ge "$reboot_window_start" ] && [ "$mtime" -lt "$reboot_upper" ]; then
+      _crash_out["$sid"]="high:reboot"
+      continue
+    fi
+
+    # Path 2: Non-reboot detection
+    # Skip if mtime outside idle window or after boot (already running post-reboot)
+    [ "$mtime" -ge "$idle_window_start" ] || continue
+    [ "$boot_epoch" -eq 0 ] || [ "$mtime" -ge "$reboot_upper" ] || continue
+
+    # Check if process is still running
+    echo "$running_sids" | grep -q "$sid" && continue
+
+    # Check for interrupt signals in last assistant message (raw JSONL)
+    # Last assistant message: content array with no text entries = mid-execution crash
+    local has_text
+    has_text=$(tac "$f" 2>/dev/null | grep -m1 '"type":"assistant"' | jq -r '
+      if .message.content then
+        ([.message.content[] | select(.type == "text" and (.text | length > 0))] | length)
+      else
+        0
+      end
+    ' 2>/dev/null)
+
+    if [ "${has_text:-0}" = "0" ]; then
+      _crash_out["$sid"]="high:non-reboot"
+    else
+      _crash_out["$sid"]="low:non-reboot"
+    fi
+  done
 }
 
 # ── Helper: resolve JSONL directory name → actual filesystem path ──
