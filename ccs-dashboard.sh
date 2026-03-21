@@ -4347,10 +4347,21 @@ _ccs_checkpoint_collect() {
         fi
       fi
 
+      # Format last_active time
+      local last_active today_ymd mtime_ymd
+      today_ymd=$(date +%Y%m%d)
+      mtime_ymd=$(date -d "@$mtime" +%Y%m%d)
+      if [ "$mtime_ymd" = "$today_ymd" ]; then
+        last_active=$(date -d "@$mtime" '+%H:%M')
+      else
+        last_active=$(date -d "@$mtime" '+%m/%d %H:%M')
+      fi
+
       local entry
       entry=$(jq -nc --arg p "$proj_name" --arg t "$topic" --arg s "$sid" \
+        --arg la "$last_active" \
         --argjson todos "$todos_json" --argjson tc "$todo_count" \
-        '{project: $p, topic: $t, session: $s, todos: $todos, todo_count: $tc}')
+        '{project: $p, topic: $t, session: $s, last_active: $la, todos: $todos, todo_count: $tc}')
 
       if $is_blocked; then
         blocked_json=$(echo "$blocked_json" | jq -c --argjson e "$entry" '. + [$e]')
@@ -4390,36 +4401,57 @@ _ccs_checkpoint_terminal() {
 
   printf '\033[1;36m━━ Checkpoint (%s → %s) ━━\033[0m\n\n' "$since" "$now"
 
-  # Done
-  printf '\033[1;32m✅ Done\033[0m\n'
+  # Done — collapsed
   local d_count
   d_count=$(echo "$json" | jq '.done | length')
+  printf '\033[1;32m✅ Done (%d)\033[0m\n' "$d_count"
   if (( d_count == 0 )); then
     printf '  \033[90m(none)\033[0m\n'
   else
-    echo "$json" | jq -r '.done[] | "  \(.project)  \(.topic)"'
+    echo "$json" | jq -r '
+      [.done[] | {project}] | group_by(.project) |
+      map("  " + .[0].project + " — " + (length|tostring) + " session" + (if length > 1 then "s" else "" end)) |
+      .[]'
   fi
 
   echo
-  # In Progress
-  printf '\033[1;33m🔄 In Progress\033[0m\n'
+  # In Progress — grouped with time
   local w_count
   w_count=$(echo "$json" | jq '.in_progress | length')
+  printf '\033[1;33m🔄 In Progress\033[0m\n'
   if (( w_count == 0 )); then
     printf '  \033[90m(none)\033[0m\n'
   else
-    echo "$json" | jq -r '.in_progress[] | "  \(.project)  \(.topic)", (.todos[]? | "    - [\(if .status == "in_progress" then "~" else " " end)] \(.content)")' 2>/dev/null
+    echo "$json" | jq -r '
+      .in_progress | group_by(.project) | .[] |
+      if length >= 2 then
+        "  " + .[0].project + " (" + (length|tostring) + ")",
+        (.[] | "    " + .topic + "  " + .last_active,
+          (.todos[]? | "      [" + (if .status == "in_progress" then "~" else " " end) + "] " + .content))
+      else
+        .[] | "  " + .project + "  " + .topic + "  " + .last_active,
+          (.todos[]? | "    [" + (if .status == "in_progress" then "~" else " " end) + "] " + .content)
+      end' 2>/dev/null
   fi
 
   echo
-  # Blocked
-  printf '\033[1;31m⚠️  Blocked\033[0m\n'
+  # Blocked — grouped with time
   local b_count
   b_count=$(echo "$json" | jq '.blocked | length')
+  printf '\033[1;31m⚠️  Blocked\033[0m\n'
   if (( b_count == 0 )); then
     printf '  \033[90m(none)\033[0m\n'
   else
-    echo "$json" | jq -r '.blocked[] | "  \(.project)  \(.topic)", (.todos[]? | "    - [\(if .status == "in_progress" then "~" else " " end)] \(.content)")' 2>/dev/null
+    echo "$json" | jq -r '
+      .blocked | group_by(.project) | .[] |
+      if length >= 2 then
+        "  " + .[0].project + " (" + (length|tostring) + ")",
+        (.[] | "    " + .topic + "  " + .last_active,
+          (.todos[]? | "      [" + (if .status == "in_progress" then "~" else " " end) + "] " + .content))
+      else
+        .[] | "  " + .project + "  " + .topic + "  " + .last_active,
+          (.todos[]? | "    [" + (if .status == "in_progress" then "~" else " " end) + "] " + .content)
+      end' 2>/dev/null
   fi
 
   echo
@@ -4439,31 +4471,55 @@ _ccs_checkpoint_md() {
 
   printf '## Checkpoint (%s → %s)\n\n' "$since" "$now"
 
-  printf '### Done\n'
+  # Done — collapsed summary
   local d_count
   d_count=$(echo "$json" | jq '.done | length')
+  printf '### Done (%d)\n' "$d_count"
   if (( d_count == 0 )); then
     printf -- '- (none)\n'
   else
-    echo "$json" | jq -r '.done[] | "- **\(.project)** — \(.topic)"'
+    echo "$json" | jq -r '
+      [.done[] | {project}] | group_by(.project) |
+      map("- **" + .[0].project + "** — " + (length|tostring) + " session" + (if length > 1 then "s" else "" end)) |
+      .[]'
   fi
 
+  # In Progress — grouped by project with time
   printf '\n### In Progress\n'
   local w_count
   w_count=$(echo "$json" | jq '.in_progress | length')
   if (( w_count == 0 )); then
     printf -- '- (none)\n'
   else
-    echo "$json" | jq -r '.in_progress[] | "- **\(.project)** — \(.topic)", (.todos[]? | "  - [\(if .status == "in_progress" then "~" else " " end)] \(.content)")' 2>/dev/null
+    echo "$json" | jq -r '
+      .in_progress | group_by(.project) | .[] |
+      if length >= 2 then
+        "**" + .[0].project + "** (" + (length|tostring) + ")",
+        (.[] | "- " + .topic + " _(" + .last_active + ")_",
+          (.todos[]? | "  - [" + (if .status == "in_progress" then "~" else " " end) + "] " + .content))
+      else
+        .[] | "- **" + .project + "** — " + .topic + " _(" + .last_active + ")_",
+          (.todos[]? | "  - [" + (if .status == "in_progress" then "~" else " " end) + "] " + .content)
+      end' 2>/dev/null
   fi
 
+  # Blocked — grouped by project with time
   printf '\n### Blocked\n'
   local b_count
   b_count=$(echo "$json" | jq '.blocked | length')
   if (( b_count == 0 )); then
     printf -- '- (none)\n'
   else
-    echo "$json" | jq -r '.blocked[] | "- **\(.project)** — \(.topic)", (.todos[]? | "  - [\(if .status == "in_progress" then "~" else " " end)] \(.content)")' 2>/dev/null
+    echo "$json" | jq -r '
+      .blocked | group_by(.project) | .[] |
+      if length >= 2 then
+        "**" + .[0].project + "** (" + (length|tostring) + ")",
+        (.[] | "- " + .topic + " _(" + .last_active + ")_",
+          (.todos[]? | "  - [" + (if .status == "in_progress" then "~" else " " end) + "] " + .content))
+      else
+        .[] | "- **" + .project + "** — " + .topic + " _(" + .last_active + ")_",
+          (.todos[]? | "  - [" + (if .status == "in_progress" then "~" else " " end) + "] " + .content)
+      end' 2>/dev/null
   fi
   echo
 }
@@ -4477,18 +4533,24 @@ _ccs_checkpoint_table() {
   now=$(echo "$json" | jq -r '.now')
 
   printf '## Checkpoint (%s → %s)\n\n' "$since" "$now"
-  printf '| %s | %s | %s |\n' "狀態" "專案" "項目"
-  printf '|------|------|------|\n'
+  printf '| %s | %s | %s | %s |\n' "狀態" "專案" "項目" "時間"
+  printf '|------|------|------|------|\n'
 
+  # Done — collapsed per project
   echo "$json" | jq -r '
-    (.done[] | "| Done | \(.project) | \(.topic) |"),
-    (.in_progress[] | "| WIP | \(.project) | \(.topic)\(if .todo_count > 0 then " (\(.todo_count) todos)" else "" end) |"),
-    (.blocked[] | "| Blocked | \(.project) | \(.topic)\(if .todo_count > 0 then " (\(.todo_count) todos)" else "" end) |")
+    [.done[] | {project}] | group_by(.project) |
+    map("| Done | " + .[0].project + " | " + (length|tostring) + " sessions | — |") |
+    .[]' 2>/dev/null
+
+  # In Progress + Blocked — with time
+  echo "$json" | jq -r '
+    (.in_progress[] | "| WIP | \(.project) | \(.topic)\(if .todo_count > 0 then " (\(.todo_count) todos)" else "" end) | \(.last_active) |"),
+    (.blocked[] | "| Blocked | \(.project) | \(.topic)\(if .todo_count > 0 then " (\(.todo_count) todos)" else "" end) | \(.last_active) |")
   ' 2>/dev/null
 
   local total
   total=$(echo "$json" | jq '.summary.total')
-  (( total == 0 )) && printf '| - | - | (none) |\n'
+  (( total == 0 )) && printf '| - | - | (none) | - |\n'
   echo
 }
 
