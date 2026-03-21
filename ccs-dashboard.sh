@@ -4300,6 +4300,9 @@ _ccs_checkpoint_collect() {
         continue
       fi
 
+      # Skip dispatched task sessions (results reflected in parent)
+      [[ "$topic" == Task:* ]] && continue
+
       # Check archived
       is_archived=false
       if _ccs_is_archived "$jsonl"; then
@@ -4322,10 +4325,20 @@ _ccs_checkpoint_collect() {
       local todo_count
       todo_count=$(echo "$todos_json" | jq 'length')
 
-      # Check blocked: inactive > 2h OR keyword match
+      # Check blocked: two-stage for inactive sessions
       local is_blocked=false
       if (( age_min > 120 )); then
-        is_blocked=true
+        # Naturally ended? (last message is assistant + no pending todos)
+        local last_type
+        last_type=$(jq -s '[.[] | select(.type == "assistant" or .type == "user")] | last | .type // ""' "$jsonl" 2>/dev/null)
+        if [ "$last_type" = '"assistant"' ] && (( todo_count == 0 )); then
+          # Treat as done
+          done_json=$(echo "$done_json" | jq -c --arg p "$proj_name" --arg t "$topic" --arg s "$sid" \
+            '. + [{project: $p, topic: $t, session: $s}]')
+          continue
+        else
+          is_blocked=true
+        fi
       else
         if jq -r 'select(.type == "user" and (.message.content | type == "string") and ((.isMeta // false) == false)) | .message.content' "$jsonl" 2>/dev/null \
           | tail -5 \
