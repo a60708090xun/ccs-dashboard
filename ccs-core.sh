@@ -110,8 +110,16 @@ _ccs_session_row() {
   # Sanitize for display (no truncation — let terminal wrap)
   topic=$(echo "$topic" | tr '\n\t' '  ')
 
-  # Output: project, ago (for sort), status, color, display line (no ANSI in sort keys)
-  printf "%s\t%d\t%s\t%s\t%-35s %-20s %-12s %s\n" "$project" "$ago" "$status" "$color" "$project" "$sid" "$ago_str" "$topic"
+  # Health badge: only for active/recent/idle sessions (not archived/stale)
+  # NOTE: _ccs_health_badge runs a jq pipeline per session — acceptable for MVP
+  #       (typically < 10 sessions) but consider caching for future optimization.
+  local badge=""
+  if [[ "$status" == "active" || "$status" == "recent" || "$status" == "idle" ]]; then
+    badge=$(_ccs_health_badge "$f")
+  fi
+
+  # Output: project, ago (for sort), status, color, display line (no ANSI in sort keys), badge
+  printf "%s\t%d\t%s\t%s\t%-35s %-20s %-12s %s\t%s\n" "$project" "$ago" "$status" "$color" "$project" "$sid" "$ago_str" "$topic" "$badge"
 }
 
 # ── Helper: resolve topic from JSONL (Happy title or first user msg) ──

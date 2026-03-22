@@ -19,6 +19,7 @@
 
 # ── Load core helpers and basic commands ──
 source "${BASH_SOURCE[0]%/*}/ccs-core.sh"
+source "${BASH_SOURCE[0]%/*}/ccs-health.sh"
 
 # ── ccs-status (ccs) — unified session dashboard ──
 ccs-status() {
@@ -1609,7 +1610,11 @@ _ccs_overview_md() {
     asst_ex=$(echo "$data" | jq -r '.last_exchange.assistant // ""')
     deadline_ctx=$(echo "$data" | jq -r '.deadline_context // ""')
 
-    printf '### %d. %s %s — %s\n' "$((i + 1))" "$emoji" "$project" "$topic"
+    # Health badge
+    local health_badge
+    health_badge=$(_ccs_health_badge_md "$f")
+
+    printf '### %d. %s %s — %s %s\n' "$((i + 1))" "$emoji" "$project" "$topic" "$health_badge"
     printf -- '- **Session:** %s | %s | %s\n' "$sid" "$project" "$ago_str"
 
     # Git status (brief)
@@ -1757,6 +1762,10 @@ _ccs_overview_json() {
       crash_confidence="${_crash_json[$full_sid]%%:*}"
     fi
 
+    # Health score
+    local health_json
+    health_json=$(_ccs_health_events "$f" | _ccs_health_score)
+
     # Write session object to temp file (one JSON per line)
     jq -nc \
       --arg sid "$sid" \
@@ -1770,6 +1779,7 @@ _ccs_overview_json() {
       --argjson data "$data" \
       --argjson c_int "$crash_interrupted" \
       --arg c_conf "$crash_confidence" \
+      --argjson health "$health_json" \
       '{
         session_id: $sid,
         project: $project,
@@ -1781,6 +1791,7 @@ _ccs_overview_json() {
         last_exchange: $data.last_exchange,
         todos: $data.todos,
         deadline_context: $data.deadline_context,
+        health: $health,
       }
       + if $c_int then {crash_interrupted: true, crash_confidence: $c_conf} else {} end
       ' >> "$sessions_tmp"
