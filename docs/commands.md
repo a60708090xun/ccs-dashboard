@@ -312,12 +312,12 @@ ccs-health <session-id-prefix>
 閾值預設值（可用環境變數覆蓋）：
 
 ```
-CCS_HEALTH_DUP_YELLOW=3   # 重複 tool call 黃色閾值
-CCS_HEALTH_DUP_RED=5      # 重複 tool call 紅色閾值
-CCS_HEALTH_DUR_YELLOW=60  # 持續時間黃色閾值（分鐘）
-CCS_HEALTH_DUR_RED=120    # 持續時間紅色閾值（分鐘）
-CCS_HEALTH_RND_YELLOW=20  # 輪數黃色閾值
-CCS_HEALTH_RND_RED=40     # 輪數紅色閾值
+CCS_HEALTH_DUP_YELLOW=3      # 重複 tool call 黃色閾值
+CCS_HEALTH_DUP_RED=5        # 重複 tool call 紅色閾值
+CCS_HEALTH_DURATION_YELLOW=2880  # 持續時間黃色閾值（分鐘）
+CCS_HEALTH_DURATION_RED=4320     # 持續時間紅色閾值（分鐘）
+CCS_HEALTH_ROUNDS_YELLOW=30     # 輪數黃色閾值
+CCS_HEALTH_ROUNDS_RED=60        # 輪數紅色閾值
 ```
 
 詳見 `ccs-health.sh`。
