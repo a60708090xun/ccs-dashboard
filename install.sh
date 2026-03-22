@@ -106,10 +106,16 @@ do_install() {
     fail "ccs-dashboard.sh not found in ${SCRIPT_DIR}"
     exit 1
   fi
+  if [ ! -f "${SCRIPT_DIR}/ccs-health.sh" ]; then
+    fail "ccs-health.sh not found in ${SCRIPT_DIR}"
+    exit 1
+  fi
   ok "Script files found"
 
   # Syntax check
-  if bash -n "${SCRIPT_DIR}/ccs-core.sh" && bash -n "${SCRIPT_DIR}/ccs-dashboard.sh"; then
+  if bash -n "${SCRIPT_DIR}/ccs-core.sh" \
+     && bash -n "${SCRIPT_DIR}/ccs-health.sh" \
+     && bash -n "${SCRIPT_DIR}/ccs-dashboard.sh"; then
     ok "Syntax check passed"
   else
     fail "Syntax error in scripts"

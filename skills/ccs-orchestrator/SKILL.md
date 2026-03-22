@@ -49,6 +49,7 @@ description: Cross-session work orchestrator — view all active Claude Code ses
 | refresh | r | 重新執行上一個 view |
 | checkpoint | cp | `ccs-checkpoint --md` — 進度快照（Done/WIP/Blocked） |
 | recap | rc | `ccs-recap --json` + AI analysis — daily work recap |
+| health | h | `ccs-health --md` — 顯示 session health report |
 
 ## Routing Rules
 
@@ -71,6 +72,7 @@ description: Cross-session work orchestrator — view all active Claude Code ses
 - 「refresh」「r」「重新整理」→ refresh（重跑上一個指令）
 - 「排優先順序」「今天該做什麼」「prioritize」→ 根據 JSON 資料做優先順序推斷
 - 「recap」「daily recap」「昨天做了什麼」「早安」「morning」「recap --project」→ recap
+- 「健康」「health」「退化」「degradation」→ `ccs-health --md`
 
 數字輸入（如 "1" "2" "3"）→ 在 overview 後等同 `detail N`，在 detail 後等同 `conversation N`。
 
@@ -93,6 +95,8 @@ description: Cross-session work orchestrator — view all active Claude Code ses
 | git view 後有 unpushed commits | 提醒使用者哪些專案有 unpushed |
 | 剛看完 checkpoint | 「匯出為 markdown 檔」「回到總覽」「看 git 狀態」 |
 | 剛看完 recap 分析 | 「匯出為 markdown 檔」「要升級到完整規劃嗎？」 |
+| overview 結果有 yellow/red session | 加入「查看 session health 詳情」 |
+| overview 結果有 red session | 加入「為 red session 生成 resume prompt」（導向 `ccs-resume-prompt`） |
 
 Options 數量控制在 3-6 個，不超過 7 個。
 
