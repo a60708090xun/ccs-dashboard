@@ -283,3 +283,41 @@ ccs-checkpoint --project          # 只看當前目錄的專案
 - **Blocked** — In Progress 中 inactive > 2h 或含 blocked/卡住 等 keyword
 
 時間戳持久化：每次預設區間執行後記錄時間，下次自動接續。
+
+## ccs-health
+
+Session health detection — 偵測注意力退化信號。
+掃描 active sessions，依三個指標評分並分級顯示。
+
+```bash
+# 全域掃描所有 active sessions
+ccs-health
+# Markdown 輸出
+ccs-health --md
+# JSON 輸出
+ccs-health --json
+# 指定 session（prefix 即可）
+ccs-health <session-id-prefix>
+```
+
+三個偵測指標：
+- **重複 tool call** — 同一檔案被 Read/Grep 多次
+- **Session 持續時間** — session 開始到現在的時長
+- **Prompt-response 輪數** — 對話來回次數
+
+分級：🟢 green（正常）/ 🟡 yellow（注意）/ 🔴 red（退化）
+
+整體等級取三項指標中最差的一項。
+
+閾值預設值（可用環境變數覆蓋）：
+
+```
+CCS_HEALTH_DUP_YELLOW=3   # 重複 tool call 黃色閾值
+CCS_HEALTH_DUP_RED=5      # 重複 tool call 紅色閾值
+CCS_HEALTH_DUR_YELLOW=60  # 持續時間黃色閾值（分鐘）
+CCS_HEALTH_DUR_RED=120    # 持續時間紅色閾值（分鐘）
+CCS_HEALTH_RND_YELLOW=20  # 輪數黃色閾值
+CCS_HEALTH_RND_RED=40     # 輪數紅色閾值
+```
+
+詳見 `ccs-health.sh`。
