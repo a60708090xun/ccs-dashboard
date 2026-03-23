@@ -901,3 +901,75 @@ _ccs_to_file() {
   fi
   return $__tofile_rc
 }
+
+# ── Shared helpers (used by multiple modules) ──
+
+_ccs_data_dir() {
+  local dir="${XDG_DATA_HOME:-$HOME/.local/share}/ccs-dashboard"
+  mkdir -p "$dir"
+  echo "$dir"
+}
+
+# Usage: _ccs_collect_sessions [-a|--all] out_files out_projects out_rows
+# Three nameref output arrays.
+_ccs_collect_sessions() {
+  local show_all=false
+  if [ "${1:-}" = "-a" ] || [ "${1:-}" = "--all" ]; then
+    show_all=true; shift
+  fi
+
+  local -n _out_files=$1 _out_projects=$2 _out_rows=$3
+
+  local sessions_dir="$HOME/.claude/projects"
+  [ ! -d "$sessions_dir" ] && return 0
+
+  local cutoff
+  cutoff=$(date -d "7 days ago" +%s 2>/dev/null || date -v-7d +%s 2>/dev/null)
+
+  while IFS= read -r f; do
+    local mod
+    mod=$(stat -c "%Y" "$f" 2>/dev/null)
+    [ "$mod" -lt "$cutoff" ] 2>/dev/null && continue
+
+    # Skip archived
+    if _ccs_is_archived "$f"; then
+      continue
+    fi
+
+    local dir sid_prefix
+    dir=$(basename "$(dirname "$f")")
+    sid_prefix=$(basename "$f" .jsonl | cut -c1-6)
+
+    # Skip subagent sessions unless --all
+    if ! $show_all; then
+      [[ "$dir" == *subagents* ]] && continue
+      [[ "$sid_prefix" == agent-* ]] && continue
+
+      # Skip sessions with no real user prompts
+      if ! grep -m1 '"type":"user"' "$f" 2>/dev/null \
+        | jq -e 'select((.isMeta // false) == false and (.message.content | type == "string") and (.message.content | test("^<local-command|^<command-name|^<system-") | not))' &>/dev/null; then
+        continue
+      fi
+    fi
+
+    local row
+    row=$(_ccs_session_row "$f")
+    [ -z "$row" ] && continue
+
+    _out_files+=("$f")
+    _out_projects+=("$dir")
+    _out_rows+=("$row")
+  done < <(find "$sessions_dir" -name "*.jsonl" -type f 2>/dev/null)
+}
+
+# Helper: format "N ago" from minutes
+_ccs_ago_str() {
+  local ago=$1
+  if [ "$ago" -lt 60 ]; then
+    printf '%dm ago' "$ago"
+  elif [ "$ago" -lt 1440 ]; then
+    printf '%dh ago' "$((ago / 60))"
+  else
+    printf '%dd ago' "$((ago / 1440))"
+  fi
+}
