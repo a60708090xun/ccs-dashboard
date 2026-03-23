@@ -40,15 +40,13 @@ HELP
   local handoff_dir="$HOME/docs/tmp/handoff"
   mkdir -p "$handoff_dir"
 
-  # Find matching project dir in .claude/projects
+  # Find matching project dir in .claude/projects (fuzzy match)
   local encoded_dir
-  encoded_dir=$(echo "$project_dir" | sed 's|/|-|g')
-  local session_dir="$projects_dir/$encoded_dir"
-
-  if [ ! -d "$session_dir" ]; then
+  encoded_dir=$(_ccs_find_project_dir "$project_dir") || {
     echo "No Claude sessions found for: $project_dir"
     return 1
-  fi
+  }
+  local session_dir="$projects_dir/$encoded_dir"
 
   # Collect open (non-archived) sessions from last 7 days, sorted by recency
   local open_sessions=()
@@ -278,7 +276,7 @@ HELP
   project=$(echo "$dir" | sed "s/^${_CCS_HOME_ENCODED}-*//; s/-/\//g")
   [ -z "$project" ] && project="~(home)"
   # Reconstruct project_dir from encoded dir name
-  project_dir=$(echo "$dir" | sed 's/-/\//g')
+  project_dir=$(_ccs_resolve_project_path "$dir" 2>/dev/null)
   [ ! -d "$project_dir" ] && project_dir=""
 
   # ── Git context (if project dir exists) ──

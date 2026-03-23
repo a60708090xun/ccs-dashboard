@@ -14,6 +14,7 @@ _CCS_HOME_ENCODED=$(echo "$HOME" | sed 's/\//-/g')
 #   _ccs_conversation_md    — filtered conversation pairs as markdown
 #   _ccs_recent_files_md    — recent file operations from JSONL
 #   _ccs_todos_md           — TodoWrite items from JSONL
+#   _ccs_find_project_dir    — find encoded project dir from filesystem path
 #   _ccs_resolve_project_path — resolve JSONL dir name → filesystem path
 #   _ccs_get_boot_epoch     — system boot time as epoch
 #   _ccs_detect_crash       — detect crash-interrupted sessions
@@ -158,9 +159,8 @@ _ccs_resolve_jsonl() {
       search_dir="$projects_dir"
     else
       local encoded_dir
-      encoded_dir=$(pwd | sed 's|/|-|g')
+      encoded_dir=$(_ccs_find_project_dir "$(pwd)") || return 1
       search_dir="$projects_dir/$encoded_dir"
-      [ ! -d "$search_dir" ] && return 1
     fi
     find "$search_dir" -maxdepth 2 -name "*.jsonl" ! -path "*/subagents/*" -printf '%T@\t%p\n' 2>/dev/null \
       | sort -rn | head -1 | cut -f2
@@ -711,6 +711,44 @@ _ccs_detect_crash() {
       _crash_out["$sid"]="high:non-reboot-idle"
     fi
   done
+}
+
+# ── Helper: find encoded project dir from filesystem path ──
+# Given an absolute filesystem path, find the matching directory in ~/.claude/projects/.
+# Claude Code's encoding is not a simple sed — underscores, dots, etc. get transformed.
+# Strategy: normalize both sides (replace /._  with -, collapse runs, strip leading -)
+# and compare. Returns the actual directory name (not full path).
+_ccs_find_project_dir() {
+  local target="$1"
+  local projects_dir="$HOME/.claude/projects"
+  [ -z "$target" ] && return 1
+
+  # 1. Try exact match (naive slash-to-dash)
+  local exact
+  exact=$(printf '%s' "$target" | sed 's|/|-|g')
+  [ -d "$projects_dir/$exact" ] && {
+    echo "$exact"
+    return 0
+  }
+
+  # 2. Fuzzy match: normalize both sides (replace /._  with -, collapse, strip leading -)
+  local norm_target
+  norm_target=$(printf '%s' "$target" \
+    | sed 's/[\/._]/-/g; s/--*/-/g; s/^-//')
+
+  local d name norm_name
+  for d in "$projects_dir"/*/; do
+    [ -d "$d" ] || continue
+    name="${d%/}"
+    name="${name##*/}"
+    norm_name=$(printf '%s' "$name" \
+      | sed 's/--*/-/g; s/^-//')
+    [ "$norm_name" = "$norm_target" ] && {
+      echo "$name"
+      return 0
+    }
+  done
+  return 1
 }
 
 # ── Helper: resolve JSONL directory name → actual filesystem path ──
