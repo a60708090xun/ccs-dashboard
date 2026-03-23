@@ -27,6 +27,10 @@ Phase 3 收尾: （worktree）→ 整理 → review → merge → 清理
 - **目錄位置：** 專案同層級，如 `<project-root>-<name>`
 - **Branch prefix：** `feat/`（新功能）、`fix/`（修復）、`refactor/`（重構）、`docs/`（文件）
 
+## 模組化架構
+
+程式碼按功能拆為模組，`ccs-dashboard.sh` 是唯一入口。新增或修改指令前，先讀 `docs/adr/001-modular-source-split.md` 確認歸屬模組與 checklist。
+
 ## GitHub Issue 語言規則
 
 - **標題：** 英文
