@@ -98,29 +98,27 @@ do_install() {
   echo
 
   # Check files exist
-  if [ ! -f "${SCRIPT_DIR}/ccs-core.sh" ]; then
-    fail "ccs-core.sh not found in ${SCRIPT_DIR}"
-    exit 1
-  fi
-  if [ ! -f "${SCRIPT_DIR}/ccs-dashboard.sh" ]; then
-    fail "ccs-dashboard.sh not found in ${SCRIPT_DIR}"
-    exit 1
-  fi
-  if [ ! -f "${SCRIPT_DIR}/ccs-health.sh" ]; then
-    fail "ccs-health.sh not found in ${SCRIPT_DIR}"
-    exit 1
-  fi
-  ok "Script files found"
+  local modules=(ccs-core.sh ccs-health.sh ccs-viewer.sh ccs-handoff.sh ccs-overview.sh ccs-feature.sh ccs-ops.sh ccs-dispatch.sh ccs-dashboard.sh)
+  local all_found=true
+  for mod in "${modules[@]}"; do
+    if [ ! -f "${SCRIPT_DIR}/${mod}" ]; then
+      fail "${mod} not found in ${SCRIPT_DIR}"
+      all_found=false
+    fi
+  done
+  if ! $all_found; then exit 1; fi
+  ok "Script files found (${#modules[@]} modules)"
 
   # Syntax check
-  if bash -n "${SCRIPT_DIR}/ccs-core.sh" \
-     && bash -n "${SCRIPT_DIR}/ccs-health.sh" \
-     && bash -n "${SCRIPT_DIR}/ccs-dashboard.sh"; then
-    ok "Syntax check passed"
-  else
-    fail "Syntax error in scripts"
-    exit 1
-  fi
+  local syntax_ok=true
+  for mod in "${modules[@]}"; do
+    if ! bash -n "${SCRIPT_DIR}/${mod}"; then
+      fail "Syntax error in ${mod}"
+      syntax_ok=false
+    fi
+  done
+  if ! $syntax_ok; then exit 1; fi
+  ok "Syntax check passed"
 
   # Add to .bashrc (idempotent)
   if is_installed; then
