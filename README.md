@@ -198,11 +198,18 @@ Data source: JSONL session logs under `~/.claude/projects/`.
 ## File structure
 
 ```
-ccs-core.sh                      # Helpers + basic commands (sessions/active/cleanup)
-ccs-dashboard.sh                 # Sources ccs-core.sh + advanced commands
-install.sh                       # Installer (deps check + bashrc + skill symlink)
-skills/ccs-orchestrator/SKILL.md # Claude Code skill — primary interface
-docs/commands.md                 # Detailed CLI command reference
+ccs-core.sh       # Shared helpers + basic commands (sessions/active/cleanup)
+ccs-dashboard.sh   # Entry point — sources all modules + ccs-status, ccs-pick
+ccs-viewer.sh      # ccs-html, ccs-details
+ccs-handoff.sh     # ccs-handoff, ccs-resume-prompt
+ccs-overview.sh    # ccs-overview + render helpers
+ccs-feature.sh     # Feature clustering + ccs-feature, ccs-tag
+ccs-ops.sh         # ccs-crash, ccs-recap, ccs-checkpoint
+ccs-health.sh      # Session health scoring
+ccs-dispatch.sh    # ccs-dispatch, ccs-jobs
+install.sh         # Installer (deps check + bashrc + skill symlink)
+skills/            # Claude Code skill — primary interface
+docs/              # CLI command reference + archived design docs
 ```
 
 ## License
