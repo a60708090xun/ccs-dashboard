@@ -882,3 +882,22 @@ _ccs_friendly_basename() {
   # Final fallback: strip home prefix from encoded, take last hyphen segment
   echo "${encoded##*-}"
 }
+
+# ── Helper: redirect command stdout to file (for agent context efficiency) ──
+# Usage: _ccs_to_file <path> <cmd> [args...]
+# stdout → file, stderr → terminal (visible in Bash tool result)
+# Prints one-line confirmation to stdout so agent knows the path.
+_CCS_CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/ccs-dashboard"
+
+_ccs_to_file() {
+  local __tofile_dest="$1"; shift
+  mkdir -p "$(dirname "$__tofile_dest")"
+  "$@" > "$__tofile_dest"
+  local __tofile_rc=$?
+  if [ $__tofile_rc -eq 0 ]; then
+    echo "Output written to: $__tofile_dest"
+  else
+    echo "Command failed (exit $__tofile_rc). Partial output may be in: $__tofile_dest" >&2
+  fi
+  return $__tofile_rc
+}

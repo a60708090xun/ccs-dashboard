@@ -1542,7 +1542,9 @@ _ccs_overview_md() {
     local boot_epoch
     boot_epoch=$(_ccs_get_boot_epoch) || boot_epoch=0
     local boot_str="unknown"
-    [ "$boot_epoch" -gt 0 ] && boot_str=$(date -d "@$boot_epoch" '+%H:%M')
+    if [ "$boot_epoch" -gt 0 ]; then
+      boot_str=$(date -d "@$boot_epoch" '+%Y-%m-%d %H:%M:%S %z')
+    fi
     echo ""
     echo "> **偵測到 ${crash_high} 個 crash-interrupted session**（系統重開機 ${boot_str}）"
     echo "> 執行 \`ccs-crash\` 查看詳情，或 \`ccs-crash --all\` 含低信心結果"
