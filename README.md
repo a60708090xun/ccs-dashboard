@@ -115,6 +115,8 @@ ccs-dashboard has two layers:
 | `ccs-checkpoint` | Lightweight progress snapshot: Done / In Progress / Blocked |
 | `ccs-handoff` | Generate handoff notes with conversation summary, git, file ops |
 | `ccs-health` | Session health detection — 偵測注意力退化信號 |
+| `ccs-dispatch` | Dispatch a task to a new Claude Code session (async or sync) |
+| `ccs-jobs` | View dispatch job history and results |
 
 All commands support both **Terminal ANSI** and **Markdown** (`--md`) output modes.
 
