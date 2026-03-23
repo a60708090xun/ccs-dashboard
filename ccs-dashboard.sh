@@ -16,10 +16,17 @@
 #   ccs-resume-prompt   — generate bootstrap prompt for new session
 #   ccs-overview        — cross-session work overview
 #   ccs-checkpoint      — lightweight progress snapshot (Done / In Progress / Blocked)
+#
+# Commands (from ccs-dispatch.sh):
+#   ccs-dispatch        — dispatch a task to a new Claude Code session
+#   ccs-jobs            — list and monitor dispatched jobs
 
 # ── Load core helpers and basic commands ──
 source "${BASH_SOURCE[0]%/*}/ccs-core.sh"
 source "${BASH_SOURCE[0]%/*}/ccs-health.sh"
+
+# ── Load dispatch module ──
+source "${BASH_SOURCE[0]%/*}/ccs-dispatch.sh"
 
 # ── ccs-status (ccs) — unified session dashboard ──
 ccs-status() {
@@ -1651,6 +1658,13 @@ _ccs_overview_md() {
         [ -n "$deadline_ctx" ] && urgency="🔴 $deadline_ctx"
         all_todo_lines+=("$(printf '%s\t%s\t%s\t%s' "$t_content" "$project" "$t_status" "$urgency")")
       done < <(echo "$data" | jq -r '.todos[]? | [.content, .status] | @tsv')
+
+      # Suggested action (first pending todo)
+      local first_pending
+      first_pending=$(echo "$data" | jq -r '[.todos[]? | select(.status == "pending")] | .[0].content // ""')
+      if [ -n "$first_pending" ]; then
+        printf -- '> Suggested: dispatch "%s"\n' "${first_pending:0:80}"
+      fi
     else
       printf -- '- **Todos:** (none)\n'
     fi
@@ -1797,6 +1811,18 @@ _ccs_overview_json() {
       }
       + if $c_int then {crash_interrupted: true, crash_confidence: $c_conf} else {} end
       ' >> "$sessions_tmp"
+
+    # Add suggested_actions to the session line just appended
+    local last_session
+    last_session=$(tail -1 "$sessions_tmp")
+    local actions
+    actions=$(_ccs_dispatch_suggest_actions "$last_session")
+    local augmented
+    augmented=$(echo "$last_session" | jq --argjson sa "$actions" '. + {suggested_actions: $sa}' 2>/dev/null)
+    if [ -n "$augmented" ]; then
+      sed -i '$ d' "$sessions_tmp"
+      echo "$augmented" >> "$sessions_tmp"
+    fi
 
     # Collect pending todos
     echo "$data" | jq -c --arg proj "$project" '.todos[]? | select(.status != "completed") | {content, status, project: $proj}' >> "$todos_tmp"
@@ -4153,6 +4179,30 @@ _ccs_recap_md() {
     echo ""
     echo "$json" | jq -r '.projects[].deadlines[] |
       "- **" + .session_topic + ":** \"" + .text + "\""'
+    echo ""
+  fi
+
+  # Suggested Next Steps (dispatch integration)
+  local pending_projects
+  pending_projects=$(echo "$json" | jq -r '
+    [.projects[] |
+      select(
+        [.sessions[].pending_items[]?] | length > 0
+      ) |
+      {
+        name: .name,
+        count: ([.sessions[].pending_items[]?] | length)
+      }
+    ] |
+    if length > 0 then
+      .[] |
+      "- **\(.name):** \(.count) pending TODOs"
+    else empty end
+  ')
+  if [ -n "$pending_projects" ]; then
+    echo "## Suggested Next Steps"
+    echo ""
+    echo "$pending_projects"
     echo ""
   fi
 }

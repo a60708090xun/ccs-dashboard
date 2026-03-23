@@ -50,6 +50,9 @@ description: Cross-session work orchestrator — view all active Claude Code ses
 | checkpoint | cp | `ccs-checkpoint --md` — 進度快照（Done/WIP/Blocked） |
 | recap | rc | `ccs-recap --json` + AI analysis — daily work recap |
 | health | h | `ccs-health --md` — 顯示 session health report |
+| dispatch [dir] "task" | dp | `ccs-dispatch --project <dir> "task"` — 派工到新 session |
+| jobs | j | `ccs-jobs` — dispatch 任務歷史 |
+| job <id> | | `ccs-jobs <id>` — 單筆結果 |
 
 ## Routing Rules
 
@@ -73,6 +76,8 @@ description: Cross-session work orchestrator — view all active Claude Code ses
 - 「排優先順序」「今天該做什麼」「prioritize」→ 根據 JSON 資料做優先順序推斷
 - 「recap」「daily recap」「昨天做了什麼」「早安」「morning」「recap --project」→ recap
 - 「健康」「health」「退化」「degradation」→ `ccs-health --md`
+- 「派工」「dispatch」「跑一下」→ dispatch
+- 「任務狀態」「dispatch 結果」「jobs」→ jobs
 
 數字輸入（如 "1" "2" "3"）→ 在 overview 後等同 `detail N`，在 detail 後等同 `conversation N`。
 
