@@ -321,3 +321,58 @@ CCS_HEALTH_ROUNDS_RED=60        # 輪數紅色閾值
 ```
 
 詳見 `ccs-health.sh`。
+
+## ccs-dispatch
+
+派工到新 Claude Code session。混合模式：預設 async（nohup detach），可選 sync（blocking）。
+
+```bash
+# Async（預設）— 立即回傳 job-id
+ccs-dispatch --project ~/my-project \
+  "fix lint warnings"
+
+# Sync — blocking 等結果（適合短任務）
+ccs-dispatch --sync --project ~/my-project \
+  "list all TODO comments"
+
+# 注入 git context
+ccs-dispatch --context \
+  --project ~/my-project \
+  "complete pending TODOs"
+
+# 自訂 timeout
+ccs-dispatch --timeout 300 \
+  --project ~/my-project \
+  "run full test suite"
+```
+
+參數：
+
+```
+--sync         Blocking 等結果（預設 timeout 120s）
+--async        預設模式（nohup detach，timeout 600s）
+--context      注入目標專案 git 狀態
+--timeout <s>  覆蓋預設 timeout
+--project <d>  目標專案目錄（必填）
+```
+
+可配置環境變數：
+
+```
+CCS_DISPATCH_SYNC_TIMEOUT=120     # sync 預設 timeout
+CCS_DISPATCH_TIMEOUT=600          # async 預設 timeout
+CCS_DISPATCH_RESULT_TTL_DAYS=7    # 結果檔保留天數
+CCS_DISPATCH_MAX_CONCURRENT_WARN=3  # 並行 job 警告閾值
+```
+
+結果存放：`${XDG_DATA_HOME:-~/.local/share}/ccs-dashboard/dispatch/`
+
+## ccs-jobs
+
+查看 dispatch 任務歷史與結果。
+
+```bash
+ccs-jobs              # 最近 20 筆
+ccs-jobs --all        # 全部
+ccs-jobs <job-id>     # 單筆詳細結果（顯示 .md）
+```
