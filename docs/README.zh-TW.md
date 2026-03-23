@@ -168,11 +168,18 @@ Terminal          Markdown    狀態        說明
 ## 檔案結構
 
 ```
-ccs-core.sh                      # helpers + 基礎指令 (sessions/active/cleanup)
-ccs-dashboard.sh                 # source ccs-core.sh + 進階指令
-install.sh                       # 安裝腳本（依賴檢查 + bashrc + skill symlink）
-skills/ccs-orchestrator/SKILL.md # Claude Code skill — 主要介面
-docs/commands.md                 # CLI 指令詳細參考
+ccs-core.sh       # 共用 helper + 基礎指令 (sessions/active/cleanup)
+ccs-dashboard.sh   # 入口 — source 所有模組 + ccs-status, ccs-pick
+ccs-viewer.sh      # ccs-html, ccs-details
+ccs-handoff.sh     # ccs-handoff, ccs-resume-prompt
+ccs-overview.sh    # ccs-overview + render helpers
+ccs-feature.sh     # Feature clustering + ccs-feature, ccs-tag
+ccs-ops.sh         # ccs-crash, ccs-recap, ccs-checkpoint
+ccs-health.sh      # Session health 評分
+ccs-dispatch.sh    # ccs-dispatch, ccs-jobs
+install.sh         # 安裝腳本（依賴檢查 + bashrc + skill symlink）
+skills/            # Claude Code skill — 主要介面
+docs/              # CLI 指令參考 + 歸檔設計文件
 ```
 
 ## 授權
