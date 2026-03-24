@@ -123,7 +123,7 @@ Options 數量控制在 3-6 個，不超過 7 個。
    - in_progress 優先於 pending
    - 最近活躍的 session 優先於閒置的
 5. **Refresh：** 使用者說「refresh」「r」「重新整理」→ 重跑上一個指令。靠 conversation context 記住上一個 view。
-6. **輸出簡潔：** 直接輸出 `--md` 結果，不加額外解釋或 wrapper。只在有 actionable 資訊時加簡短備註（如「有 2 個 unpushed commit」）。
+6. **原文輸出，禁止摘要：** `Read` 檔案後必須**逐字貼出**完整 `--md` 內容，禁止刪減、改寫、或用自己的話重新整理。即使內容很長也不得省略。只允許在原文**之後**加一行 actionable 備註（如「有 2 個 unpushed commit」）。
 7. **Tool output 必須呈現在 agent response：** Bash tool 的 output 對使用者是收合的，使用者不會展開查看。所有 ccs-* 指令必須透過 `_ccs_to_file` 執行，將 stdout 導到 `$_CCS_CACHE_DIR/<name>.md`，再用 `Read` 讀取檔案內容貼在 agent response 中。範例：
    ```bash
    source ~/tools/ccs-dashboard/ccs-dashboard.sh && \
