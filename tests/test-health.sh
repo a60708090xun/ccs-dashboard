@@ -51,15 +51,71 @@ assert_json_field "last_ts" "$result" '.last_ts' "2026-03-21T09:11:00Z"
 # prompt_count: 3 user messages (isMeta excluded)
 assert_json_field "prompt_count" "$result" '.prompt_count' "3"
 
-# tool_reads: /src/main.sh=3, /src/util.sh=1
-assert_json_field "tool_reads main.sh" "$result" '.tool_reads["/src/main.sh"]' "3"
-assert_json_field "tool_reads util.sh" "$result" '.tool_reads["/src/util.sh"]' "1"
-assert_json_field "tool_reads count" "$result" '.tool_reads | length' "2"
+# tool_reads: main.sh read 3x (no edit/compact) → 2 dup × half = 2, ÷2 = 1
+# util.sh read 1x → no dup (not in output)
+assert_json_field "tool_reads main.sh" "$result" '.tool_reads["/src/main.sh"]' "1"
+assert_json_field "tool_reads count" "$result" '.tool_reads | length' "1"
 
-# tool_greps: TODO=2, FIXME=1
-assert_json_field "tool_greps TODO" "$result" '.tool_greps["TODO"]' "2"
-assert_json_field "tool_greps FIXME" "$result" '.tool_greps["FIXME"]' "1"
-assert_json_field "tool_greps count" "$result" '.tool_greps | length' "2"
+# tool_greps: TODO 2x (no compact) → 1 dup × half = 1, ÷2 = 0 (not in output)
+# FIXME 1x → no dup (not in output)
+assert_json_field "tool_greps count" "$result" '.tool_greps | length' "0"
+
+# ── Smart dup: Read-Edit-Read exclusion ──
+echo ""
+echo "=== Smart dup: Read-Edit-Read exclusion ==="
+RER_FIXTURE="$FIXTURE_DIR/rer00001-read-edit-read.jsonl"
+cat > "$RER_FIXTURE" <<'JSONL'
+{"type":"user","message":{"content":"refactor"},"timestamp":"2026-03-21T10:00:00Z"}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/src/app.sh"}}]},"timestamp":"2026-03-21T10:01:00Z"}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Edit","input":{"file_path":"/src/app.sh","old_string":"x","new_string":"y"}}]},"timestamp":"2026-03-21T10:02:00Z"}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/src/app.sh"}}]},"timestamp":"2026-03-21T10:03:00Z"}
+JSONL
+
+rer_result=$(_ccs_health_events "$RER_FIXTURE")
+assert_json_field "rer tool_reads count" "$rer_result" '.tool_reads | length' "0"
+
+# ── Smart dup: different offset exclusion ──
+echo ""
+echo "=== Smart dup: different offset ==="
+OFF_FIXTURE="$FIXTURE_DIR/off00001-offset.jsonl"
+cat > "$OFF_FIXTURE" <<'JSONL'
+{"type":"user","message":{"content":"read sections"},"timestamp":"2026-03-21T10:00:00Z"}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/src/big.sh","offset":0,"limit":50}}]},"timestamp":"2026-03-21T10:01:00Z"}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/src/big.sh","offset":100,"limit":50}}]},"timestamp":"2026-03-21T10:02:00Z"}
+JSONL
+
+off_result=$(_ccs_health_events "$OFF_FIXTURE")
+assert_json_field "offset tool_reads count" "$off_result" '.tool_reads | length' "0"
+
+# ── Smart dup: post-compaction full weight ──
+echo ""
+echo "=== Smart dup: post-compaction ==="
+CMP_FIXTURE="$FIXTURE_DIR/cmp00001-compact.jsonl"
+cat > "$CMP_FIXTURE" <<'JSONL'
+{"type":"user","message":{"content":"work"},"timestamp":"2026-03-21T10:00:00Z"}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/src/core.sh"}}]},"timestamp":"2026-03-21T10:01:00Z"}
+{"type":"system","subtype":"compact_boundary","content":"Conversation compacted","timestamp":"2026-03-21T10:02:00Z"}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/src/core.sh"}}]},"timestamp":"2026-03-21T10:03:00Z"}
+JSONL
+
+cmp_result=$(_ccs_health_events "$CMP_FIXTURE")
+# 1 post-compaction dup × 2 = 2, ÷2 = 1
+assert_json_field "compact tool_reads" "$cmp_result" '.tool_reads["/src/core.sh"]' "1"
+
+# ── Smart dup: no-compaction half weight ──
+echo ""
+echo "=== Smart dup: no-compaction half weight ==="
+HALF_FIXTURE="$FIXTURE_DIR/half0001-half.jsonl"
+cat > "$HALF_FIXTURE" <<'JSONL'
+{"type":"user","message":{"content":"work"},"timestamp":"2026-03-21T10:00:00Z"}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/src/lib.sh"}}]},"timestamp":"2026-03-21T10:01:00Z"}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/src/lib.sh"}}]},"timestamp":"2026-03-21T10:02:00Z"}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/src/lib.sh"}}]},"timestamp":"2026-03-21T10:03:00Z"}
+JSONL
+
+half_result=$(_ccs_health_events "$HALF_FIXTURE")
+# 3 reads, 2 dups × 1 (half) = 2, ÷2 = 1
+assert_json_field "half tool_reads" "$half_result" '.tool_reads["/src/lib.sh"]' "1"
 
 # ── Edge case: empty JSONL ──
 echo ""
@@ -206,18 +262,34 @@ cat > "$GREEN_FIXTURE" <<'JSONL'
 {"type":"assistant","message":{"content":[{"type":"text","text":"hi"}]},"timestamp":"2026-03-21T09:05:00Z"}
 JSONL
 
-# Fixture: yellow session (dup_tool = 3, hits yellow threshold)
+# Fixture: yellow session (post-compaction dups → dup_val=3, hits yellow)
 YELLOW_FIXTURE="$FIXTURE_DIR/eeff0011-yellow.jsonl"
 cat > "$YELLOW_FIXTURE" <<'JSONL'
 {"type":"user","message":{"content":"start"},"timestamp":"2026-03-21T09:00:00Z"}
-{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/x"}},{"type":"tool_use","name":"Read","input":{"file_path":"/x"}},{"type":"tool_use","name":"Read","input":{"file_path":"/x"}}]},"timestamp":"2026-03-21T09:05:00Z"}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/x"}}]},"timestamp":"2026-03-21T09:01:00Z"}
+{"type":"system","subtype":"compact_boundary","content":"Conversation compacted","timestamp":"2026-03-21T09:02:00Z"}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/x"}}]},"timestamp":"2026-03-21T09:03:00Z"}
+{"type":"system","subtype":"compact_boundary","content":"Conversation compacted","timestamp":"2026-03-21T09:04:00Z"}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/x"}}]},"timestamp":"2026-03-21T09:05:00Z"}
+{"type":"system","subtype":"compact_boundary","content":"Conversation compacted","timestamp":"2026-03-21T09:06:00Z"}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/x"}}]},"timestamp":"2026-03-21T09:07:00Z"}
 JSONL
 
-# Fixture: red session (dup_tool >= 5)
+# Fixture: red session (post-compaction dups → dup_val=5, hits red)
 RED_FIXTURE="$FIXTURE_DIR/22334455-red.jsonl"
 cat > "$RED_FIXTURE" <<'JSONL'
 {"type":"user","message":{"content":"read"},"timestamp":"2026-03-21T09:00:00Z"}
-{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/a"}},{"type":"tool_use","name":"Read","input":{"file_path":"/a"}},{"type":"tool_use","name":"Read","input":{"file_path":"/a"}},{"type":"tool_use","name":"Read","input":{"file_path":"/a"}},{"type":"tool_use","name":"Read","input":{"file_path":"/a"}}]},"timestamp":"2026-03-21T09:01:00Z"}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/a"}}]},"timestamp":"2026-03-21T09:01:00Z"}
+{"type":"system","subtype":"compact_boundary","content":"Conversation compacted","timestamp":"2026-03-21T09:02:00Z"}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/a"}}]},"timestamp":"2026-03-21T09:03:00Z"}
+{"type":"system","subtype":"compact_boundary","content":"Conversation compacted","timestamp":"2026-03-21T09:04:00Z"}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/a"}}]},"timestamp":"2026-03-21T09:05:00Z"}
+{"type":"system","subtype":"compact_boundary","content":"Conversation compacted","timestamp":"2026-03-21T09:06:00Z"}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/a"}}]},"timestamp":"2026-03-21T09:07:00Z"}
+{"type":"system","subtype":"compact_boundary","content":"Conversation compacted","timestamp":"2026-03-21T09:08:00Z"}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/a"}}]},"timestamp":"2026-03-21T09:09:00Z"}
+{"type":"system","subtype":"compact_boundary","content":"Conversation compacted","timestamp":"2026-03-21T09:10:00Z"}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/a"}}]},"timestamp":"2026-03-21T09:11:00Z"}
 JSONL
 
 assert_badge() {
@@ -282,18 +354,34 @@ cat > "$ALPHA_GREEN" <<'JSONL'
 {"type":"assistant","message":{"content":[{"type":"text","text":"Hi!"}]},"timestamp":"2026-03-21T09:05:00Z"}
 JSONL
 
-# Red session in project-beta (dup_tool >= 5)
+# Red session in project-beta (post-compaction dups → dup_val=5)
 BETA_RED="$MOCK_PROJECTS/-pool2-testuser-project-beta/bbbb2222-0000-0000-0000-000000000002.jsonl"
 cat > "$BETA_RED" <<'JSONL'
 {"type":"user","message":{"content":"read lots"},"timestamp":"2026-03-21T08:00:00Z"}
-{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/x"}},{"type":"tool_use","name":"Read","input":{"file_path":"/x"}},{"type":"tool_use","name":"Read","input":{"file_path":"/x"}},{"type":"tool_use","name":"Read","input":{"file_path":"/x"}},{"type":"tool_use","name":"Read","input":{"file_path":"/x"}},{"type":"tool_use","name":"Read","input":{"file_path":"/x"}}]},"timestamp":"2026-03-21T08:01:00Z"}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/x"}}]},"timestamp":"2026-03-21T08:01:00Z"}
+{"type":"system","subtype":"compact_boundary","content":"Conversation compacted","timestamp":"2026-03-21T08:02:00Z"}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/x"}}]},"timestamp":"2026-03-21T08:03:00Z"}
+{"type":"system","subtype":"compact_boundary","content":"Conversation compacted","timestamp":"2026-03-21T08:04:00Z"}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/x"}}]},"timestamp":"2026-03-21T08:05:00Z"}
+{"type":"system","subtype":"compact_boundary","content":"Conversation compacted","timestamp":"2026-03-21T08:06:00Z"}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/x"}}]},"timestamp":"2026-03-21T08:07:00Z"}
+{"type":"system","subtype":"compact_boundary","content":"Conversation compacted","timestamp":"2026-03-21T08:08:00Z"}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/x"}}]},"timestamp":"2026-03-21T08:09:00Z"}
+{"type":"system","subtype":"compact_boundary","content":"Conversation compacted","timestamp":"2026-03-21T08:10:00Z"}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/x"}}]},"timestamp":"2026-03-21T08:11:00Z"}
 JSONL
 
-# Yellow session in project-alpha (dup_tool = 3)
+# Yellow session in project-alpha (post-compaction dups → dup_val=3)
 ALPHA_YELLOW="$MOCK_PROJECTS/-pool2-testuser-project-alpha/cccc3333-0000-0000-0000-000000000003.jsonl"
 cat > "$ALPHA_YELLOW" <<'JSONL'
 {"type":"user","message":{"content":"long session"},"timestamp":"2026-03-21T07:00:00Z"}
-{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/y"}},{"type":"tool_use","name":"Read","input":{"file_path":"/y"}},{"type":"tool_use","name":"Read","input":{"file_path":"/y"}}]},"timestamp":"2026-03-21T07:05:00Z"}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/y"}}]},"timestamp":"2026-03-21T07:01:00Z"}
+{"type":"system","subtype":"compact_boundary","content":"Conversation compacted","timestamp":"2026-03-21T07:02:00Z"}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/y"}}]},"timestamp":"2026-03-21T07:03:00Z"}
+{"type":"system","subtype":"compact_boundary","content":"Conversation compacted","timestamp":"2026-03-21T07:04:00Z"}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/y"}}]},"timestamp":"2026-03-21T07:05:00Z"}
+{"type":"system","subtype":"compact_boundary","content":"Conversation compacted","timestamp":"2026-03-21T07:06:00Z"}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/y"}}]},"timestamp":"2026-03-21T07:07:00Z"}
 JSONL
 
 # Touch files to make them appear recent

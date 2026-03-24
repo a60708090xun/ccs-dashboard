@@ -13,21 +13,28 @@ CCS_HEALTH_ROUNDS_RED="${CCS_HEALTH_ROUNDS_RED:-60}"
 # ── Helper: extract health events from a JSONL session file ──
 # Usage: _ccs_health_events /path/to/SESSION.jsonl
 # Output: JSON object with session_id, first_ts, last_ts, prompt_count, tool_reads, tool_greps
+#
+# Smart duplicate counting (GH#24):
+#   Rule 1: Different offset/limit on same file → not a duplicate (composite key)
+#   Rule 2: Read-Edit-Read on same file → excused (not counted)
+#   Rule 3: Post-compaction re-read → full weight (+2); otherwise half weight (+1)
+#   Final: effective_dup = floor(weighted_sum / 2)
 _ccs_health_events() {
   local f="$1"
   local sid
   sid=$(basename "$f" .jsonl | cut -c1-8)
 
   jq -s --arg sid "$sid" '
-    # Build initial accumulator
     reduce .[] as $line (
       {
-        first_ts: null,
-        last_ts: null,
-        prompt_count: 0,
-        tool_reads: {},
-        tool_greps: {}
+        first_ts: null, last_ts: null, prompt_count: 0,
+        tool_reads: {}, tool_greps: {},
+        _seq: 0, _last_read_seq: {}, _last_edit_seq: {},
+        _compact_seqs: [], _last_grep_seq: {},
+        _dup_reads_x2: {}, _dup_greps_x2: {}
       };
+
+      ._seq += 1 |
 
       # Track timestamps
       (if $line.timestamp then
@@ -35,30 +42,84 @@ _ccs_health_events() {
         | .last_ts = $line.timestamp
       else . end)
 
-      # Count user prompts (type=user, content is string, not isMeta)
+      # Count user prompts
       | (if $line.type == "user"
             and ($line.isMeta | not)
             and ($line.message.content | type) == "string"
          then .prompt_count += 1
          else . end)
 
-      # Count tool_use from assistant messages
-      | (if $line.type == "assistant"
+      # Detect compaction events
+      | (if $line.type == "system" and $line.subtype == "compact_boundary"
+         then ._compact_seqs += [._seq]
+         else . end)
+
+      # Process tool_use from assistant messages
+      | ._seq as $cur_seq |
+        (if $line.type == "assistant"
             and ($line.message.content | type) == "array"
          then
            reduce ($line.message.content[] |
                    select(.type == "tool_use")) as $tool (.;
-             if $tool.name == "Read" and $tool.input.file_path then
-               .tool_reads[$tool.input.file_path] =
-                 ((.tool_reads[$tool.input.file_path] // 0) + 1)
+
+             # Track Edit/Write for Read-Edit-Read exclusion
+             if ($tool.name == "Edit" or $tool.name == "Write")
+                and $tool.input.file_path
+             then ._last_edit_seq[$tool.input.file_path] = $cur_seq
+
+             # Smart Read counting
+             elif $tool.name == "Read" and $tool.input.file_path then
+               $tool.input.file_path as $fp |
+               ($fp + "|" + ($tool.input.offset // "" | tostring)
+                    + "|" + ($tool.input.limit // "" | tostring)) as $key |
+               if ._last_read_seq[$key] then
+                 ._last_read_seq[$key] as $prev |
+                 if (._last_edit_seq[$fp] // 0) > $prev
+                    and (._last_edit_seq[$fp] // 0) < $cur_seq
+                 then ._last_read_seq[$key] = $cur_seq
+                 else
+                   ([._compact_seqs[] | select(. > $prev and . < $cur_seq)]
+                    | length > 0) as $has_compact |
+                   ._last_read_seq[$key] = $cur_seq |
+                   if $has_compact then
+                     ._dup_reads_x2[$fp] = ((._dup_reads_x2[$fp] // 0) + 2)
+                   else
+                     ._dup_reads_x2[$fp] = ((._dup_reads_x2[$fp] // 0) + 1)
+                   end
+                 end
+               else ._last_read_seq[$key] = $cur_seq
+               end
+
+             # Smart Grep counting
              elif $tool.name == "Grep" and $tool.input.pattern then
-               .tool_greps[$tool.input.pattern] =
-                 ((.tool_greps[$tool.input.pattern] // 0) + 1)
-             else .
-             end
+               $tool.input.pattern as $pat |
+               if ._last_grep_seq[$pat] then
+                 ._last_grep_seq[$pat] as $prev |
+                 ([._compact_seqs[] | select(. > $prev and . < $cur_seq)]
+                  | length > 0) as $has_compact |
+                 ._last_grep_seq[$pat] = $cur_seq |
+                 if $has_compact then
+                   ._dup_greps_x2[$pat] = ((._dup_greps_x2[$pat] // 0) + 2)
+                 else
+                   ._dup_greps_x2[$pat] = ((._dup_greps_x2[$pat] // 0) + 1)
+                 end
+               else ._last_grep_seq[$pat] = $cur_seq
+               end
+
+             else . end
            )
          else . end)
     )
+    # Replace raw counts with effective dup counts
+    | .tool_reads = (._dup_reads_x2
+        | with_entries(.value = ((.value / 2) | floor))
+        | with_entries(select(.value > 0)))
+    | .tool_greps = (._dup_greps_x2
+        | with_entries(.value = ((.value / 2) | floor))
+        | with_entries(select(.value > 0)))
+    | del(._seq, ._last_read_seq, ._last_edit_seq,
+          ._compact_seqs, ._last_grep_seq,
+          ._dup_reads_x2, ._dup_greps_x2)
     | .session_id = $sid
   ' "$f"
 }
