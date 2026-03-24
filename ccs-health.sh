@@ -9,6 +9,7 @@ CCS_HEALTH_DURATION_YELLOW="${CCS_HEALTH_DURATION_YELLOW:-2880}"
 CCS_HEALTH_DURATION_RED="${CCS_HEALTH_DURATION_RED:-4320}"
 CCS_HEALTH_ROUNDS_YELLOW="${CCS_HEALTH_ROUNDS_YELLOW:-30}"
 CCS_HEALTH_ROUNDS_RED="${CCS_HEALTH_ROUNDS_RED:-60}"
+CCS_HEALTH_STALE_DAYS="${CCS_HEALTH_STALE_DAYS:-7}"
 
 # ── Helper: extract health events from a JSONL session file ──
 # Usage: _ccs_health_events /path/to/SESSION.jsonl
@@ -236,25 +237,31 @@ _ccs_health_badge_md() {
 # ── ccs-health — session health report command ──
 # Usage: ccs-health [session-id-prefix] [--md] [--json]
 ccs-health() {
-  local prefix="" fmt="terminal"
+  local prefix="" fmt="terminal" show_all=false
   while [ $# -gt 0 ]; do
     case "$1" in
       --md)   fmt="md"; shift ;;
       --json) fmt="json"; shift ;;
+      --all)  show_all=true; shift ;;
       --help|-h)
         cat <<'HELP'
 ccs-health — session health report
 
-Usage: ccs-health [prefix] [--md|--json]
+Usage: ccs-health [prefix] [--md|--json] [--all]
 
 Options:
   prefix    Session ID prefix to filter
   --md      Markdown output
   --json    JSON output
+  --all     Show all sessions (include stale)
   --help    Show this help
 
+Sessions older than $CCS_HEALTH_STALE_DAYS days
+(default 7) are shown as a stale summary.
+Use --all to expand details.
+
 Indicators:
-  dup_tool   Max duplicate tool calls
+  dup_tool   Max effective duplicate tool calls
   duration   Session duration (minutes)
   rounds     User prompt count
 HELP
@@ -326,13 +333,24 @@ HELP
     last_ts=$(echo "$events" \
       | jq -r '.last_ts // ""')
 
-    # Enrich scored JSON with project/topic/last_ts
+    # Determine if session is stale
+    local is_stale=false
+    if [ -n "$last_ts" ]; then
+      local last_epoch now_epoch stale_secs
+      last_epoch=$(date -d "${last_ts%.*}Z" +%s 2>/dev/null || echo 0)
+      now_epoch=$(date +%s)
+      stale_secs=$((CCS_HEALTH_STALE_DAYS * 86400))
+      [ $((now_epoch - last_epoch)) -gt $stale_secs ] && is_stale=true
+    fi
+
+    # Enrich scored JSON with project/topic/last_ts/stale
     scored=$(echo "$scored" | jq \
       --arg proj "$project" \
       --arg topic "$topic" \
       --arg last_ts "$last_ts" \
+      --argjson stale "$is_stale" \
       '. + {project: $proj, topic: $topic,
-            last_ts: $last_ts}')
+            last_ts: $last_ts, stale: $stale}')
 
     results+=("$scored")
   done
@@ -355,6 +373,13 @@ HELP
     ')
   fi
 
+  # Split into recent and stale
+  local recent stale
+  recent=$(echo "$combined" | jq '[.[] | select(.stale != true)]')
+  stale=$(echo "$combined" | jq '[.[] | select(.stale == true)]')
+  local stale_count
+  stale_count=$(echo "$stale" | jq 'length')
+
   # ── Output ──
   case "$fmt" in
     json)
@@ -364,12 +389,15 @@ HELP
     md)
       echo "## Session Health Report"
       echo ""
-      if [ "$(echo "$combined" \
-        | jq 'length')" = "0" ]; then
+      local md_src="$recent"
+      if $show_all; then md_src="$combined"; fi
+      if [ "$(echo "$md_src" \
+        | jq 'length')" = "0" ] \
+        && [ "$stale_count" = "0" ]; then
         echo "(no active sessions)"
         return 0
       fi
-      echo "$combined" | jq -r \
+      echo "$md_src" | jq -r \
         --arg red "🔴" \
         --arg yel "🟡" \
         --arg grn "🟢" '
@@ -404,17 +432,29 @@ HELP
              | tostring),
         ""
       '
+      # Stale summary
+      if ! $show_all && [ "$stale_count" -gt 0 ]; then
+        local stale_red stale_yellow
+        stale_red=$(echo "$stale" | jq '[.[] | select(.overall == "red")] | length')
+        stale_yellow=$(echo "$stale" | jq '[.[] | select(.overall == "yellow")] | length')
+        echo "---"
+        echo ""
+        echo "*${stale_count} stale sessions (>${CCS_HEALTH_STALE_DAYS}d): 🔴 ${stale_red} 🟡 ${stale_yellow} — use \`--all\` to expand*"
+      fi
       ;;
 
     terminal|*)
       printf "\033[1mSession Health Report\033[0m\n"
       printf "═══════════════════════\n\n"
-      if [ "$(echo "$combined" \
-        | jq 'length')" = "0" ]; then
+      local term_src="$recent"
+      if $show_all; then term_src="$combined"; fi
+      if [ "$(echo "$term_src" \
+        | jq 'length')" = "0" ] \
+        && [ "$stale_count" = "0" ]; then
         printf "  \033[90m(no active sessions)\033[0m\n"
         return 0
       fi
-      echo "$combined" | jq -r '.[] |
+      echo "$term_src" | jq -r '.[] |
         [.overall,
          .session_id,
          .project,
@@ -481,6 +521,17 @@ HELP
         printf " %s\n" "$rnd_v"
         echo
       done
+
+      # Stale summary
+      if ! $show_all && [ "$stale_count" -gt 0 ]; then
+        local stale_red stale_yellow
+        stale_red=$(echo "$stale" | jq '[.[] | select(.overall == "red")] | length')
+        stale_yellow=$(echo "$stale" | jq '[.[] | select(.overall == "yellow")] | length')
+        printf "\033[90m── %d stale sessions (>%dd):" "$stale_count" "$CCS_HEALTH_STALE_DAYS"
+        printf " \033[31m○\033[90m %d" "$stale_red"
+        printf "  \033[33m◐\033[90m %d" "$stale_yellow"
+        printf "  — use --all to expand\033[0m\n\n"
+      fi
 
       printf "Legend: "
       printf "\033[32m●\033[0m green  "
