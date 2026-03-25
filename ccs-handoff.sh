@@ -31,6 +31,7 @@ HELP
     case "$1" in
       -n) pair_count="$2"; shift 2 ;;
       --no-prompt) include_prompt=false; shift ;;
+      --*) echo "Unknown option: $1" >&2; return 1 ;;
       *) project_dir="$1"; shift ;;
     esac
   done
