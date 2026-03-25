@@ -409,6 +409,11 @@ _ccs_recap_collect() {
       mtime=$(stat -c %Y "$jsonl" 2>/dev/null) || continue
       (( mtime < from_epoch )) && continue
 
+      # Skip short sessions (< 2 user prompts) to reduce noise
+      local _pc
+      _pc=$(jq -s '[.[] | select(.type == "user" and ((.isMeta // false) == false))] | length' "$jsonl" 2>/dev/null)
+      [ "${_pc:-0}" -lt 2 ] && continue
+
       sid=$(basename "$jsonl" .jsonl)
       topic=$(_ccs_topic_from_jsonl "$jsonl")
       last_iso=$(date -d "@$mtime" -Iseconds)

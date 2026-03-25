@@ -99,12 +99,13 @@ _ccs_session_row() {
   fi
   if [ -z "$topic" ]; then
     # Find first real user message (skip meta, local-command, system tags, slash commands)
+    # Strip XML tags from content to avoid <command-message> etc. leaking into topic
     topic=$(jq -r '
       select(.type == "user" and (.message.content | type == "string")
         and ((.isMeta // false) == false)
         and (.message.content | test("^<local-command|^<command-name|^<system-|^\\s*/exit|^\\s*/quit") | not)
         and (.message.content | test("^\\s*$") | not))
-      | .message.content
+      | .message.content | gsub("<[^>]+>"; "") | gsub("^\\s+|\\s+$"; "")
     ' "$f" 2>/dev/null | head -1 | tr '\n' ' ' | cut -c1-120)
   fi
   [ -z "$topic" ] && topic="-"
@@ -135,12 +136,13 @@ _ccs_topic_from_jsonl() {
   fi
   if [ -z "$topic" ]; then
     # Find first real user message (skip meta, local-command, system tags, slash commands)
+    # Strip XML tags from content to avoid <command-message> etc. leaking into topic
     topic=$(jq -r '
       select(.type == "user" and (.message.content | type == "string")
         and ((.isMeta // false) == false)
         and (.message.content | test("^<local-command|^<command-name|^<system-|^\\s*/exit|^\\s*/quit") | not)
         and (.message.content | test("^\\s*$") | not))
-      | .message.content
+      | .message.content | gsub("<[^>]+>"; "") | gsub("^\\s+|\\s+$"; "")
     ' "$f" 2>/dev/null | head -1 | tr '\n' ' ' | cut -c1-120)
   fi
   [ -z "$topic" ] && topic="-"

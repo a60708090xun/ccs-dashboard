@@ -96,7 +96,7 @@ HELP
     mod=$(stat -c "%Y" "$f")
     ago=$(( (now - mod) / 60 ))
     full_sid=$(basename "$f" .jsonl)
-    if [ -n "${crash_full[$full_sid]+x}" ]; then
+    if [ -n "${crash_full[$full_sid]+x}" ] && [ "$ago" -lt 4320 ]; then
       crashed_files+=("$f")
     elif [ "$ago" -lt 1440 ]; then
       fresh_files+=("$f")

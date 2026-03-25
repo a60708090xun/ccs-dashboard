@@ -295,10 +295,27 @@ HELP
     ! -path "*/subagents/*" \
     -print0 2>/dev/null)
 
+  # Build crash lookup to exclude crashed sessions
+  local -A _health_crash_map=()
+  if type _ccs_detect_crash &>/dev/null; then
+    local -a _health_projects=()
+    local _hf
+    for _hf in "${files[@]}"; do
+      _health_projects+=("$(_ccs_resolve_project_path "$(basename "$(dirname "$_hf")")" 2>/dev/null)")
+    done
+    _ccs_detect_crash _health_crash_map files _health_projects 2>/dev/null
+  fi
+
   # Process each session: collect scored JSON
   local results=()
   local f
   for f in "${files[@]}"; do
+    # Skip crashed sessions — health report is meaningless for dead sessions
+    local _h_sid
+    _h_sid=$(basename "$f" .jsonl)
+    if [ -n "${_health_crash_map[$_h_sid]+x}" ] && [[ "${_health_crash_map[$_h_sid]}" == high:* ]]; then
+      continue
+    fi
     local events scored project topic encoded_dir
     events=$(_ccs_health_events "$f")
 
