@@ -162,7 +162,9 @@ do_install() {
   echo "  ccs-feature         — feature progress tracking"
   echo "  ccs-tag             — manual session-to-feature assignment"
   echo "  ccs-recap           — daily work recap"
+  echo "  ccs-crash           — detect crash-interrupted sessions"
   echo "  ccs-checkpoint      — progress snapshot (done/wip/blocked)"
+  echo "  ccs-health          — session health detection"
   echo "  ccs-dispatch        — dispatch task to Claude Code"
   echo "  ccs-jobs            — view dispatch job history"
   echo

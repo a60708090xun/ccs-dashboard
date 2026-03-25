@@ -114,7 +114,7 @@ ccs-dashboard has two layers:
 | `ccs-overview` | Cross-session overview: sessions + todos + git status |
 | `ccs-checkpoint` | Lightweight progress snapshot: Done / In Progress / Blocked |
 | `ccs-handoff` | Generate handoff notes with conversation summary, git, file ops |
-| `ccs-health` | Session health detection — 偵測注意力退化信號 |
+| `ccs-health` | Session health detection — detect attention degradation signals |
 | `ccs-dispatch` | Dispatch a task to a new Claude Code session (async or sync) |
 | `ccs-jobs` | View dispatch job history and results |
 
@@ -122,27 +122,23 @@ All commands support both **Terminal ANSI** and **Markdown** (`--md`) output mod
 
 ### ccs-health
 
-Session health detection — 偵測注意力退化信號。
+Session health detection — detect attention degradation signals.
 
 ```bash
-# 全域掃描所有 active sessions
-ccs-health
-# Markdown 輸出
-ccs-health --md
-# JSON 輸出
-ccs-health --json
-# 指定 session
-ccs-health <session-id-prefix>
+ccs-health                    # Scan all active sessions
+ccs-health --md               # Markdown output
+ccs-health --json             # JSON output
+ccs-health <session-prefix>   # Specific session
 ```
 
-三個偵測指標：
-- 重複 tool call（同一檔案被 Read/Grep 多次）
-- Session 持續時間
-- Prompt-response 輪數
+Three indicators:
+- Duplicate tool calls (same file Read/Grep'd multiple times)
+- Session duration
+- Prompt-response round count
 
-分級顯示：🟢 green / 🟡 yellow / 🔴 red
+Severity levels: 🟢 green / 🟡 yellow / 🔴 red
 
-閾值可透過環境變數覆蓋（見 `ccs-health.sh`）。
+Thresholds are configurable via environment variables (see `ccs-health.sh`).
 
 See **[docs/commands.md](docs/commands.md)** for detailed usage, flags, and examples.
 

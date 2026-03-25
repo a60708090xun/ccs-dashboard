@@ -111,9 +111,34 @@ ccs-dashboard 分兩層：
 | `ccs-recap` | 每日工作回顧 — 跨專案彙整 session/todo/git 活動 |
 | `ccs-details` | 互動式對話瀏覽器（類似 tig 的 TUI） |
 | `ccs-overview` | 跨 session 工作總覽：session + 待辦 + git 狀態 |
+| `ccs-crash` | 偵測 crash 中斷的 session + `--clean`/`--clean-all` 清理 |
 | `ccs-handoff` | 產生交接筆記：對話摘要、git 狀態、檔案操作 |
+| `ccs-checkpoint` | 輕量進度快照：Done / In Progress / Blocked |
+| `ccs-health` | Session 健康偵測 — 偵測注意力退化信號 |
+| `ccs-dispatch` | 派發任務到新的 Claude Code session（async 或 sync） |
+| `ccs-jobs` | 查看 dispatch 任務歷史與結果 |
 
 所有指令支援 **Terminal ANSI** 和 **Markdown** (`--md`) 兩種輸出模式。
+
+### ccs-health
+
+Session 健康偵測 — 偵測注意力退化信號。
+
+```bash
+ccs-health                    # 掃描所有 active session
+ccs-health --md               # Markdown 輸出
+ccs-health --json             # JSON 輸出
+ccs-health <session-prefix>   # 指定 session
+```
+
+三個偵測指標：
+- 重複 tool call（同一檔案被 Read/Grep 多次）
+- Session 持續時間
+- Prompt-response 輪數
+
+分級顯示：🟢 green / 🟡 yellow / 🔴 red
+
+閾值可透過環境變數覆蓋（見 `ccs-health.sh`）。
 
 詳細用法、參數、範例請見 **[commands.md](commands.md)**。
 
@@ -145,6 +170,7 @@ Terminal          Markdown    狀態        說明
 黃色              🟡          recent      < 1 小時
 藍色              🔵          idle        < 1 天（開著但閒置）
 灰色              💤          stale       > 1 天（殭屍候選）
+紅色 💀           💀          crashed     crash 中斷（重開機/hung/dead process）
 灰色刪除線         -          archived    有 last-prompt 標記
 ```
 

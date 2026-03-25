@@ -16,7 +16,7 @@ Phase 3 收尾: （worktree）→ 整理 → review → merge → 清理
 ### Phase 3 收尾（必須按順序）
 
 1. **整理 commit：** 細碎 commit 用 `git rebase` 整理成邏輯階段
-2. **更新跨文件引用：** 確認 README、install.sh、SKILL.md 等已同步
+2. **更新跨文件引用：** 依 `docs/sync-checklist.md` 檢查
 3. **Code review：** 依複雜度選擇方式，發現問題 → 修正 patch commit
 4. **Merge：** fast-forward merge 到 master
 5. **清理：** 刪除 branch + worktree
