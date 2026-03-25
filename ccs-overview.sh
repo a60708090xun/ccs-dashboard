@@ -935,8 +935,18 @@ HELP
   local session_count=${#session_files[@]}
 
   # Crash detection (high confidence only, for overview banner)
+  # Expire crashes older than 3 days (consistent with ccs-status)
   local -A crash_map=()
   _ccs_detect_crash crash_map session_files session_projects
+  local _now_epoch _ck _cf _cage
+  _now_epoch=$(date +%s)
+  for _ck in "${!crash_map[@]}"; do
+    _cf=$(printf '%s\n' "${session_files[@]}" | grep "$_ck" | head -1)
+    if [ -n "$_cf" ]; then
+      _cage=$(( (_now_epoch - $(stat -c %Y "$_cf")) / 60 ))
+      [ "$_cage" -ge 4320 ] && unset 'crash_map[$_ck]'
+    fi
+  done
 
   if $git_mode; then
     _ccs_overview_git session_files session_projects "$mode" "$git_commits"
