@@ -67,7 +67,23 @@ _ccs_crash_md() {
     echo ""
   done
 
+  # Count stale crashes (> 3 days)
+  local _stale=0 _now_epoch _i
+  _now_epoch=$(date +%s)
+  for ((_i = 0; _i < ${#_files[@]}; _i++)); do
+    local _cf="${_files[$_i]}"
+    local _csid
+    _csid=$(basename "$_cf" .jsonl)
+    [ -n "${_map[$_csid]+x}" ] || continue
+    local _age=$(( (_now_epoch - $(stat -c %Y "$_cf")) / 60 ))
+    [ "$_age" -ge 4320 ] && (( _stale++ ))
+  done
+
   echo "---"
+  if [ "$_stale" -gt 0 ]; then
+    echo "> **${_stale}** session(s) older than 3 days — consider \`ccs-crash --clean\` to archive"
+    echo ""
+  fi
   echo "cleanup: \`ccs-crash --clean\` (interactive) | \`ccs-crash --clean-all\` (batch)"
 }
 
