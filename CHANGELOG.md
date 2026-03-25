@@ -4,6 +4,30 @@ All notable changes to this project will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [Semantic Versioning](https://semver.org/).
 
+## [0.2.1] — 2026-03-25
+
+### Added
+
+- **docs/sync-checklist.md** — cross-file consistency checklist for Phase 3
+
+### Fixed
+
+- **Topic tag leak** — strip XML tags (`<command-message>` etc.) from topic extraction (GH#28)
+- **Crash expiry** — crashed sessions older than 3 days demoted to stale in ccs-status and ccs-overview (GH#28)
+- **Health crash filter** — exclude crashed sessions from health report (GH#28)
+- **Recap short session noise** — skip sessions with < 2 user prompts (GH#28)
+- **Recap memory** — use streaming jq instead of `jq -s` for prompt count (GH#28)
+- **Overview crash banner** — apply 3-day expiry consistent with ccs-status
+- **Handoff unknown flags** — reject unknown `--` flags instead of treating as project dir
+- **Crash stale hint** — show hint when crashes are older than 3 days
+
+### Changed
+
+- README: fix Chinese text in English version, sync zh-TW with missing commands
+- install.sh: add ccs-crash and ccs-health to command list
+- CLAUDE.md: Phase 3 cross-file check references sync-checklist
+- Orchestrator SKILL.md: clarify verbatim output rule
+
 ## [0.2.0] — 2026-03-24
 
 ### Added
