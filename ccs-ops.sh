@@ -411,7 +411,7 @@ _ccs_recap_collect() {
 
       # Skip short sessions (< 2 user prompts) to reduce noise
       local _pc
-      _pc=$(jq -s '[.[] | select(.type == "user" and ((.isMeta // false) == false))] | length' "$jsonl" 2>/dev/null)
+      _pc=$(jq -c 'select(.type == "user" and ((.isMeta // false) == false))' "$jsonl" 2>/dev/null | wc -l)
       [ "${_pc:-0}" -lt 2 ] && continue
 
       sid=$(basename "$jsonl" .jsonl)
