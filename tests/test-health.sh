@@ -339,8 +339,8 @@ assert_badge_md "red badge md" "$RED_FIXTURE" "🔴"
 echo ""
 echo "=== ccs-health command tests ==="
 
-# Source ccs-core.sh for helpers
-source "$(dirname "$0")/../ccs-core.sh"
+# Source ccs-core.sh for helpers (cwd is project root via line 5)
+source ccs-core.sh
 
 # Build mock project directory structure
 MOCK_PROJECTS="$FIXTURE_DIR/mock-projects"
@@ -516,7 +516,7 @@ JSONL
 
 # Restore real _ccs_is_archived for this test
 unset -f _ccs_is_archived
-source "$(dirname "$0")/../ccs-core.sh"
+source ccs-core.sh
 
 archived_json=$(CCS_HEALTH_PROJECTS_DIR="$MOCK_PROJECTS" \
   ccs-health --json 2>/dev/null)
@@ -557,6 +557,54 @@ else
   printf '  FAIL: terminal output missing Legend\n'
   fail=$((fail + 1))
 fi
+
+# ══════════════════════════════════════
+# Crash filter test (GH#28 fix #3)
+# ══════════════════════════════════════
+
+echo ""
+echo "--- Test: crashed session excluded from health ---"
+
+# Add a "crashed" session to project-alpha
+CRASHED_SESSION="$MOCK_PROJECTS/-pool2-testuser-project-alpha/ffff6666-0000-0000-0000-000000000006.jsonl"
+cat > "$CRASHED_SESSION" <<'JSONL'
+{"type":"user","message":{"content":"crashed session"},"timestamp":"2026-03-21T09:00:00Z"}
+{"type":"assistant","message":{"content":[{"type":"text","text":"working..."}]},"timestamp":"2026-03-21T09:01:00Z"}
+JSONL
+touch "$CRASHED_SESSION"
+
+# Mock _ccs_detect_crash to mark this session as crashed
+_ccs_detect_crash() {
+  local -n _out=$1
+  _out["ffff6666-0000-0000-0000-000000000006"]="high:hung"
+}
+
+crash_json=$(CCS_HEALTH_PROJECTS_DIR="$MOCK_PROJECTS" ccs-health --json 2>/dev/null)
+crash_ids=$(echo "$crash_json" | jq -r '.[].session_id')
+if echo "$crash_ids" | grep -q "ffff6666"; then
+  printf '  FAIL: crashed session ffff6666 found in health results\n'
+  fail=$((fail + 1))
+else
+  printf '  PASS: crashed session ffff6666 excluded from health\n'
+  pass=$((pass + 1))
+fi
+
+# Verify non-crashed sessions still present
+crash_len=$(echo "$crash_json" | jq 'length')
+if [ "$crash_len" -ge 1 ]; then
+  printf '  PASS: non-crashed sessions still in results (%s)\n' "$crash_len"
+  pass=$((pass + 1))
+else
+  printf '  FAIL: no sessions in results (expected >= 1)\n'
+  fail=$((fail + 1))
+fi
+
+# Restore real _ccs_detect_crash
+unset -f _ccs_detect_crash
+source ccs-core.sh
+
+# Clean up crashed fixture
+rm -f "$CRASHED_SESSION"
 
 # ══════════════════════════════════════
 # Millisecond timestamp test
