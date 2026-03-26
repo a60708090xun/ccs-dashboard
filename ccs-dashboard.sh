@@ -61,7 +61,7 @@ HELP
     esac
   done
 
-  local projects_dir="$HOME/.claude/projects"
+  local projects_dir="${CCS_STATUS_PROJECTS_DIR:-$HOME/.claude/projects}"
 
   # ── Collect data (shared by both modes) ──
   local open_files=()
@@ -198,7 +198,7 @@ HELP
 _ccs_status_md() {
   local fmt="$1"; shift
   local now="$1"; shift
-  local projects_dir="$HOME/.claude/projects"
+  local projects_dir="${CCS_STATUS_PROJECTS_DIR:-$HOME/.claude/projects}"
 
   # Split args by "---" separators into fresh_files, crashed_files, stale_files
   local fresh_files=() crashed_files=() stale_files=()
