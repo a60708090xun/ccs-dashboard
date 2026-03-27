@@ -58,7 +58,7 @@ touch "$META"
 # Use a from_epoch in the past (24 hours ago)
 from_epoch=$(date -d "24 hours ago" +%s)
 
-result=$(CCS_OPS_PROJECTS_DIR="$TEST_DIR/projects" \
+result=$(CCS_PROJECTS_DIR="$TEST_DIR/projects" \
   _ccs_recap_collect "$from_epoch" "all" 2>/dev/null)
 
 # Extract session IDs from result

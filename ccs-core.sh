@@ -960,7 +960,7 @@ _ccs_collect_sessions() {
 
   local -n _out_files=$1 _out_projects=$2 _out_rows=$3
 
-  local sessions_dir="$HOME/.claude/projects"
+  local sessions_dir="${CCS_PROJECTS_DIR:-$HOME/.claude/projects}"
   [ ! -d "$sessions_dir" ] && return 0
 
   local cutoff
