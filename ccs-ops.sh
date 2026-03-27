@@ -385,7 +385,7 @@ HELP
 
 # 邏輯: 掃描所有 JSONL mtime，從昨天往回找第一個有活動的日期
 _ccs_detect_last_workday() {
-  local claude_dir="${CCS_OPS_PROJECTS_DIR:-$HOME/.claude/projects}"
+  local claude_dir="${CCS_PROJECTS_DIR:-$HOME/.claude/projects}"
   [ -d "$claude_dir" ] || { date -d "yesterday 00:00" +%s; return; }
 
   local today_start
@@ -421,7 +421,7 @@ _ccs_detect_last_workday() {
 # 輸出: 每行一個專案目錄名（~/.claude/projects/ 下的子目錄名）
 _ccs_recap_scan_projects() {
   local from_epoch=${1:?missing from_epoch}
-  local claude_dir="${CCS_OPS_PROJECTS_DIR:-$HOME/.claude/projects}"
+  local claude_dir="${CCS_PROJECTS_DIR:-$HOME/.claude/projects}"
   [ -d "$claude_dir" ] || return
 
   local -A seen=()
@@ -482,7 +482,7 @@ _ccs_recap_collect() {
     proj_path=$(_ccs_resolve_project_path "$proj_dir" 2>/dev/null) || continue
     local proj_name
     proj_name=$(_ccs_friendly_project_name "$proj_dir")
-    local session_dir="${CCS_OPS_PROJECTS_DIR:-$HOME/.claude/projects}/$proj_dir"
+    local session_dir="${CCS_PROJECTS_DIR:-$HOME/.claude/projects}/$proj_dir"
 
     # 收集此專案在時間範圍內的 sessions
     local sessions_json="[]"
@@ -1080,7 +1080,7 @@ _ccs_checkpoint_collect() {
     proj_path=$(_ccs_resolve_project_path "$proj_dir" 2>/dev/null) || continue
     local proj_name
     proj_name=$(_ccs_friendly_project_name "$proj_dir")
-    local session_dir="${CCS_OPS_PROJECTS_DIR:-$HOME/.claude/projects}/$proj_dir"
+    local session_dir="${CCS_PROJECTS_DIR:-$HOME/.claude/projects}/$proj_dir"
 
     while IFS= read -r jsonl; do
       local mtime

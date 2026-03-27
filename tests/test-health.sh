@@ -393,7 +393,7 @@ _ccs_is_archived() { return 1; }
 # Test 1: --json outputs valid JSON array
 echo ""
 echo "--- Test: ccs-health --json valid JSON array ---"
-json_out=$(CCS_HEALTH_PROJECTS_DIR="$MOCK_PROJECTS" ccs-health --json 2>/dev/null)
+json_out=$(CCS_PROJECTS_DIR="$MOCK_PROJECTS" ccs-health --json 2>/dev/null)
 json_type=$(echo "$json_out" | jq -r 'type' 2>/dev/null)
 if [ "$json_type" = "array" ]; then
   printf '  PASS: --json outputs JSON array\n'
@@ -415,7 +415,7 @@ fi
 # Test 2: prefix filter returns single session
 echo ""
 echo "--- Test: ccs-health <prefix> --json single session ---"
-prefix_out=$(CCS_HEALTH_PROJECTS_DIR="$MOCK_PROJECTS" ccs-health aaaa1111 --json 2>/dev/null)
+prefix_out=$(CCS_PROJECTS_DIR="$MOCK_PROJECTS" ccs-health aaaa1111 --json 2>/dev/null)
 prefix_len=$(echo "$prefix_out" | jq 'length')
 if [ "$prefix_len" = "1" ]; then
   printf '  PASS: prefix filter returns 1 session\n'
@@ -437,7 +437,7 @@ fi
 # Test 3: --md output contains header
 echo ""
 echo "--- Test: ccs-health --md header ---"
-md_out=$(CCS_HEALTH_PROJECTS_DIR="$MOCK_PROJECTS" ccs-health --md 2>/dev/null)
+md_out=$(CCS_PROJECTS_DIR="$MOCK_PROJECTS" ccs-health --md 2>/dev/null)
 if echo "$md_out" | grep -q "## Session Health Report"; then
   printf '  PASS: --md contains header\n'
   pass=$((pass + 1))
@@ -492,7 +492,7 @@ echo ""
 echo "--- Test: empty projects dir ---"
 EMPTY_PROJECTS="$FIXTURE_DIR/empty-projects"
 mkdir -p "$EMPTY_PROJECTS"
-empty_json=$(CCS_HEALTH_PROJECTS_DIR="$EMPTY_PROJECTS" ccs-health --json 2>/dev/null)
+empty_json=$(CCS_PROJECTS_DIR="$EMPTY_PROJECTS" ccs-health --json 2>/dev/null)
 empty_len=$(echo "$empty_json" | jq 'length')
 if [ "$empty_len" = "0" ]; then
   printf '  PASS: empty dir returns empty array\n'
@@ -518,7 +518,7 @@ JSONL
 unset -f _ccs_is_archived
 source ccs-core.sh
 
-archived_json=$(CCS_HEALTH_PROJECTS_DIR="$MOCK_PROJECTS" \
+archived_json=$(CCS_PROJECTS_DIR="$MOCK_PROJECTS" \
   ccs-health --json 2>/dev/null)
 archived_len=$(echo "$archived_json" | jq 'length')
 # The archived session should be excluded, leaving 3 sessions
@@ -547,7 +547,7 @@ _ccs_is_archived() { return 1; }
 # Test 8: terminal output contains legend
 echo ""
 echo "--- Test: terminal output legend ---"
-term_out=$(CCS_HEALTH_PROJECTS_DIR="$MOCK_PROJECTS" ccs-health 2>/dev/null)
+term_out=$(CCS_PROJECTS_DIR="$MOCK_PROJECTS" ccs-health 2>/dev/null)
 # Strip ANSI
 term_plain=$(echo "$term_out" | sed 's/\x1b\[[0-9;]*m//g')
 if echo "$term_plain" | grep -q "Legend"; then
@@ -579,7 +579,7 @@ _ccs_detect_crash() {
   _out["ffff6666-0000-0000-0000-000000000006"]="high:hung"
 }
 
-crash_json=$(CCS_HEALTH_PROJECTS_DIR="$MOCK_PROJECTS" ccs-health --json 2>/dev/null)
+crash_json=$(CCS_PROJECTS_DIR="$MOCK_PROJECTS" ccs-health --json 2>/dev/null)
 crash_ids=$(echo "$crash_json" | jq -r '.[].session_id')
 if echo "$crash_ids" | grep -q "ffff6666"; then
   printf '  FAIL: crashed session ffff6666 found in health results\n'
