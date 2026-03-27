@@ -328,13 +328,14 @@ ccs-crash  — detect sessions interrupted by crash or unexpected reboot
 [personal tool, not official Claude Code]
 
 Usage:
-  ccs-crash                  Markdown output, high confidence only (default)
-  ccs-crash --json           JSON output
-  ccs-crash --all            Include low confidence + subagent sessions
-  ccs-crash --clean          Interactive cleanup (archive crashed sessions one by one)
-  ccs-crash --clean-all      Archive all high-confidence crashed sessions at once
-  ccs-crash --reboot-window N  Path 1 window in minutes (default: 30)
-  ccs-crash --idle-window N    Path 2 window in minutes (default: 1440)
+  ccs-crash                    Markdown output (default)
+  ccs-crash --json             JSON output
+  ccs-crash --all              Include low confidence
+  ccs-crash --clean            Interactive cleanup
+  ccs-crash --clean <id...>    Archive specific session(s) by ID (prefix match)
+  ccs-crash --clean-all        Archive all crashed sessions
+  ccs-crash --reboot-window N  Path 1 window (default: 30)
+  ccs-crash --idle-window N    Path 2 window (default: 1440)
 
 Detection paths:
   Path 1 (reboot):     mtime in [boot_time - window, boot_time + 120s)
