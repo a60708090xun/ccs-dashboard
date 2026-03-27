@@ -272,7 +272,7 @@ HELP
   done
 
   # Allow override for testing
-  local projects_dir="${CCS_HEALTH_PROJECTS_DIR:-$HOME/.claude/projects}"
+  local projects_dir="${CCS_PROJECTS_DIR:-$HOME/.claude/projects}"
 
   # Collect active JSONL files
   local files=()
