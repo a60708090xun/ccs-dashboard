@@ -180,6 +180,60 @@ _ccs_archive_session() {
   printf '{"type":"last-prompt"}\n' >> "$f"
 }
 
+# ── ccs-crash: clean by session ID ──
+_ccs_crash_clean_by_id() {
+  local -n _map=$1 _files=$2
+  shift 2
+  local -a ids=("$@")
+
+  [ ${#ids[@]} -eq 0 ] && return 0
+
+  local archived=0 not_found=0 ambiguous=0
+
+  for id in "${ids[@]}"; do
+    # Find matching session IDs via prefix
+    local -a matches=() match_files=()
+    local count=${#_files[@]}
+    for ((i = 0; i < count; i++)); do
+      local f="${_files[$i]}"
+      local sid=$(basename "$f" .jsonl)
+      [ -n "${_map[$sid]+x}" ] || continue
+      if [[ "$sid" == "$id"* ]]; then
+        matches+=("$sid")
+        match_files+=("$f")
+      fi
+    done
+
+    if [ ${#matches[@]} -eq 0 ]; then
+      printf '  \033[31m✗\033[0m %s — not found\n' "$id"
+      not_found=$((not_found + 1))
+    elif [ ${#matches[@]} -gt 1 ]; then
+      printf '  \033[31m✗\033[0m %s — ambiguous (%d matches):\n' \
+        "$id" "${#matches[@]}"
+      for ((j = 0; j < ${#matches[@]}; j++)); do
+        local topic
+        topic=$(_ccs_topic_from_jsonl "${match_files[$j]}")
+        printf '      %s — %s\n' \
+          "${matches[$j]:0:8}" "$topic"
+      done
+      ambiguous=$((ambiguous + 1))
+    else
+      _ccs_archive_session "${match_files[0]}"
+      printf '  \033[32m✓\033[0m %s\n' \
+        "${matches[0]:0:8}"
+      archived=$((archived + 1))
+    fi
+  done
+
+  local -a parts=()
+  [ "$archived" -gt 0 ] && parts+=("$archived archived")
+  [ "$not_found" -gt 0 ] && parts+=("$not_found not found")
+  [ "$ambiguous" -gt 0 ] && parts+=("$ambiguous ambiguous")
+  local IFS=', '
+  printf '\n\033[1mDone:\033[0m %s\n' "${parts[*]}"
+  [ "$not_found" -eq 0 ] && [ "$ambiguous" -eq 0 ]
+}
+
 # ── ccs-crash: interactive cleanup ──
 _ccs_crash_clean() {
   local -n _map=$1 _files=$2 _projects=$3 _rows=$4
