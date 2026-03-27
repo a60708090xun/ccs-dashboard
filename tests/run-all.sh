@@ -12,6 +12,17 @@ SKIP_LIVE=(
   "test-crash-detect.sh"
 )
 
+# Registered test files (auto-discovered by glob test-*.sh):
+#   test-checkpoint-improvements.sh
+#   test-core.sh
+#   test-crash-clean-by-id.sh
+#   test-dispatch.sh
+#   test-friendly-name.sh
+#   test-handoff.sh
+#   test-health.sh
+#   test-ops.sh
+#   test-status.sh
+
 for t in test-*.sh; do
   # Check skip list
   skip=false
