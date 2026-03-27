@@ -312,7 +312,15 @@ ccs-crash() {
       --md)            mode="md"; shift ;;
       --json)          mode="json"; shift ;;
       --all|-a)        show_all=true; shift ;;
-      --clean)         mode="clean"; shift ;;
+      --clean)
+        mode="clean"; shift
+        # Collect session IDs after --clean
+        local -a clean_ids=()
+        while [ $# -gt 0 ] && [[ "$1" != --* ]]; do
+          clean_ids+=("$1"); shift
+        done
+        [ ${#clean_ids[@]} -gt 0 ] && mode="clean-id"
+        ;;
       --clean-all)     mode="clean-all"; shift ;;
       --help|-h)
         cat <<'HELP'
@@ -350,7 +358,7 @@ HELP
   _ccs_detect_crash crash_map --reboot-window "$reboot_window" --idle-window "$idle_window" session_files session_projects
 
   # Filter low confidence unless --all
-  if ! $show_all; then
+  if ! $show_all && [ "$mode" != "clean-id" ]; then
     for sid in "${!crash_map[@]}"; do
       [[ "${crash_map[$sid]}" == low:* ]] && unset 'crash_map[$sid]'
     done
@@ -366,6 +374,10 @@ HELP
     json)      _ccs_crash_json crash_map session_files session_projects session_rows "$reboot_window" "$idle_window" ;;
     clean)     _ccs_crash_clean crash_map session_files session_projects session_rows ;;
     clean-all) _ccs_crash_clean_all crash_map session_files ;;
+    clean-id)
+      _ccs_crash_clean_by_id \
+        crash_map session_files "${clean_ids[@]}"
+      ;;
   esac
 }
 
