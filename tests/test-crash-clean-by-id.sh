@@ -139,4 +139,54 @@ _ccs_crash_clean_by_id \
 assert_eq "returns non-zero on not found" "1" "$rc"
 
 echo ""
+echo "=== Test 9: ccs-crash --clean <id> end-to-end ==="
+
+# Mock _ccs_collect_sessions to use our test data
+_ccs_collect_sessions() {
+  local show_all=false
+  if [ "${1:-}" = "--all" ]; then
+    show_all=true; shift
+  fi
+  local -n _of=$1 _op=$2 _or=$3
+  _of=("$SA" "$SB" "$SC")
+  _op=("-mock-project" "-mock-project" "-mock-project")
+  _or=("mock-row" "mock-row" "mock-row")
+}
+
+# Mock _ccs_detect_crash to populate crash_map
+_ccs_detect_crash() {
+  local -n _cm=$1
+  _cm=(
+    ["d25fd727-0000-0000-0000-000000000001"]="high:reboot"
+    ["d25f1111-0000-0000-0000-000000000002"]="low:idle"
+    ["abcd0000-0000-0000-0000-000000000003"]="high:reboot"
+  )
+}
+
+# Reset sessions
+printf '{"type":"user","message":{"content":"hello"}}\n' > "$SA"
+printf '{"type":"user","message":{"content":"hello"}}\n' > "$SB"
+printf '{"type":"user","message":{"content":"hello"}}\n' > "$SC"
+
+out=$(ccs-crash --clean abcd 2>&1)
+assert_contains "e2e archive abcd" "$out" "abcd0000"
+assert_contains "e2e checkmark" "$out" "✓"
+last=$(tail -1 "$SC")
+assert_eq "e2e last-prompt" \
+  '{"type":"last-prompt"}' "$last"
+
+echo ""
+echo "=== Test 10: low confidence session ==="
+echo "=== reachable by --clean <id> ==="
+
+# Reset SB (low confidence)
+printf '{"type":"user","message":{"content":"hello"}}\n' > "$SB"
+
+out=$(ccs-crash --clean d25f1111 2>&1)
+assert_contains "low-conf archived" "$out" "d25f1111"
+last=$(tail -1 "$SB")
+assert_eq "low-conf last-prompt" \
+  '{"type":"last-prompt"}' "$last"
+
+echo ""
 test_summary
