@@ -189,4 +189,10 @@ assert_eq "low-conf last-prompt" \
   '{"type":"last-prompt"}' "$last"
 
 echo ""
+echo "=== Test 11: help text includes <id> ==="
+help_out=$(ccs-crash --help 2>&1)
+assert_contains "help shows --clean <id>" \
+  "$help_out" "clean <id...>"
+
+echo ""
 test_summary
