@@ -1,6 +1,6 @@
 ---
 name: ccs-orchestrator
-description: Cross-session work orchestrator — view all active Claude Code sessions, todos, git status, and navigate between session details. Use this skill whenever the user asks about their Claude Code sessions in any language: checking what sessions are running, viewing work overview or progress across sessions, detecting crashed or stale sessions, generating handoff notes, daily recaps, checkpoints for standups, feature tracking, or any ccs-* command (ccs-status, ccs-overview, ccs-crash, ccs-checkpoint, ccs-recap, ccs-feature, ccs-handoff, ccs-pick). Also triggers on natural language like "what am I working on", "show my sessions", "目前狀態", "工作總覽", "セッションの状態".
+description: "MANDATORY for any ccs-* command execution. Never run ccs-* commands via Bash directly — always invoke this skill instead. Triggers on: ccs-status, ccs-overview, ccs-crash, ccs-checkpoint, ccs-recap, ccs-feature, ccs-handoff, ccs-pick, ccs-health, ccs-dispatch, ccs-jobs. Also triggers on: 'checkpoint', 'overview', 'recap', 'sessions', 'crash', 'health', 'handoff', 'dispatch', '跑一下checkpoint', '目前狀態', '工作總覽', 'what am I working on', 'show my sessions', 'セッションの状態'. This skill handles output rendering (via _ccs_to_file + Read) so results display correctly in session view."
 ---
 
 # CCS Orchestrator
