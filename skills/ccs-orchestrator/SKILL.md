@@ -1,6 +1,6 @@
 ---
 name: ccs-orchestrator
-description: "MANDATORY for any ccs-* command execution. Never run ccs-* commands via Bash directly — always invoke this skill instead. Triggers on: ccs-status, ccs-overview, ccs-crash, ccs-checkpoint, ccs-recap, ccs-feature, ccs-handoff, ccs-pick, ccs-health, ccs-dispatch, ccs-jobs. Also triggers on: 'checkpoint', 'overview', 'recap', 'sessions', 'crash', 'health', 'handoff', 'dispatch', '跑一下checkpoint', '目前狀態', '工作總覽', 'what am I working on', 'show my sessions', 'セッションの状態'. This skill handles output rendering (via _ccs_to_file + Read) so results display correctly in session view."
+description: "MANDATORY for any ccs-* command execution. Never run ccs-* commands via Bash directly — always invoke this skill instead. Triggers on: ccs-status, ccs-overview, ccs-crash, ccs-checkpoint, ccs-recap, ccs-feature, ccs-handoff, ccs-pick, ccs-health, ccs-dispatch, ccs-jobs, ccs-review. Also triggers on: 'checkpoint', 'overview', 'recap', 'sessions', 'crash', 'health', 'handoff', 'dispatch', 'review', 'session review', '回顧', '報告', 'weekly report', '週報', '跑一下checkpoint', '目前狀態', '工作總覽', 'what am I working on', 'show my sessions', 'セッションの状態'. This skill handles output rendering (via _ccs_to_file + Read) so results display correctly in session view."
 ---
 
 # CCS Orchestrator
@@ -53,6 +53,9 @@ description: "MANDATORY for any ccs-* command execution. Never run ccs-* command
 | dispatch [dir] "task" | dp | `ccs-dispatch --project <dir> "task"` — 派工到新 session |
 | jobs | j | `ccs-jobs` — dispatch 任務歷史 |
 | job <id> | | `ccs-jobs <id>` — 單筆結果 |
+| review [sid] | rv | `ccs-review [sid]` — session review 報告 |
+| review html [sid] | | `ccs-review [sid] --format html -o <path>` — HTML 報告 |
+| weekly [since] [until] | wk | `ccs-review --since <date> --until <date>` — 週報 |
 
 ## Routing Rules
 
@@ -78,6 +81,9 @@ description: "MANDATORY for any ccs-* command execution. Never run ccs-* command
 - 「健康」「health」「退化」「degradation」→ `ccs-health --md`
 - 「派工」「dispatch」「跑一下」→ dispatch
 - 「任務狀態」「dispatch 結果」「jobs」→ jobs
+- 「review」「回顧」「session review」「報告」「review this session」→ review
+- 「HTML 報告」「review html」「匯出報告」→ review html
+- 「週報」「weekly」「weekly report」「本週報告」→ weekly
 
 數字輸入（如 "1" "2" "3"）→ 在 overview 後等同 `detail N`，在 detail 後等同 `conversation N`。
 
@@ -100,6 +106,8 @@ description: "MANDATORY for any ccs-* command execution. Never run ccs-* command
 | git view 後有 unpushed commits | 提醒使用者哪些專案有 unpushed |
 | 剛看完 checkpoint | 「匯出為 markdown 檔」「回到總覽」「看 git 狀態」 |
 | 剛看完 recap 分析 | 「匯出為 markdown 檔」「要升級到完整規劃嗎？」 |
+| 剛看完 review | 「匯出 HTML」「匯出 PDF」「回到總覽」 |
+| 剛看完週報 | 「LLM 彙整本週亮點」「匯出 HTML」「匯出 PDF」 |
 | overview 結果有 yellow/red session | 加入「查看 session health 詳情」 |
 | overview 結果有 red session | 加入「為 red session 生成 resume prompt」（導向 `ccs-resume-prompt`） |
 
@@ -145,3 +153,27 @@ Options 數量控制在 3-6 個，不超過 7 個。
 5. 用 `<options>` 問：「要升級到完整規劃嗎？」
    - 是 → 生成今日工作計畫（任務/專案/建議時段/說明）
    - 否 → 結束
+
+### Review 流程
+
+Session review 產生進度報告，可分享給主管。有兩種模式：
+
+**單一 session review：**
+
+1. 執行 `ccs-review <sid> --format json` 取得結構化資料
+2. 檢查 LLM summary cache（`~/.local/share/ccs-dashboard/review-cache/<sid>.summary.json`）
+3. 若無 cache 或已過期（>24h）：
+   - 從 JSON 取 `conversation` 欄位
+   - 派 subagent 生成兩段摘要：
+     a. **完成項目摘要**（prompt: 提取具體產出，動詞開頭，標註半完成%）
+     b. **改善建議**（prompt: 分析溝通模式，3 條建議含具體例子）
+   - 寫入 cache：`_ccs_review_cache_write "<sid>" '<json>'`（透過 Bash 呼叫）
+4. 執行 `ccs-review <sid> --format md` 呈現結果
+5. 用 `<options>` 問：「要匯出 HTML？」「要匯出 PDF？」「回到總覽」
+
+**週報模式：**
+
+1. 執行 `ccs-review --since <date> --until <date> --format md`
+2. 呈現結果
+3. 用 `<options>` 問：「要 LLM 彙整本週亮點？」「匯出 HTML」「匯出 PDF」
+4. 若選 LLM 彙整 → 收集各 session cache 摘要 → 派 subagent → 呈現
