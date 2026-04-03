@@ -127,17 +127,16 @@ _ccs_review_json() {
   local stats
   stats=$(_ccs_session_stats "$jsonl")
 
-  # Todos
-  local todos
-  todos=$(_ccs_todos_md "$jsonl")
+  # Todos: extract from LAST TodoWrite call only
   local todos_json
-  todos_json=$(echo "$todos" | while IFS= read -r line; do
-    case "$line" in
-      '- [x] '*) jq -n --arg c "${line#- [x] }" '{status:"completed",content:$c}' ;;
-      '- [~] '*) jq -n --arg c "${line#- [~] }" '{status:"in_progress",content:$c}' ;;
-      '- [ ] '*) jq -n --arg c "${line#- [ ] }" '{status:"pending",content:$c}' ;;
-    esac
-  done | jq -s '.' 2>/dev/null)
+  todos_json=$(jq -s '
+    [.[] | select(.type == "assistant") |
+     .message.content[]? |
+     select(.type == "tool_use" and .name == "TodoWrite")] |
+    if length > 0 then
+      last | .input.todos | map({status: .status, content: .content})
+    else [] end
+  ' "$jsonl" 2>/dev/null)
   [ -z "$todos_json" ] || [ "$todos_json" = "null" ] && todos_json="[]"
 
   # Recent files
