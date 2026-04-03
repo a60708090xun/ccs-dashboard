@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Session Review: {{ topic }}</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --fg: #c9d1d9;
+    --card-bg: #161b22;
+    --border: #30363d;
+    --accent: #58a6ff;
+    --green: #3fb950;
+    --yellow: #d29922;
+    --user-bg: #1a3a5c;
+    --asst-bg: #1c2333;
+    --badge-bg: #21262d;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: var(--bg); color: var(--fg);
+    max-width: 900px; margin: 0 auto; padding: 20px;
+    line-height: 1.6;
+  }
+  h1 { color: var(--accent); margin-bottom: 4px; font-size: 1.5em; }
+  .meta { color: #8b949e; margin-bottom: 20px; font-size: 0.9em; }
+  .card {
+    background: var(--card-bg); border: 1px solid var(--border);
+    border-radius: 8px; padding: 16px; margin-bottom: 16px;
+  }
+  .card h2 { font-size: 1.1em; margin-bottom: 12px; color: var(--accent); }
+  .stats-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 12px;
+  }
+  .stat-item { text-align: center; }
+  .stat-value { font-size: 1.5em; font-weight: bold; color: var(--green); }
+  .stat-label { font-size: 0.8em; color: #8b949e; }
+  .tool-bar { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  .tool-badge {
+    background: var(--badge-bg); border: 1px solid var(--border);
+    border-radius: 4px; padding: 4px 8px; font-size: 0.8em;
+  }
+  .tool-count { color: var(--accent); font-weight: bold; }
+  .summary-list { list-style: none; padding: 0; }
+  .summary-list li { padding: 4px 0; }
+  .summary-list li::before { content: "•"; color: var(--accent); margin-right: 8px; }
+  details { margin-bottom: 8px; }
+  summary {
+    cursor: pointer; padding: 8px 12px;
+    background: var(--card-bg); border: 1px solid var(--border);
+    border-radius: 6px; font-weight: bold;
+  }
+  summary:hover { border-color: var(--accent); }
+  details[open] > summary { border-radius: 6px 6px 0 0; }
+  .details-content {
+    background: var(--card-bg); border: 1px solid var(--border);
+    border-top: none; border-radius: 0 0 6px 6px; padding: 12px;
+  }
+  .chat { display: flex; flex-direction: column; gap: 12px; }
+  .bubble { max-width: 85%; padding: 12px 16px; border-radius: 12px; }
+  .bubble-user {
+    align-self: flex-end; background: var(--user-bg);
+    border-bottom-right-radius: 4px;
+  }
+  .bubble-asst {
+    align-self: flex-start; background: var(--asst-bg);
+    border-bottom-left-radius: 4px;
+  }
+  .bubble-label { font-size: 0.75em; color: #8b949e; margin-bottom: 4px; }
+  .bubble-text {
+    white-space: pre-wrap; word-break: break-word; font-size: 0.9em;
+  }
+  .bubble-text.collapsed { max-height: 200px; overflow: hidden; position: relative; }
+  .bubble-text.collapsed::after {
+    content: ""; position: absolute; bottom: 0; left: 0; right: 0;
+    height: 60px; background: linear-gradient(transparent, var(--asst-bg));
+  }
+  .bubble-user .bubble-text.collapsed::after {
+    background: linear-gradient(transparent, var(--user-bg));
+  }
+  .expand-btn {
+    background: none; border: 1px solid var(--border); color: var(--accent);
+    padding: 4px 12px; border-radius: 4px; cursor: pointer; margin-top: 8px;
+    font-size: 0.8em;
+  }
+  .bubble-tools { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 4px; }
+  .bubble-tool {
+    font-size: 0.7em; background: var(--badge-bg); padding: 2px 6px;
+    border-radius: 3px; color: #8b949e;
+  }
+  .todo-list { list-style: none; padding: 0; }
+  .todo-list li { padding: 2px 0; }
+  .todo-done { text-decoration: line-through; color: #8b949e; }
+  @media (max-width: 600px) {
+    body { padding: 10px; }
+    .stats-grid { grid-template-columns: repeat(2, 1fr); }
+    .bubble { max-width: 95%; }
+  }
+  @media print {
+    details { display: block; }
+    details > summary { display: none; }
+    .details-content { border: none; padding: 0; }
+    .bubble-text.collapsed { max-height: none; overflow: visible; }
+    .bubble-text.collapsed::after { display: none; }
+    .expand-btn { display: none; }
+    body { max-width: 100%; padding: 0; background: white; color: black; }
+    .card { border-color: #ddd; background: #f8f8f8; }
+    .stat-value { color: #1a7f37; }
+  }
+</style>
+</head>
+<body>
+
+<h1>Session Review: {{ topic }}</h1>
+<p class="meta">{{ project }} — {{ time_range.start[:10] if time_range and time_range.start else 'unknown' }} — {{ model }}</p>
+
+{% if summary %}
+<div class="card">
+  <h2>完成項目</h2>
+  <ul class="summary-list">
+    {% for item in summary.completions %}
+    <li>{{ item }}</li>
+    {% endfor %}
+  </ul>
+</div>
+{% endif %}
+
+<div class="card">
+  <h2>統計</h2>
+  <div class="stats-grid">
+    <div class="stat-item">
+      <div class="stat-value">{{ time_range.duration_min if time_range else 0 }}</div>
+      <div class="stat-label">分鐘</div>
+    </div>
+    <div class="stat-item">
+      <div class="stat-value">{{ stats.rounds }}</div>
+      <div class="stat-label">回合</div>
+    </div>
+    <div class="stat-item">
+      <div class="stat-value">{{ "{:,}".format(stats.char_count) }}</div>
+      <div class="stat-label">字數</div>
+    </div>
+    <div class="stat-item">
+      <div class="stat-value">~{{ "{:,}".format(stats.token_estimate) }}</div>
+      <div class="stat-label">Token（粗估）</div>
+    </div>
+  </div>
+  <div class="tool-bar">
+    {% for tool, count in stats.tool_use.items() %}
+    <span class="tool-badge">{{ tool }} <span class="tool-count">×{{ count }}</span></span>
+    {% endfor %}
+  </div>
+</div>
+
+{% if summary and summary.suggestions %}
+<div class="card">
+  <h2>改善建議</h2>
+  <ul class="summary-list">
+    {% for item in summary.suggestions %}
+    <li>{{ item }}</li>
+    {% endfor %}
+  </ul>
+</div>
+{% endif %}
+
+{% if todos %}
+<details>
+  <summary>任務進度（{{ todos | length }} 項）</summary>
+  <div class="details-content">
+    <ul class="todo-list">
+      {% for todo in todos %}
+      <li class="{{ 'todo-done' if todo.status == 'completed' else '' }}">
+        {% if todo.status == 'completed' %}☑{% elif todo.status == 'in_progress' %}⏳{% else %}☐{% endif %}
+        {{ todo.content }}
+      </li>
+      {% endfor %}
+    </ul>
+  </div>
+</details>
+{% endif %}
+
+{% if recent_files %}
+<details>
+  <summary>涉及檔案（{{ recent_files | length }} 項）</summary>
+  <div class="details-content">
+    {% for f in recent_files %}
+    <div style="font-family: monospace; font-size: 0.85em; padding: 2px 0;">{{ f }}</div>
+    {% endfor %}
+  </div>
+</details>
+{% endif %}
+
+{% if git_state and (git_state.branch or git_state.recent_commits) %}
+<details>
+  <summary>Git 狀態</summary>
+  <div class="details-content">
+    {% if git_state.branch %}
+    <div><strong>Branch:</strong> {{ git_state.branch }}</div>
+    {% endif %}
+    {% if git_state.recent_commits %}
+    <div style="margin-top: 8px;"><strong>Recent commits:</strong></div>
+    {% for c in git_state.recent_commits %}
+    <div style="font-family: monospace; font-size: 0.85em; padding: 2px 0;">{{ c }}</div>
+    {% endfor %}
+    {% endif %}
+  </div>
+</details>
+{% endif %}
+
+{% if conversation %}
+<details>
+  <summary>完整對話紀錄（{{ conversation | length }} 回合）</summary>
+  <div class="details-content">
+    <div class="chat">
+      {% for pair in conversation %}
+      <div class="bubble bubble-user">
+        <div class="bubble-label">User [{{ pair.index }}]</div>
+        <div class="bubble-text {{ 'collapsed' if pair.user | length > 500 else '' }}"
+             id="user-{{ pair.index }}">{{ pair.user }}</div>
+        {% if pair.user | length > 500 %}
+        <button class="expand-btn" onclick="toggleExpand('user-{{ pair.index }}', this)">展開全文</button>
+        {% endif %}
+      </div>
+      <div class="bubble bubble-asst">
+        <div class="bubble-label">Claude [{{ pair.index }}]</div>
+        <div class="bubble-text {{ 'collapsed' if pair.assistant | length > 500 else '' }}"
+             id="asst-{{ pair.index }}">{{ pair.assistant }}</div>
+        {% if pair.assistant | length > 500 %}
+        <button class="expand-btn" onclick="toggleExpand('asst-{{ pair.index }}', this)">展開全文</button>
+        {% endif %}
+        {% if pair.tools %}
+        <div class="bubble-tools">
+          {% for tool in pair.tools %}
+          <span class="bubble-tool">{{ tool }}</span>
+          {% endfor %}
+        </div>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+</details>
+{% endif %}
+
+<script>
+function toggleExpand(id, btn) {
+  const el = document.getElementById(id);
+  el.classList.toggle('collapsed');
+  btn.textContent = el.classList.contains('collapsed') ? '展開全文' : '收合';
+}
+</script>
+
+<p style="text-align:center; color:#8b949e; font-size:0.75em; margin-top:24px;">
+  Generated by ccs-dashboard · {{ time_range.start[:10] if time_range and time_range.start else '' }}
+</p>
+
+</body>
+</html>

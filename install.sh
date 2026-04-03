@@ -65,6 +65,22 @@ check_deps() {
     warn "xclip/xsel not found — ccs-resume-prompt --copy won't work"
   fi
 
+  # jinja2 (for ccs-review HTML rendering)
+  if python3 -c "import jinja2" 2>/dev/null; then
+    ok "jinja2 $(python3 -c 'import jinja2; print(jinja2.__version__)')"
+  else
+    warn "jinja2 not found — optional, for ccs-review --format html"
+    warn "  Install: pip3 install --user jinja2"
+  fi
+
+  # weasyprint (for ccs-review --format pdf)
+  if python3 -c "import weasyprint" 2>/dev/null; then
+    ok "weasyprint $(python3 -c 'import weasyprint; print(weasyprint.__version__)')"
+  else
+    warn "weasyprint not found — optional, for ccs-review --format pdf"
+    warn "  Install: pip3 install --user weasyprint"
+  fi
+
   # Check Claude Code sessions dir exists
   if [ -d "$HOME/.claude/projects" ]; then
     local session_count
@@ -98,7 +114,7 @@ do_install() {
   echo
 
   # Check files exist
-  local modules=(ccs-core.sh ccs-health.sh ccs-viewer.sh ccs-handoff.sh ccs-overview.sh ccs-feature.sh ccs-ops.sh ccs-dispatch.sh ccs-dashboard.sh)
+  local modules=(ccs-core.sh ccs-health.sh ccs-viewer.sh ccs-handoff.sh ccs-overview.sh ccs-feature.sh ccs-ops.sh ccs-dispatch.sh ccs-review.sh ccs-dashboard.sh)
   local all_found=true
   for mod in "${modules[@]}"; do
     if [ ! -f "${SCRIPT_DIR}/${mod}" ]; then
