@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>週報 {{ range.since }} ~ {{ range.until }}</title>
+<style>
+  :root {
+    --bg: #0d1117; --fg: #c9d1d9; --card-bg: #161b22;
+    --border: #30363d; --accent: #58a6ff; --green: #3fb950;
+    --badge-bg: #21262d;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: var(--bg); color: var(--fg);
+    max-width: 900px; margin: 0 auto; padding: 20px; line-height: 1.6;
+  }
+  h1 { color: var(--accent); margin-bottom: 4px; font-size: 1.5em; }
+  .meta { color: #8b949e; margin-bottom: 20px; font-size: 0.9em; }
+  .card {
+    background: var(--card-bg); border: 1px solid var(--border);
+    border-radius: 8px; padding: 16px; margin-bottom: 16px;
+  }
+  .card h2 { font-size: 1.1em; margin-bottom: 12px; color: var(--accent); }
+  .stats-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px;
+  }
+  .stat-item { text-align: center; }
+  .stat-value { font-size: 1.5em; font-weight: bold; color: var(--green); }
+  .stat-label { font-size: 0.8em; color: #8b949e; }
+  .tool-bar { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  .tool-badge {
+    background: var(--badge-bg); border: 1px solid var(--border);
+    border-radius: 4px; padding: 4px 8px; font-size: 0.8em;
+  }
+  .tool-count { color: var(--accent); font-weight: bold; }
+  .summary-list { list-style: none; padding: 0; }
+  .summary-list li { padding: 4px 0; }
+  .summary-list li::before { content: "•"; color: var(--accent); margin-right: 8px; }
+  details { margin-bottom: 8px; }
+  summary {
+    cursor: pointer; padding: 8px 12px;
+    background: var(--card-bg); border: 1px solid var(--border);
+    border-radius: 6px; font-weight: bold;
+  }
+  summary:hover { border-color: var(--accent); }
+  details[open] > summary { border-radius: 6px 6px 0 0; }
+  .details-content {
+    background: var(--card-bg); border: 1px solid var(--border);
+    border-top: none; border-radius: 0 0 6px 6px; padding: 12px;
+  }
+  .session-meta { color: #8b949e; font-size: 0.85em; margin-bottom: 8px; }
+  @media (max-width: 600px) {
+    body { padding: 10px; }
+    .stats-grid { grid-template-columns: repeat(2, 1fr); }
+  }
+  @media print {
+    details { display: block; }
+    details > summary { display: none; }
+    .details-content { border: none; padding: 0; }
+    body { max-width: 100%; padding: 0; background: white; color: black; }
+    .card { border-color: #ddd; background: #f8f8f8; }
+    .stat-value { color: #1a7f37; }
+  }
+</style>
+</head>
+<body>
+
+<h1>週報 {{ range.since }} ~ {{ range.until }}</h1>
+<p class="meta">{{ aggregate_stats.total_sessions }} sessions</p>
+
+{% if weekly_summary %}
+<div class="card">
+  <h2>本週亮點</h2>
+  <ul class="summary-list">
+    {% for item in weekly_summary.highlights %}
+    <li>{{ item }}</li>
+    {% endfor %}
+  </ul>
+</div>
+{% endif %}
+
+<div class="card">
+  <h2>總覽</h2>
+  <div class="stats-grid">
+    <div class="stat-item">
+      <div class="stat-value">{{ aggregate_stats.total_sessions }}</div>
+      <div class="stat-label">Sessions</div>
+    </div>
+    <div class="stat-item">
+      <div class="stat-value">{{ aggregate_stats.total_duration_min }}</div>
+      <div class="stat-label">分鐘</div>
+    </div>
+    <div class="stat-item">
+      <div class="stat-value">{{ aggregate_stats.total_rounds }}</div>
+      <div class="stat-label">回合</div>
+    </div>
+    <div class="stat-item">
+      <div class="stat-value">~{{ "{:,}".format(aggregate_stats.total_token_estimate) }}</div>
+      <div class="stat-label">Token（粗估）</div>
+    </div>
+  </div>
+  <div class="tool-bar">
+    {% for tool, count in aggregate_stats.tool_use_total.items() %}
+    <span class="tool-badge">{{ tool }} <span class="tool-count">×{{ count }}</span></span>
+    {% endfor %}
+  </div>
+</div>
+
+<h2 style="color: var(--accent); margin: 16px 0 8px;">各 Session</h2>
+
+{% for session in sessions %}
+<details>
+  <summary>{{ session.topic }} — {{ session.time_range.duration_min }}min / {{ session.stats.rounds }} 回合</summary>
+  <div class="details-content">
+    <div class="session-meta">
+      {{ session.project }} · {{ session.model }} · {{ session.time_range.start[:10] if session.time_range and session.time_range.start else '' }}
+    </div>
+    {% if session.summary %}
+    <strong>完成項目：</strong>
+    <ul class="summary-list">
+      {% for item in session.summary.completions %}
+      <li>{{ item }}</li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+    <div class="tool-bar" style="margin-top: 8px;">
+      {% for tool, count in session.stats.tool_use.items() %}
+      <span class="tool-badge">{{ tool }} <span class="tool-count">×{{ count }}</span></span>
+      {% endfor %}
+    </div>
+  </div>
+</details>
+{% endfor %}
+
+<p style="text-align:center; color:#8b949e; font-size:0.75em; margin-top:24px;">
+  Generated by ccs-dashboard · {{ range.since }} ~ {{ range.until }}
+</p>
+
+</body>
+</html>
