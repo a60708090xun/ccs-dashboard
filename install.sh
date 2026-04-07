@@ -183,6 +183,7 @@ do_install() {
   echo "  ccs-health          — session health detection"
   echo "  ccs-dispatch        — dispatch task to Claude Code"
   echo "  ccs-jobs            — view dispatch job history"
+  echo "  ccs-review          — session review report (md/html/pdf)"
   echo
   echo "Skills installed:"
   echo "  ccs-orchestrator    — interactive work orchestrator (Claude Code skill)"

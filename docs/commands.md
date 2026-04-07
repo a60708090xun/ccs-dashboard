@@ -376,3 +376,46 @@ ccs-jobs              # 最近 20 筆
 ccs-jobs --all        # 全部
 ccs-jobs <job-id>     # 單筆詳細結果（顯示 .md）
 ```
+
+## ccs-review
+
+Session 回顧報告 — 從 JSONL 提取統計、對話、LLM 摘要，產出可分享的進度報告。
+
+**架構：** Bash 資料層（統計 + JSON 中間格式）+ Python 渲染層（Jinja2 HTML template）。
+
+```bash
+# 基本用法：review 最近一個 session
+ccs-review                          # markdown 輸出到 stdout
+ccs-review <session_id>             # 指定 session
+
+# 輸出格式
+ccs-review <sid> --format md        # markdown（預設）
+ccs-review <sid> --format json      # JSON 中間格式
+ccs-review <sid> --format html -o . # 單檔 HTML（dark theme, chat bubble）
+ccs-review <sid> --format pdf -o .  # PDF 匯出（需 weasyprint）
+
+# LLM 摘要
+ccs-review <sid> --no-summary       # 跳過 LLM 摘要 cache
+
+# 週報模式
+ccs-review --since 2026-03-24 --until 2026-03-31
+ccs-review --since 2026-03-24 --until 2026-03-31 --summarize
+```
+
+**輸出內容：**
+- 統計面板：耗時、回合數、字數、token 粗估、tool use breakdown
+- LLM 摘要（透過 orchestrator skill 觸發 subagent 產生，cache 24h）
+- 任務進度（最後一次 TodoWrite）
+- 涉及檔案、git 狀態
+- 完整對話紀錄（HTML 版用 chat bubble UI，長訊息折疊）
+
+**HTML 特色：**
+- 單檔（CSS + JS 內嵌），方便傳檔分享
+- GitHub dark theme 配色
+- 上層報告風格（主管看）+ 下層 chat bubble（展開看細節）
+- Responsive（手機友善）
+- `<details>` 原生折疊，零 JS 依賴
+
+**依賴（選用）：**
+- `jinja2`：`--format html`（`pip3 install jinja2`）
+- `weasyprint`：`--format pdf`（`pip3 install weasyprint`）

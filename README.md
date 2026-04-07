@@ -117,6 +117,7 @@ ccs-dashboard has two layers:
 | `ccs-health` | Session health detection — detect attention degradation signals |
 | `ccs-dispatch` | Dispatch a task to a new Claude Code session (async or sync) |
 | `ccs-jobs` | View dispatch job history and results |
+| `ccs-review` | Session review report — stats, conversation, LLM summary (md/html/pdf) |
 
 All commands support both **Terminal ANSI** and **Markdown** (`--md`) output modes.
 
@@ -203,7 +204,9 @@ ccs-feature.sh     # Feature clustering + ccs-feature, ccs-tag
 ccs-ops.sh         # ccs-crash, ccs-recap, ccs-checkpoint
 ccs-health.sh      # Session health scoring
 ccs-dispatch.sh    # ccs-dispatch, ccs-jobs
+ccs-review.sh      # ccs-review — session review report
 install.sh         # Installer (deps check + bashrc + skill symlink)
+templates/         # Jinja2 HTML templates for ccs-review
 skills/            # Claude Code skill — primary interface
 docs/              # CLI command reference + archived design docs
 ```
