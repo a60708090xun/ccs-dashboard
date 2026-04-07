@@ -16,10 +16,21 @@ Phase 3 收尾: （worktree）→ 整理 → review → merge → 清理
 ### Phase 3 收尾（必須按順序）
 
 1. **整理 commit：** 細碎 commit 用 `git rebase` 整理成邏輯階段
-2. **更新跨文件引用：** 依 `docs/sync-checklist.md` 檢查
-3. **Code review：** 依複雜度選擇方式，發現問題 → 修正 patch commit
-4. **Merge：** fast-forward merge 到 master
-5. **清理：** 刪除 branch + worktree
+2. **Code review：** 依複雜度選擇方式，發現問題 → 修正 patch commit
+3. **更新跨文件引用：** 依 `docs/sync-checklist.md` 逐項檢查，**這步完成前不得 push 或發 PR**
+4. **發 PR：** push branch → `gh pr create`，PR body 附 review + test report
+5. **Merge：** `gh pr merge --rebase --delete-branch`（不要本地 merge + push）
+6. **清理：** 刪除 worktree（`git worktree remove`）
+
+### 內部文件規則
+
+以下文件放 `internal/`（已 gitignore），**禁止 commit 進 repo**：
+- 交接文件（handoff）
+- 設計 spec（`*-design.md`）
+- 實作計畫（`*-plan.md`）
+- brainstorming / superpowers 產出
+
+Phase 1 規劃時，spec/plan 寫在 `internal/` 或 worktree 的 `internal/`，不加入 git。
 
 ### Worktree 與 Branch
 
