@@ -210,4 +210,21 @@ assert_eq "json: has sessions" "true" "$(echo "$project_json" | jq 'has("session
 assert_eq "json: session_count matches" "2" "$(echo "$project_json" | jq '.period.session_count')"
 assert_eq "json: insights null" "null" "$(echo "$project_json" | jq '.insights')"
 
+echo "=== _ccs_project_md: markdown rendering ==="
+
+md_output=$(_ccs_project_json "-pool2-user-repo-cost" | _ccs_project_md)
+assert_contains "md: has title" "$md_output" "Project Report"
+assert_contains "md: has period" "$md_output" "期間"
+assert_contains "md: has cost section" "$md_output" "投入成本"
+assert_contains "md: has rhythm section" "$md_output" "開發節奏"
+assert_contains "md: has session list" "$md_output" "Session"
+
+echo "=== ccs-project CLI: help flag ==="
+
+help_output=$(ccs-project --help 2>&1)
+assert_contains "cli: has usage" "$help_output" "ccs-project"
+assert_contains "cli: has --since" "$help_output" "--since"
+assert_contains "cli: has --format" "$help_output" "--format"
+assert_contains "cli: has --project" "$help_output" "--project"
+
 test_summary

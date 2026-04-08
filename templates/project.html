@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{{ project_name }} — Project Report</title>
+<style>
+  :root {
+    --bg: #1a1b26; --surface: #24283b; --text: #a9b1d6;
+    --accent: #7aa2f7; --green: #9ece6a; --yellow: #e0af68;
+    --red: #f7768e; --blue: #7aa2f7; --gray: #565f89;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    background: var(--bg); color: var(--text);
+    max-width: 960px; margin: 0 auto; padding: 24px;
+  }
+  .stats-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 12px; margin: 16px 0;
+  }
+  .stat-card {
+    background: var(--surface); border-radius: 8px; padding: 16px;
+    border-left: 3px solid var(--accent);
+  }
+  .stat-card .label { font-size: 0.8em; color: var(--gray); }
+  .stat-card .value { font-size: 1.4em; font-weight: bold; color: var(--accent); }
+  .feature-row {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 12px; border-radius: 6px;
+    background: var(--surface); margin: 4px 0;
+  }
+  .status-badge {
+    padding: 2px 8px; border-radius: 4px; font-size: 0.75em;
+    font-weight: bold;
+  }
+  .status-completed { background: var(--green); color: #1a1b26; }
+  .status-in_progress { background: var(--blue); color: #1a1b26; }
+  .status-stale { background: var(--yellow); color: #1a1b26; }
+  .status-idle { background: var(--gray); color: var(--text); }
+  .heatmap { display: flex; flex-wrap: wrap; gap: 3px; margin: 12px 0; }
+  .heat-cell {
+    width: 14px; height: 14px; border-radius: 2px;
+    background: var(--surface);
+  }
+  .heat-1 { background: #2d4a22; }
+  .heat-2 { background: #3e6b2f; }
+  .heat-3 { background: #5a9e3c; }
+  .heat-4 { background: var(--green); }
+  details { margin: 12px 0; }
+  summary {
+    cursor: pointer; font-weight: bold; padding: 8px;
+    background: var(--surface); border-radius: 6px;
+  }
+  .section { margin: 24px 0; }
+  h1 { color: var(--accent); margin-bottom: 8px; }
+  h2 { color: var(--text); margin: 16px 0 8px; font-size: 1.1em; }
+  .truncated-notice {
+    background: var(--yellow); color: #1a1b26;
+    padding: 6px 12px; border-radius: 4px; font-size: 0.85em;
+    margin: 8px 0;
+  }
+  .session-row {
+    display: grid; grid-template-columns: 80px 90px 1fr 60px 60px;
+    gap: 8px; padding: 6px 8px; font-size: 0.85em;
+    border-bottom: 1px solid var(--surface);
+  }
+  .session-row:hover { background: var(--surface); }
+</style>
+</head>
+<body>
+
+<h1>{{ project_name }}</h1>
+<p style="color:var(--gray)">{{ project }}</p>
+
+{% if period.truncated %}
+<div class="truncated-notice">
+  顯示最近 {{ period.session_count }} 個 session（共 {{ period.truncated_total }} 個）
+</div>
+{% endif %}
+
+<!-- Stats Cards -->
+<div class="stats-grid">
+  <div class="stat-card">
+    <div class="label">期間</div>
+    <div class="value" style="font-size:1em">{{ period.from }} ~ {{ period.to }}</div>
+    <div class="label">{{ period.total_days }} 天</div>
+  </div>
+  <div class="stat-card">
+    <div class="label">Sessions</div>
+    <div class="value">{{ period.session_count }}</div>
+    <div class="label">活躍 {{ period.active_days }} 天</div>
+  </div>
+  <div class="stat-card">
+    <div class="label">估算工時</div>
+    <div class="value">{{ cost.estimated_hours }}h</div>
+    <div class="label">{{ cost.total_rounds }} turns</div>
+  </div>
+  <div class="stat-card">
+    <div class="label">程式碼</div>
+    <div class="value" style="color:var(--green)">+{{ code_changes.lines_added }}</div>
+    <div class="label" style="color:var(--red)">-{{ code_changes.lines_deleted }}</div>
+  </div>
+</div>
+
+<!-- Features -->
+{% if features %}
+<div class="section">
+  <h2>功能進度</h2>
+  {% for f in features %}
+  <div class="feature-row">
+    <span class="status-badge status-{{ f.status }}">{{ f.status }}</span>
+    <span>{{ f.branch or f.id }}</span>
+    <span style="color:var(--gray)">— {{ f.label }}</span>
+    <span style="margin-left:auto;color:var(--gray)">{{ f.todos_done }}/{{ f.todos_total }}</span>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+<!-- Insights -->
+{% if insights %}
+<div class="section">
+  <h2>洞察</h2>
+  <p>{{ insights.health_summary }}</p>
+  {% if insights.suggestions %}
+  <ul>
+    {% for s in insights.suggestions %}<li>{{ s }}</li>{% endfor %}
+  </ul>
+  {% endif %}
+</div>
+{% endif %}
+
+<!-- Rhythm (collapsible) -->
+<details class="section">
+  <summary>開發節奏</summary>
+  <div style="padding:12px 0">
+    <p>最長連續: {{ rhythm.longest_streak }} 天 | 最長中斷: {{ rhythm.longest_gap }} 天 | 平均: {{ rhythm.avg_sessions_per_day }} sessions/天</p>
+    <div class="heatmap">
+      {% for day in rhythm.heatmap %}
+      <div class="heat-cell heat-{{ [day.sessions, 4]|min }}"
+           title="{{ day.date }}: {{ day.sessions }} sessions"></div>
+      {% endfor %}
+    </div>
+  </div>
+</details>
+
+<!-- Code Changes (collapsible) -->
+<details class="section">
+  <summary>程式碼變動</summary>
+  <div style="padding:12px 0">
+    {% if code_changes.by_branch %}
+    <h2 style="font-size:0.9em">依 Branch</h2>
+    {% for b in code_changes.by_branch %}
+    <div style="padding:4px 0">
+      <strong>{{ b.branch }}</strong> ({{ b.commits }} commits)
+      <div style="color:var(--gray);font-size:0.85em">{{ b.summary }}</div>
+    </div>
+    {% endfor %}
+    {% endif %}
+    {% if code_changes.top_files %}
+    <h2 style="font-size:0.9em;margin-top:12px">修改最多的檔案</h2>
+    {% for f in code_changes.top_files[:10] %}
+    <div style="font-size:0.85em">{{ f.path }} ({{ f.changes }}x)</div>
+    {% endfor %}
+    {% endif %}
+  </div>
+</details>
+
+<!-- Problem Patterns (collapsible) -->
+{% if insights and insights.recurring_issues %}
+<details class="section">
+  <summary>問題模式</summary>
+  <div style="padding:12px 0">
+    <ul>
+      {% for issue in insights.recurring_issues %}<li>{{ issue }}</li>{% endfor %}
+    </ul>
+    {% if insights.hotspot_files %}
+    <h2 style="font-size:0.9em;margin-top:12px">熱點檔案</h2>
+    <ul>
+      {% for f in insights.hotspot_files %}<li>{{ f }}</li>{% endfor %}
+    </ul>
+    {% endif %}
+  </div>
+</details>
+{% endif %}
+
+<!-- Session List (collapsible) -->
+<details class="section">
+  <summary>Session 列表 ({{ sessions|length }})</summary>
+  <div style="padding:12px 0">
+    <div class="session-row" style="font-weight:bold;color:var(--gray)">
+      <span>SID</span><span>日期</span><span>Topic</span><span>Turns</span><span>時長</span>
+    </div>
+    {% for s in sessions %}
+    <div class="session-row">
+      <span style="font-family:monospace">{{ s.sid }}</span>
+      <span>{{ s.date }}</span>
+      <span>{{ s.topic[:60] if s.topic else '' }}</span>
+      <span>{{ s.turns }}</span>
+      <span>{{ s.duration_min }}m</span>
+    </div>
+    {% endfor %}
+  </div>
+</details>
+
+<footer style="margin-top:32px;padding:12px 0;border-top:1px solid var(--surface);color:var(--gray);font-size:0.8em">
+  Generated by ccs-project · {{ period.to }}
+</footer>
+
+</body>
+</html>
