@@ -31,6 +31,8 @@ ccs-feature.sh   — feature clustering + ccs-tag
 ccs-ops.sh       — ccs-crash, ccs-recap, ccs-checkpoint
 ccs-health.sh    — session health 評分
 ccs-dispatch.sh  — ccs-dispatch, ccs-jobs
+ccs-review.sh    — ccs-review
+ccs-project.sh   — ccs-project
 ```
 
 設計原則：
