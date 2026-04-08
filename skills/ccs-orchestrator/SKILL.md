@@ -192,7 +192,8 @@ Session review 產生進度報告，可分享給主管。有兩種模式：
      a. **健康度摘要**（prompt: 綜合所有維度，3-5 句整體評估）
      b. **重複問題**（prompt: 從 session topics 和 code changes 找重複模式）
      c. **改善建議**（prompt: 基於節奏和問題模式，3 條可行建議）
-   - 組成 insights JSON：`{"health_summary":"...","recurring_issues":[...],"hotspot_files":[...],"suggestions":[...],"generated_at":"..."}`
+   - 組成 insights JSON：`{"highlights":["一句話重點1","一句話重點2",...],"health_summary":"...","recurring_issues":[...],"hotspot_files":[...],"suggestions":[...],"generated_at":"..."}`
+   - `highlights` 是 3-5 個 bullet points，每條一句話（≤30 字），用於摘要層快速瀏覽
    - 寫入 cache：
      ```bash
      mkdir -p "$(_ccs_data_dir)/project-cache"

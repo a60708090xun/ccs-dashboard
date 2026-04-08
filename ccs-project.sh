@@ -585,6 +585,23 @@ _ccs_project_md() {
   if [ "$has_insights" = "true" ]; then
     echo "## 洞察"
     echo ""
+
+    # Highlights (short bullet points for summary layer)
+    local highlights_count
+    highlights_count=$(echo "$json" | jq '.insights.highlights | length // 0')
+    if [ "$highlights_count" -gt 0 ]; then
+      echo "$json" | jq -r '.insights.highlights[]? | "- \(.)"'
+      echo ""
+    else
+      # Fallback: show first sentence of health_summary
+      echo "$json" | jq -r '.insights.health_summary // empty' | head -1
+      echo ""
+    fi
+
+    # Detailed analysis (collapsible in md via <details>)
+    echo "<details>"
+    echo "<summary>詳細分析</summary>"
+    echo ""
     echo "$json" | jq -r '.insights.health_summary // empty'
     echo ""
     local issues_count
@@ -601,6 +618,8 @@ _ccs_project_md() {
       echo "$json" | jq -r '.insights.suggestions[]? | "- \(.)"'
       echo ""
     fi
+    echo "</details>"
+    echo ""
   fi
 
   # Session list
