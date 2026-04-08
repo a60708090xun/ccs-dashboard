@@ -26,6 +26,7 @@ source "${BASH_SOURCE[0]%/*}/ccs-feature.sh"
 source "${BASH_SOURCE[0]%/*}/ccs-ops.sh"
 source "${BASH_SOURCE[0]%/*}/ccs-dispatch.sh"
 source "${BASH_SOURCE[0]%/*}/ccs-review.sh"
+source "${BASH_SOURCE[0]%/*}/ccs-project.sh"
 
 # ── ccs-status (ccs) — unified session dashboard ──
 ccs-status() {

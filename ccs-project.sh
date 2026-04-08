@@ -485,3 +485,218 @@ _ccs_project_json() {
       sessions: $sessions
     }'
 }
+
+# ── Helper: render project JSON as markdown ──
+# Reads JSON from stdin
+_ccs_project_md() {
+  local json
+  json=$(cat)
+
+  local project_name period_from period_to total_days active_days session_count
+  project_name=$(echo "$json" | jq -r '.project_name')
+  period_from=$(echo "$json" | jq -r '.period.from')
+  period_to=$(echo "$json" | jq -r '.period.to')
+  total_days=$(echo "$json" | jq '.period.total_days')
+  active_days=$(echo "$json" | jq '.period.active_days')
+  session_count=$(echo "$json" | jq '.period.session_count')
+
+  local truncated truncated_msg=""
+  truncated=$(echo "$json" | jq '.period.truncated')
+  if [ "$truncated" = "true" ]; then
+    local truncated_total
+    truncated_total=$(echo "$json" | jq '.period.truncated_total')
+    truncated_msg=" _(顯示最近 ${session_count} 個，共 ${truncated_total} 個)_"
+  fi
+
+  local est_hours avg_turns total_rounds
+  est_hours=$(echo "$json" | jq '.cost.estimated_hours')
+  avg_turns=$(echo "$json" | jq '.cost.avg_turns_per_session')
+  total_rounds=$(echo "$json" | jq '.cost.total_rounds')
+
+  echo "# Project Report: ${project_name}"
+  echo ""
+  echo "**期間：** ${period_from} ~ ${period_to}（${total_days} 天）"
+  echo "**Session 數：** ${session_count}${truncated_msg} | **活躍天：** ${active_days} | **估算工時：** ${est_hours}h"
+  echo ""
+
+  # Features
+  local feat_count
+  feat_count=$(echo "$json" | jq '.features | length')
+  if [ "$feat_count" -gt 0 ]; then
+    echo "## 功能進度"
+    echo ""
+    echo "$json" | jq -r '.features[] |
+      (if .status == "completed" then "✅"
+       elif .status == "in_progress" then "🔵"
+       elif .status == "stale" then "🟡"
+       else "⚪" end) as $icon |
+      "\($icon) \(.branch // .id) — \(.label) (\(.todos_done)/\(.todos_total) todos)"'
+    echo ""
+  fi
+
+  # Cost
+  echo "## 投入成本"
+  echo ""
+  echo "- 總 turns: ${total_rounds}（平均 ${avg_turns}/session）"
+  echo "- 估算工時: ${est_hours}h（${session_count} sessions）"
+  echo ""
+
+  # Rhythm
+  local longest_streak longest_gap avg_per_day
+  longest_streak=$(echo "$json" | jq '.rhythm.longest_streak')
+  longest_gap=$(echo "$json" | jq '.rhythm.longest_gap')
+  avg_per_day=$(echo "$json" | jq '.rhythm.avg_sessions_per_day')
+
+  echo "## 開發節奏"
+  echo ""
+  echo "- 最長連續: ${longest_streak} 天 | 最長中斷: ${longest_gap} 天"
+  echo "- 平均: ${avg_per_day} sessions/天"
+  echo ""
+
+  # Code changes
+  local lines_added lines_deleted
+  lines_added=$(echo "$json" | jq '.code_changes.lines_added')
+  lines_deleted=$(echo "$json" | jq '.code_changes.lines_deleted')
+
+  echo "## 程式碼變動"
+  echo ""
+  echo "- +${lines_added} / -${lines_deleted} 行"
+  echo ""
+
+  local branch_count
+  branch_count=$(echo "$json" | jq '.code_changes.by_branch | length')
+  if [ "$branch_count" -gt 0 ]; then
+    echo "$json" | jq -r '.code_changes.by_branch[] |
+      "- \(.branch) (\(.commits) commits): \(.summary)"'
+    echo ""
+  fi
+
+  local top_count
+  top_count=$(echo "$json" | jq '.code_changes.top_files | length')
+  if [ "$top_count" -gt 0 ]; then
+    echo "**修改最多的檔案：**"
+    echo "$json" | jq -r '.code_changes.top_files[:10][] | "- \(.path) (\(.changes)x)"'
+    echo ""
+  fi
+
+  # Insights
+  local has_insights
+  has_insights=$(echo "$json" | jq '.insights != null')
+  if [ "$has_insights" = "true" ]; then
+    echo "## 洞察"
+    echo ""
+    echo "$json" | jq -r '.insights.health_summary // empty'
+    echo ""
+    local issues_count
+    issues_count=$(echo "$json" | jq '.insights.recurring_issues | length // 0')
+    if [ "$issues_count" -gt 0 ]; then
+      echo "**重複問題：**"
+      echo "$json" | jq -r '.insights.recurring_issues[]? | "- \(.)"'
+      echo ""
+    fi
+    local suggestions_count
+    suggestions_count=$(echo "$json" | jq '.insights.suggestions | length // 0')
+    if [ "$suggestions_count" -gt 0 ]; then
+      echo "**建議：**"
+      echo "$json" | jq -r '.insights.suggestions[]? | "- \(.)"'
+      echo ""
+    fi
+  fi
+
+  # Session list
+  echo "## Session 列表"
+  echo ""
+  echo "$json" | jq -r '.sessions[] |
+    "- [\(.sid)] \(.date) — \(.topic) (\(.turns) turns, \(.duration_min)min)"'
+}
+
+# ── CLI entry point ──
+ccs-project() {
+  if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
+    cat <<'HELP'
+ccs-project — per-project insight report
+[personal tool, not official Claude Code]
+
+Usage:
+  ccs-project                         Report for current directory's project
+  ccs-project /path/to/repo           Report for specified project
+  ccs-project --since 2026-03-01      Limit time range
+  ccs-project --format html -o ./     Output as HTML
+
+Options:
+  --project PATH        Explicit project path (alternative to positional arg)
+  --since DATE          Start date (YYYY-MM-DD)
+  --until DATE          End date (YYYY-MM-DD, default: today)
+  --format md|html|json Output format (default: md)
+  -o, --output DIR      Output directory for html
+  --no-insights         Skip LLM insights cache lookup
+
+Auto-truncation: max 50 sessions or 90 days (whichever is stricter).
+HELP
+    return 0
+  fi
+
+  local project_path="" format="md" output_dir="" since="" until_date=""
+  local no_insights=false
+
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --project) project_path="$2"; shift 2 ;;
+      --since) since="$2"; shift 2 ;;
+      --until) until_date="$2"; shift 2 ;;
+      --format) format="$2"; shift 2 ;;
+      -o|--output) output_dir="$2"; shift 2 ;;
+      --no-insights) no_insights=true; shift ;;
+      -*) echo "ccs-project: unknown option: $1" >&2; return 1 ;;
+      *) project_path="$1"; shift ;;
+    esac
+  done
+
+  # Resolve project path → encoded dir name
+  if [ -z "$project_path" ]; then
+    project_path=$(pwd)
+  fi
+  project_path=$(realpath "$project_path" 2>/dev/null || echo "$project_path")
+
+  local encoded_dir
+  encoded_dir=$(_ccs_find_project_dir "$project_path")
+  if [ -z "$encoded_dir" ]; then
+    echo "ccs-project: no sessions found for $project_path" >&2
+    return 1
+  fi
+
+  # Build JSON
+  local project_json
+  project_json=$(_ccs_project_json "$encoded_dir" "$since" "$until_date")
+
+  if $no_insights; then
+    project_json=$(echo "$project_json" | jq '.insights = null')
+  fi
+
+  case "$format" in
+    json)
+      echo "$project_json"
+      ;;
+    md)
+      echo "$project_json" | _ccs_project_md
+      ;;
+    html)
+      local script_dir="${BASH_SOURCE[0]%/*}"
+      local html
+      html=$(echo "$project_json" | python3 "$script_dir/ccs-project-render.py")
+      if [ -n "$output_dir" ]; then
+        local project_name
+        project_name=$(echo "$project_json" | jq -r '.project_name')
+        local outfile="${output_dir}/${project_name}-project-report.html"
+        echo "$html" > "$outfile"
+        echo "ccs-project: written to $outfile"
+      else
+        echo "$html"
+      fi
+      ;;
+    *)
+      echo "ccs-project: unknown format: $format" >&2
+      return 1
+      ;;
+  esac
+}

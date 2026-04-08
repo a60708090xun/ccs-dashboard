@@ -22,7 +22,7 @@ assert_eq() {
 
 assert_contains() {
   local label="$1" haystack="$2" needle="$3"
-  if echo "$haystack" | grep -qF "$needle"; then
+  if echo "$haystack" | grep -qF -- "$needle"; then
     printf '  PASS: %s\n' "$label"
     PASS=$((PASS + 1))
   else
@@ -34,7 +34,7 @@ assert_contains() {
 
 assert_not_contains() {
   local label="$1" haystack="$2" needle="$3"
-  if echo "$haystack" | grep -qF "$needle"; then
+  if echo "$haystack" | grep -qF -- "$needle"; then
     printf '  FAIL: %s (found: "%s")\n' \
       "$label" "$needle"
     FAIL=$((FAIL + 1))
