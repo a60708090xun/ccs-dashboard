@@ -1,6 +1,6 @@
 ---
 name: ccs-orchestrator
-description: "MANDATORY for any ccs-* command execution. Never run ccs-* commands via Bash directly — always invoke this skill instead. Triggers on: ccs-status, ccs-overview, ccs-crash, ccs-checkpoint, ccs-recap, ccs-feature, ccs-handoff, ccs-pick, ccs-health, ccs-dispatch, ccs-jobs, ccs-review. Also triggers on: 'checkpoint', 'overview', 'recap', 'sessions', 'crash', 'health', 'handoff', 'dispatch', 'review', 'session review', '回顧', '報告', 'weekly report', '週報', '跑一下checkpoint', '目前狀態', '工作總覽', 'what am I working on', 'show my sessions', 'セッションの状態'. This skill handles output rendering (via _ccs_to_file + Read) so results display correctly in session view."
+description: "MANDATORY for any ccs-* command execution. Never run ccs-* commands via Bash directly — always invoke this skill instead. Triggers on: ccs-status, ccs-overview, ccs-crash, ccs-checkpoint, ccs-recap, ccs-feature, ccs-handoff, ccs-pick, ccs-health, ccs-dispatch, ccs-jobs, ccs-review, ccs-project. Also triggers on: 'checkpoint', 'overview', 'recap', 'sessions', 'crash', 'health', 'handoff', 'dispatch', 'review', 'session review', 'project report', 'project insights', '回顧', '報告', 'weekly report', '週報', '專案報告', '專案洞察', '跑一下checkpoint', '目前狀態', '工作總覽', 'what am I working on', 'show my sessions', 'セッションの状態'. This skill handles output rendering (via _ccs_to_file + Read) so results display correctly in session view."
 ---
 
 # CCS Orchestrator
@@ -56,6 +56,8 @@ description: "MANDATORY for any ccs-* command execution. Never run ccs-* command
 | review [sid] | rv | `ccs-review [sid]` — session review 報告 |
 | review html [sid] | | `ccs-review [sid] --format html -o <path>` — HTML 報告 |
 | weekly [since] [until] | wk | `ccs-review --since <date> --until <date>` — 週報 |
+| project [path] | pj | `ccs-project [path]` — 專案層級洞察報告 |
+| project html [path] | | `ccs-project [path] --format html -o <path>` — HTML 報告 |
 
 ## Routing Rules
 
@@ -177,3 +179,24 @@ Session review 產生進度報告，可分享給主管。有兩種模式：
 2. 呈現結果
 3. 用 `<options>` 問：「要 LLM 彙整本週亮點？」「匯出 HTML」「匯出 PDF」
 4. 若選 LLM 彙整 → 收集各 session cache 摘要 → 派 subagent → 呈現
+
+### Project 流程
+
+專案層級洞察報告，結合投入成本、功能進度、開發節奏、程式碼變動。
+
+1. 執行 `ccs-project [path] --format json` 取得結構化資料
+2. 檢查 insights cache（`~/.local/share/ccs-dashboard/project-cache/<encoded>.insights.json`）
+3. 若無 cache 或已過期（>24h）：
+   - 從 JSON 取 `sessions`、`features`、`code_changes`、`rhythm`
+   - 派 subagent 生成洞察：
+     a. **健康度摘要**（prompt: 綜合所有維度，3-5 句整體評估）
+     b. **重複問題**（prompt: 從 session topics 和 code changes 找重複模式）
+     c. **改善建議**（prompt: 基於節奏和問題模式，3 條可行建議）
+   - 組成 insights JSON：`{"health_summary":"...","recurring_issues":[...],"hotspot_files":[...],"suggestions":[...],"generated_at":"..."}`
+   - 寫入 cache：
+     ```bash
+     mkdir -p "$(_ccs_data_dir)/project-cache"
+     echo '<insights json>' > "$(_ccs_data_dir)/project-cache/<encoded>.insights.json"
+     ```
+4. 執行 `ccs-project [path] --format md` 呈現結果
+5. 用 `<options>` 問：「要匯出 HTML？」「回到總覽」
