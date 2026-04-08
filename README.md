@@ -118,6 +118,7 @@ ccs-dashboard has two layers:
 | `ccs-dispatch` | Dispatch a task to a new Claude Code session (async or sync) |
 | `ccs-jobs` | View dispatch job history and results |
 | `ccs-review` | Session review report — stats, conversation, LLM summary (md/html/pdf) |
+| `ccs-project` | Per-project insight report — cost, features, rhythm, code changes (md/html) |
 
 All commands support both **Terminal ANSI** and **Markdown** (`--md`) output modes.
 
@@ -205,8 +206,9 @@ ccs-ops.sh         # ccs-crash, ccs-recap, ccs-checkpoint
 ccs-health.sh      # Session health scoring
 ccs-dispatch.sh    # ccs-dispatch, ccs-jobs
 ccs-review.sh      # ccs-review — session review report
+ccs-project.sh     # ccs-project — per-project insight report
 install.sh         # Installer (deps check + bashrc + skill symlink)
-templates/         # Jinja2 HTML templates for ccs-review
+templates/         # Jinja2 HTML templates for ccs-review, ccs-project
 skills/            # Claude Code skill — primary interface
 docs/              # CLI command reference + archived design docs
 ```

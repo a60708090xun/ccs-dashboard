@@ -416,6 +416,33 @@ ccs-review --since 2026-03-24 --until 2026-03-31 --summarize
 - Responsive（手機友善）
 - `<details>` 原生折疊，零 JS 依賴
 
+## ccs-project
+
+專案層級洞察報告：投入成本、功能進度、開發節奏、程式碼變動、跨 session 問題模式。
+報告分兩層：摘要（主管看）和細節（開發者看）。
+
+```bash
+ccs-project                           # 偵測 cwd 專案
+ccs-project /path/to/repo             # 指定專案
+ccs-project --since 2026-03-01        # 限縮時間
+ccs-project --format html -o ./reports/  # HTML 匯出
+ccs-project --no-insights             # 跳過 LLM 洞察
+```
+
+自動限縮：最多 50 個 session 或 90 天（取嚴）。
+
+**報告維度：**
+- 功能進度追蹤（讀 features.jsonl，含狀態色標）
+- 累積投入成本（session 數、工時、turns）
+- 開發節奏分析（活躍天曆、連續天/中斷天）
+- 程式碼變動摘要（per-branch commits、top files、行數）
+- 跨 session 問題模式（LLM 洞察，透過 orchestrator 觸發）
+
+**HTML 特色：**
+- Dark theme，與 ccs-review 風格一致
+- 摘要層固定（stats cards + 功能進度 + 洞察）
+- 細節層折疊（節奏、程式碼變動、session 列表）
+
 **依賴（選用）：**
 - `jinja2`：`--format html`（`pip3 install jinja2`）
 - `weasyprint`：`--format pdf`（`pip3 install weasyprint`）

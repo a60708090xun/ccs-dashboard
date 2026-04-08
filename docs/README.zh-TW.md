@@ -118,6 +118,7 @@ ccs-dashboard 分兩層：
 | `ccs-dispatch` | 派發任務到新的 Claude Code session（async 或 sync） |
 | `ccs-jobs` | 查看 dispatch 任務歷史與結果 |
 | `ccs-review` | Session 回顧報告 — 統計、對話、LLM 摘要（md/html/pdf） |
+| `ccs-project` | 專案層級洞察報告 — 成本、進度、節奏、程式碼變動（md/html） |
 
 所有指令支援 **Terminal ANSI** 和 **Markdown** (`--md`) 兩種輸出模式。
 
@@ -205,8 +206,9 @@ ccs-ops.sh         # ccs-crash, ccs-recap, ccs-checkpoint
 ccs-health.sh      # Session health 評分
 ccs-dispatch.sh    # ccs-dispatch, ccs-jobs
 ccs-review.sh      # ccs-review — session 回顧報告
+ccs-project.sh     # ccs-project — 專案層級洞察報告
 install.sh         # 安裝腳本（依賴檢查 + bashrc + skill symlink）
-templates/         # Jinja2 HTML 模板（ccs-review 用）
+templates/         # Jinja2 HTML 模板（ccs-review、ccs-project 用）
 skills/            # Claude Code skill — 主要介面
 docs/              # CLI 指令參考 + 歸檔設計文件
 ```

@@ -114,7 +114,7 @@ do_install() {
   echo
 
   # Check files exist
-  local modules=(ccs-core.sh ccs-health.sh ccs-viewer.sh ccs-handoff.sh ccs-overview.sh ccs-feature.sh ccs-ops.sh ccs-dispatch.sh ccs-review.sh ccs-dashboard.sh)
+  local modules=(ccs-core.sh ccs-health.sh ccs-viewer.sh ccs-handoff.sh ccs-overview.sh ccs-feature.sh ccs-ops.sh ccs-dispatch.sh ccs-review.sh ccs-project.sh ccs-dashboard.sh)
   local all_found=true
   for mod in "${modules[@]}"; do
     if [ ! -f "${SCRIPT_DIR}/${mod}" ]; then
@@ -184,6 +184,7 @@ do_install() {
   echo "  ccs-dispatch        — dispatch task to Claude Code"
   echo "  ccs-jobs            — view dispatch job history"
   echo "  ccs-review          — session review report (md/html/pdf)"
+  echo "  ccs-project         — per-project insight report (md/html)"
   echo
   echo "Skills installed:"
   echo "  ccs-orchestrator    — interactive work orchestrator (Claude Code skill)"
