@@ -4,10 +4,10 @@
 
 ## ccs-status (ccs)
 
-一眼掌握所有 session 狀態，分四個區塊：
+一眼掌握所有 Provider (Claude, Gemini 等) 的 session 狀態，分四個區塊：
 1. **Active Sessions** — 近 1 天內有活動的未封存 session
 2. **Crashed Sessions** — crash-interrupted session（由 `ccs-crash` 偵測邏輯判定）
-3. **Zombie Processes** — 被 suspend 的 claude process（吃 RAM）
+3. **Zombie Processes** — 被 suspend 的 Code CLI process (如 claude)
 4. **Stale Sessions** — 超過 1 天未動的未封存 session
 
 ```bash
@@ -43,7 +43,7 @@ ccs-pick --md --full 3:9  # 完整展開第 3 個 session 的第 9 個 prompt re
 
 ## ccs-cleanup
 
-找出 Stopped 狀態（`Tl`/`T`）的 claude process 並終止。
+找出 Stopped 狀態（`Tl`/`T`）的 Code CLI process (如 claude) 並終止。
 這些通常是 waveterm `/exit` 後被 SIGTSTP suspend 的殭屍，每個佔 190-500 MB RAM。
 
 ```bash
@@ -211,7 +211,7 @@ ccs-crash --idle-window N      # Path 2 window（分鐘，預設 1440）
 判斷 session 是否仍在執行使用兩種方法：
 
 1. **精確匹配**：`ps` 抓 `--resume <session-id>`（適用 `claude --resume` 啟動的 session）
-2. **cwd 匹配**：比對 claude process 的工作目錄與 session 的 project 路徑（適用 Happy 啟動或 terminal 直接開的 session）。路徑使用正規化比對（`/._` 統一為 `-`）解決 Claude Code 路徑編碼歧義。
+2. **cwd 匹配**：比對 Code CLI process (如 claude) 的工作目錄與 session 的 project 路徑（適用 Happy 啟動或 terminal 直接開的 session）。路徑使用正規化比對（`/._` 統一為 `-`）解決 Code CLI 工具路徑編碼歧義。
 
 Hung detection 僅對精確匹配的 session 生效，cwd 匹配因無法確定 process 對應哪個 session，不做 hung 判斷。
 
@@ -244,7 +244,7 @@ Done: 14 sessions archived.
 1. JSONL 最後一行是 `/exit` 的 stdout event（`Goodbye!` 或 `See ya!`）
 2. `last-prompt` marker 存在且之後無 `assistant` event
 
-> **已知問題**：Claude Code 在 resume → `/exit` 時可能不寫 `last-prompt` marker。Check 1 處理此情況。
+> **已知問題**：部分工具 (如 Claude Code) 在 resume → `/exit` 時可能不寫 `last-prompt` marker。Check 1 處理此情況。
 
 ### 輸出範例
 
@@ -324,7 +324,7 @@ CCS_HEALTH_ROUNDS_RED=60        # 輪數紅色閾值
 
 ## ccs-dispatch
 
-派工到新 Claude Code session。混合模式：預設 async（nohup detach），可選 sync（blocking）。
+派工到新 Code CLI session (如 Claude Code)。混合模式：預設 async（nohup detach），可選 sync（blocking）。
 
 ```bash
 # Async（預設）— 立即回傳 job-id

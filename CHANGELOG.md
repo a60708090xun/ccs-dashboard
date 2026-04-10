@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [Semantic Versioning](https://semver.org/).
 
+n## [0.3.0] — 2026-04-10
+
+### Added
+
+- **Multi-Provider Dashboard** — Python session collection layer for Claude and Gemini CLI sessions (GH#40, PR #41)
+- **ccs_collect.py** — unified Python-based session parser
+
+### Changed
+
+- **ccs-status** — updated to display PROV column and Gemini sessions
+- **ccs-active** — support Gemini session display
+- **ccs-sessions** — support Gemini session display
+
 ## [0.2.1] — 2026-03-25
 
 ### Added
