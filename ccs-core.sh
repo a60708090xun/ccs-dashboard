@@ -895,6 +895,9 @@ _ccs_data_dir() {
 
 # Usage: _ccs_collect_sessions [-a|--all] out_files out_projects out_rows
 # Three nameref output arrays.
+# Output format (TAB-separated row):
+#   f1=prov  f2=project  f3=ago_min  f4=status  f5=color  f6=display_line  f7=badge
+# _out_projects stores the encoded dir name (for _ccs_resolve_project_path).
 _ccs_collect_sessions() {
   local show_all=""
   if [ "${1:-}" = "-a" ] || [ "${1:-}" = "--all" ]; then
@@ -902,27 +905,37 @@ _ccs_collect_sessions() {
   fi
 
   local -n _out_files=$1 _out_projects=$2 _out_rows=$3
-  
+
   local script_dir
   script_dir="$_CCS_DASHBOARD_DIR"
-  
-  # Note: The cutoff filtering is still handled in Bash here for backwards compatibility
+
   local cutoff
   cutoff=$(date -d "7 days ago" +%s 2>/dev/null || date -v-7d +%s 2>/dev/null)
-  
+
   while IFS='|' read -r prov proj ago status color display_proj sid ago_str topic badge filepath; do
     [ -z "$proj" ] && continue
-    
-    # Re-implement the 7-day cutoff for default collection
+
     if [ -z "$show_all" ]; then
        local mod
        mod=$(stat -c "%Y" "$filepath" 2>/dev/null || echo 0)
        [ "$mod" -lt "$cutoff" ] 2>/dev/null && continue
     fi
-    
+
+    # Recover encoded dir name for _ccs_resolve_project_path
+    local encoded_dir
+    if [ "$prov" = "C" ]; then
+      encoded_dir=$(basename "$(dirname "$filepath")")
+    else
+      encoded_dir="$proj"
+    fi
+
+    # Build TAB-separated row (backward-compatible + prov prefix)
+    local display
+    display=$(printf '%-35s %-20s %-12s %s' "$proj" "$sid" "$ago_str" "$topic")
+
     _out_files+=("$filepath")
-    _out_projects+=("$proj")
-    _out_rows+=("$prov|$proj|$ago|$status|$color|$display_proj|$sid|$ago_str|$topic|$badge|$filepath")
+    _out_projects+=("$encoded_dir")
+    _out_rows+=("$(printf '%s\t%s\t%d\t%s\t%s\t%s\t%s' "$prov" "$proj" "$ago" "$status" "$color" "$display" "$badge")")
   done < <(python3 "$script_dir/internal/ccs_collect.py" $show_all)
 }
 

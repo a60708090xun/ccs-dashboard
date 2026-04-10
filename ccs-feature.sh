@@ -87,10 +87,10 @@ _ccs_feature_cluster() {
     local dir="${__fc_projects[$i]}"
     local row="${__fc_rows[$i]}"
 
-    # Parse row fields (tab-separated) + get topic from JSONL
+    # Parse row fields (tab-separated: prov, project, ago, status, color, display, badge)
     local project sid topic
-    project=$(echo "$row" | cut -f1)
-    sid=$(basename "$f" .jsonl | cut -c1-8)
+    project=$(echo "$row" | cut -f2)
+    sid=$(basename "$f" | sed -e 's/\.jsonl$//' -e 's/\.json$//' | cut -c1-8)
     topic=$(_ccs_topic_from_jsonl "$f")
 
     # Friendly project name for feature ID prefix
@@ -202,8 +202,8 @@ _ccs_feature_cluster() {
       local _sf="${__fc_files[$idx]}"
       local _srow="${__fc_rows[$idx]}"
       local s_sid s_ago
-      s_sid=$(basename "$_sf" .jsonl | cut -c1-8)
-      s_ago=$(echo "$_srow" | cut -f2)
+      s_sid=$(basename "$_sf" | sed -e 's/\.jsonl$//' -e 's/\.json$//' | cut -c1-8)
+      s_ago=$(echo "$_srow" | cut -f3)
       session_ids+=("$s_sid")
 
       [ "$s_ago" -lt "$min_ago" ] && min_ago=$s_ago
