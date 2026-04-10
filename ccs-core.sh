@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# ccs-core.sh — Claude Code Session core helpers and basic commands
+# ccs-core.sh — Code CLI Sessions (CCS) core helpers and basic commands
 # Part of ccs-dashboard. Sourced by ccs-dashboard.sh automatically.
 #
 # Computed at source time — used to strip $HOME prefix from JSONL directory names.
 _CCS_HOME_ENCODED=$(echo "$HOME" | sed 's/\//-/g')
+_CCS_DASHBOARD_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 #
 # Helpers:
 #   _ccs_session_row        — parse JSONL session → tab-separated row
@@ -53,75 +54,9 @@ _ccs_is_archived() {
 # ── Helper: parse one JSONL session file → tab-separated row ──
 _ccs_session_row() {
   local f="$1"
-  local dir project sid mod now ago ago_str color topic status
-
-  dir=$(basename "$(dirname "$f")")
-  project=$(echo "$dir" | sed "s/^${_CCS_HOME_ENCODED}-*//; s/-/\//g")
-  [ -z "$project" ] && project="~(home)"
-
-  sid=$(basename "$f" .jsonl | cut -c1-8)
-
-  mod=$(stat -c "%Y" "$f")
-  now=$(date +%s)
-  ago=$(( (now - mod) / 60 ))
-  if [ "$ago" -lt 60 ]; then
-    ago_str=$(printf '%3dm ago' "$ago")
-  elif [ "$ago" -lt 1440 ]; then
-    ago_str=$(printf '%3dh ago' "$((ago / 60))")
-  else
-    ago_str=$(printf '%3dd ago' "$((ago / 1440))")
-  fi
-
-  if _ccs_is_archived "$f"; then
-    status="archived"
-    color="\033[90m\033[9m"  # gray + strikethrough
-  elif [ "$ago" -lt 10 ]; then
-    status="active"
-    color="\033[32m"  # green
-  elif [ "$ago" -lt 60 ]; then
-    status="recent"
-    color="\033[33m"  # yellow
-  elif [ "$ago" -lt 1440 ]; then
-    status="idle"
-    color="\033[34m"  # blue — open but idle (< 1 day)
-  else
-    status="stale"
-    color="\033[90m"  # gray — open but untouched > 1 day
-  fi
-
-  # Topic: prefer Happy Coder title (last set), fallback to first user message
-  topic=""
-  if grep -q "change_title" "$f" 2>/dev/null; then
-    topic=$(grep "change_title" "$f" 2>/dev/null | jq -r '
-      .message.content[]? |
-      select(.type == "tool_use" and .name == "mcp__happy__change_title") |
-      .input.title' 2>/dev/null | tail -1)
-  fi
-  if [ -z "$topic" ]; then
-    # Find first real user message (skip meta, local-command, system tags, slash commands)
-    # Strip XML tags from content to avoid <command-message> etc. leaking into topic
-    topic=$(jq -r '
-      select(.type == "user" and (.message.content | type == "string")
-        and ((.isMeta // false) == false)
-        and (.message.content | test("^<local-command|^<command-name|^<system-|^\\s*/exit|^\\s*/quit") | not)
-        and (.message.content | test("^\\s*$") | not))
-      | .message.content | gsub("<[^>]+>"; "") | gsub("^\\s+|\\s+$"; "")
-    ' "$f" 2>/dev/null | head -1 | tr '\n' ' ' | cut -c1-120)
-  fi
-  [ -z "$topic" ] && topic="-"
-  # Sanitize for display (no truncation — let terminal wrap)
-  topic=$(echo "$topic" | tr '\n\t' '  ')
-
-  # Health badge: only for active/recent/idle sessions (not archived/stale)
-  # NOTE: _ccs_health_badge runs a jq pipeline per session — acceptable for MVP
-  #       (typically < 10 sessions) but consider caching for future optimization.
-  local badge=""
-  if [[ "$status" == "active" || "$status" == "recent" || "$status" == "idle" ]]; then
-    badge=$(_ccs_health_badge "$f")
-  fi
-
-  # Output: project, ago (for sort), status, color, display line (no ANSI in sort keys), badge
-  printf "%s\t%d\t%s\t%s\t%-35s %-20s %-12s %s\t%s\n" "$project" "$ago" "$status" "$color" "$project" "$sid" "$ago_str" "$topic" "$badge"
+  local script_dir
+  script_dir="$_CCS_DASHBOARD_DIR"
+  python3 "$script_dir/internal/ccs_collect.py" --file "$f" 2>/dev/null
 }
 
 # ── Helper: resolve topic from JSONL (Happy title or first user msg) ──
@@ -325,7 +260,7 @@ ccs-sessions() {
   if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
     cat <<'HELP'
 ccs-sessions [hours]  — all sessions within N hours (default 24)
-[personal tool, not official Claude Code]
+[personal tool, not official Code CLI]
 
 Colors:
   green        active (< 10 min)
@@ -338,23 +273,29 @@ Topic source: Happy Coder title if set, otherwise first user message.
 HELP
     return 0
   fi
-  local projects_dir="$HOME/.claude/projects"
   local hours="${1:-24}"
   local mins=$((hours * 60))
   local prev_project=""
 
-  printf "\033[1m%-35s %-20s %-12s %s\033[0m\n" "PROJECT" "SESSION ID" "LAST ACTIVE" "TOPIC"
+  printf "\033[1m%-35s %-5s %-20s %-12s %s\033[0m\n" "PROJECT" "PROV" "SESSION ID" "LAST ACTIVE" "TOPIC"
   printf '%.0s─' {1..100}; echo
 
-  find "$projects_dir" -maxdepth 2 -name "*.jsonl" -mmin -"$mins" ! -path "*/subagents/*" -print0 2>/dev/null \
-  | while IFS= read -r -d '' f; do
-    _ccs_session_row "$f"
-  done | sort -t$'\t' -k1,1 -k2,2n | while IFS=$'\t' read -r proj _ _ color display; do
+  local script_dir
+  script_dir="$_CCS_DASHBOARD_DIR"
+  
+  python3 "$script_dir/internal/ccs_collect.py" --all | awk -F'|' -v max_mins="$mins" '
+    $3 <= max_mins { print $0 }
+  ' | while IFS='|' read -r prov proj ago status color display_proj sid ago_str topic badge filepath; do
     if [ -n "$prev_project" ] && [ "$proj" != "$prev_project" ]; then
       echo
     fi
     prev_project="$proj"
-    printf "${color}%s\033[0m\n" "$display"
+    
+    local prov_display="[${prov}]"
+    if [ "$prov" = "C" ]; then prov_display="\033[38;5;166m[C]\033[0m"; fi
+    if [ "$prov" = "G" ]; then prov_display="\033[38;5;27m[G]\033[0m"; fi
+    
+    printf "${color}%-35s\033[0m %b %-20s %-12s %s\n" "$display_proj" "$prov_display" "$sid" "$ago_str" "$topic"
   done
 }
 
@@ -363,7 +304,7 @@ ccs-active() {
   if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
     cat <<'HELP'
 ccs-active [days]  — open (non-archived) sessions within N days (default 7)
-[personal tool, not official Claude Code]
+[personal tool, not official Code CLI]
 
 Colors:
   green        active (< 10 min)
@@ -377,34 +318,40 @@ Topic source: Happy Coder title if set, otherwise first user message.
 HELP
     return 0
   fi
-  local projects_dir="$HOME/.claude/projects"
   local days="${1:-7}"
   local mins=$((days * 1440))
   local prev_project=""
   local count=0
 
-  printf "\033[1m%-35s %-20s %-12s %s\033[0m\n" "PROJECT" "SESSION ID" "LAST ACTIVE" "TOPIC"
+  printf "\033[1m%-35s %-5s %-20s %-12s %s\033[0m\n" "PROJECT" "PROV" "SESSION ID" "LAST ACTIVE" "TOPIC"
   printf '%.0s─' {1..100}; echo
 
-  # Pass 1: collect non-archived files (fast: only tail | grep)
-  # A session is archived if last-prompt exists AND no user/assistant events follow it.
-  # Simple check: if last-prompt is in tail -20 but user/assistant comes after → resumed, not archived.
+  local script_dir
+  script_dir="$_CCS_DASHBOARD_DIR"
+  
   local open_files=()
-  while IFS= read -r -d '' f; do
-    if _ccs_is_archived "$f"; then
-      continue
-    fi
-    open_files+=("$f")
-  done < <(find "$projects_dir" -maxdepth 2 -name "*.jsonl" -mmin -"$mins" ! -path "*/subagents/*" -print0 2>/dev/null)
+  local sorted_rows=""
+  
+  sorted_rows=$(python3 "$script_dir/internal/ccs_collect.py" | awk -F'|' -v max_mins="$mins" '
+    $3 <= max_mins && $4 != "archived" { print $0 }
+  ')
 
-  # Pass 1.5: detect crash-interrupted sessions
+  while IFS='|' read -r _ _ _ _ _ _ _ _ _ _ filepath; do
+    [ -n "$filepath" ] && open_files+=("$filepath")
+  done <<< "$sorted_rows"
+
+  # Pass 1.5: detect crash-interrupted sessions (only for Claude for now)
   declare -A crash_map
   local -a _active_projects=()
   local _af
   for _af in "${open_files[@]}"; do
-    local _dir_name
-    _dir_name=$(basename "$(dirname "$_af")")
-    _active_projects+=("$(_ccs_resolve_project_path "$_dir_name" 2>/dev/null)")
+    if [[ "$_af" == *.jsonl ]]; then
+      local _dir_name
+      _dir_name=$(basename "$(dirname "$_af")")
+      _active_projects+=("$(_ccs_resolve_project_path "$_dir_name" 2>/dev/null)")
+    else
+      _active_projects+=("")
+    fi
   done
   _ccs_detect_crash crash_map open_files _active_projects 2>/dev/null
 
@@ -415,35 +362,31 @@ HELP
     crash_short["${_csid:0:8}"]="${crash_map[$_csid]}"
   done
 
-  # Pass 2: full row extraction + sort
-  local sorted_rows
-  sorted_rows=$(for f in "${open_files[@]}"; do
-    _ccs_session_row "$f"
-  done | sort -t$'\t' -k1,1 -k2,2n)
-
   # Pass 3: display with crash override
   local crash_count=0
-  while IFS=$'\t' read -r proj _ _ color display; do
+  while IFS='|' read -r prov proj ago status color display_proj sid ago_str topic badge filepath; do
     [ -z "$proj" ] && continue
     if [ -n "$prev_project" ] && [ "$proj" != "$prev_project" ]; then
       echo
     fi
     prev_project="$proj"
 
-    # Override color for crashed sessions (extract 8-char sid from display field 2)
-    local short_sid
-    short_sid=$(echo "$display" | awk '{print $2}')
-    if [ -n "${crash_short[$short_sid]+x}" ]; then
-      local crash_info="${crash_short[$short_sid]}"
+    # Override color for crashed sessions (Claude only)
+    if [ "$prov" = "C" ] && [ -n "${crash_short[$sid]+x}" ]; then
+      local crash_info="${crash_short[$sid]}"
       local confidence="${crash_info%%:*}"
       if [ "$confidence" = "high" ]; then
         color="\033[31m"  # red
-        display="${display} 💀"
+        sid="${sid} 💀"
         crash_count=$((crash_count + 1))
       fi
     fi
 
-    printf "${color}%s\033[0m\n" "$display"
+    local prov_display="[${prov}]"
+    if [ "$prov" = "C" ]; then prov_display="\033[38;5;166m[C]\033[0m"; fi
+    if [ "$prov" = "G" ]; then prov_display="\033[38;5;27m[G]\033[0m"; fi
+
+    printf "${color}%-35s\033[0m %b %-20s %-12s %s\n" "$display_proj" "$prov_display" "$sid" "$ago_str" "$topic"
     count=$((count + 1))
   done <<< "$sorted_rows"
 
@@ -465,7 +408,7 @@ ccs-cleanup() {
       --help|-h)
         cat <<'HELP'
 ccs-cleanup [--dry-run|-n] [--force|-f]  — kill stopped (suspended) claude processes
-[personal tool, not official Claude Code]
+[personal tool, not official Code CLI]
 
 Finds claude processes in Stopped state (Tl/T) and terminates them.
 These are typically caused by /exit in waveterm or Ctrl+Z.
@@ -953,53 +896,34 @@ _ccs_data_dir() {
 # Usage: _ccs_collect_sessions [-a|--all] out_files out_projects out_rows
 # Three nameref output arrays.
 _ccs_collect_sessions() {
-  local show_all=false
+  local show_all=""
   if [ "${1:-}" = "-a" ] || [ "${1:-}" = "--all" ]; then
-    show_all=true; shift
+    show_all="--all"; shift
   fi
 
   local -n _out_files=$1 _out_projects=$2 _out_rows=$3
-
-  local sessions_dir="${CCS_PROJECTS_DIR:-$HOME/.claude/projects}"
-  [ ! -d "$sessions_dir" ] && return 0
-
+  
+  local script_dir
+  script_dir="$_CCS_DASHBOARD_DIR"
+  
+  # Note: The cutoff filtering is still handled in Bash here for backwards compatibility
   local cutoff
   cutoff=$(date -d "7 days ago" +%s 2>/dev/null || date -v-7d +%s 2>/dev/null)
-
-  while IFS= read -r f; do
-    local mod
-    mod=$(stat -c "%Y" "$f" 2>/dev/null)
-    [ "$mod" -lt "$cutoff" ] 2>/dev/null && continue
-
-    # Skip archived
-    if _ccs_is_archived "$f"; then
-      continue
+  
+  while IFS='|' read -r prov proj ago status color display_proj sid ago_str topic badge filepath; do
+    [ -z "$proj" ] && continue
+    
+    # Re-implement the 7-day cutoff for default collection
+    if [ -z "$show_all" ]; then
+       local mod
+       mod=$(stat -c "%Y" "$filepath" 2>/dev/null || echo 0)
+       [ "$mod" -lt "$cutoff" ] 2>/dev/null && continue
     fi
-
-    local dir sid_prefix
-    dir=$(basename "$(dirname "$f")")
-    sid_prefix=$(basename "$f" .jsonl | cut -c1-6)
-
-    # Skip subagent sessions unless --all
-    if ! $show_all; then
-      [[ "$dir" == *subagents* ]] && continue
-      [[ "$sid_prefix" == agent-* ]] && continue
-
-      # Skip sessions with no real user prompts
-      if ! grep -m1 '"type":"user"' "$f" 2>/dev/null \
-        | jq -e 'select((.isMeta // false) == false and (.message.content | type == "string") and (.message.content | test("^<local-command|^<command-name|^<system-") | not))' &>/dev/null; then
-        continue
-      fi
-    fi
-
-    local row
-    row=$(_ccs_session_row "$f")
-    [ -z "$row" ] && continue
-
-    _out_files+=("$f")
-    _out_projects+=("$dir")
-    _out_rows+=("$row")
-  done < <(find "$sessions_dir" -name "*.jsonl" -type f 2>/dev/null)
+    
+    _out_files+=("$filepath")
+    _out_projects+=("$proj")
+    _out_rows+=("$prov|$proj|$ago|$status|$color|$display_proj|$sid|$ago_str|$topic|$badge|$filepath")
+  done < <(python3 "$script_dir/internal/ccs_collect.py" $show_all)
 }
 
 # Helper: format "N ago" from minutes
