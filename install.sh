@@ -81,13 +81,19 @@ check_deps() {
     warn "  Install: pip3 install --user weasyprint"
   fi
 
-  # Check Claude Code sessions dir exists
+  # Check sessions dir exists
+  local claude_sessions=0 gemini_sessions=0
   if [ -d "$HOME/.claude/projects" ]; then
-    local session_count
-    session_count=$(find "$HOME/.claude/projects" -maxdepth 2 -name "*.jsonl" 2>/dev/null | wc -l)
-    ok "Claude Code sessions: ${session_count} files"
+    claude_sessions=$(find "$HOME/.claude/projects" -maxdepth 2 -name "*.jsonl" 2>/dev/null | wc -l)
+  fi
+  if [ -d "$HOME/.gemini" ]; then
+    gemini_sessions=$(find "$HOME/.gemini" -name "*.json" 2>/dev/null | wc -l)
+  fi
+
+  if [ "$claude_sessions" -gt 0 ] || [ "$gemini_sessions" -gt 0 ]; then
+    ok "Code CLI sessions: ${claude_sessions} (Claude) + ${gemini_sessions} (Gemini)"
   else
-    warn "~/.claude/projects not found — no sessions yet?"
+    warn "No Code CLI sessions found in ~/.claude or ~/.gemini"
   fi
 
   return "$missing"
@@ -141,7 +147,7 @@ do_install() {
     warn "Already installed in ${BASHRC}"
   else
     echo "" >> "$BASHRC"
-    echo "# ccs-dashboard — Claude Code Session management tools" >> "$BASHRC"
+    echo "# ccs-dashboard — Code CLI Session management tools" >> "$BASHRC"
     echo "${SOURCE_LINE}" >> "$BASHRC"
     ok "Added to ${BASHRC}"
   fi
@@ -181,13 +187,13 @@ do_install() {
   echo "  ccs-crash           — detect crash-interrupted sessions"
   echo "  ccs-checkpoint      — progress snapshot (done/wip/blocked)"
   echo "  ccs-health          — session health detection"
-  echo "  ccs-dispatch        — dispatch task to Claude Code"
+  echo "  ccs-dispatch        — dispatch task to Code CLI (Claude Code)"
   echo "  ccs-jobs            — view dispatch job history"
   echo "  ccs-review          — session review report (md/html/pdf)"
   echo "  ccs-project         — per-project insight report (md/html)"
   echo
   echo "Skills installed:"
-  echo "  ccs-orchestrator    — interactive work orchestrator (Claude Code skill)"
+  echo "  ccs-orchestrator    — interactive work orchestrator (Code CLI skill)"
 }
 
 # ── Uninstall ──

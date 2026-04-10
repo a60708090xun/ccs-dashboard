@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccs-dashboard.sh — Claude Code Session dashboard (personal tool, not official)
+# ccs-dashboard.sh — Code CLI Sessions (CCS) dashboard
 # Source this file from .bashrc:  source ~/tools/ccs-dashboard/ccs-dashboard.sh
 #
 # This is the main entry point that sources all modules:
@@ -33,12 +33,12 @@ ccs-status() {
   if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
     cat <<'HELP'
 ccs-status (ccs)  — unified session dashboard
-[personal tool, not official Claude Code]
+[personal tool, not official Code CLI]
 
 Sections:
   1. Active sessions   — open, non-archived (last 7 days, < 1 day old)
   2. Crashed sessions  — crash-interrupted (detected by ccs-crash logic)
-  3. Zombie processes  — stopped claude processes eating RAM
+  3. Zombie processes  — stopped Code CLI process (如 claude)
   4. Stale sessions    — open but untouched > 1 day
 
 Options:
@@ -67,9 +67,17 @@ HELP
 
   # ── Collect data (shared by both modes) ──
   local open_files=()
-  while IFS= read -r -d '' f; do
-    _ccs_is_archived "$f" || open_files+=("$f")
-  done < <(find "$projects_dir" -maxdepth 2 -name "*.jsonl" -mmin -$((7 * 1440)) ! -path "*/subagents/*" -print0 2>/dev/null)
+  local script_dir
+  script_dir="$_CCS_DASHBOARD_DIR"
+  local sorted_rows=""
+  sorted_rows=$(python3 "$script_dir/internal/ccs_collect.py" | awk -F'|' -v max_mins="$((7 * 1440))" '
+    $3 <= max_mins && $4 != "archived" { print $0 }
+  ')
+  while IFS='|' read -r -a cols; do
+    filepath="${cols[10]:-}"
+    [ -n "$filepath" ] && open_files+=("$filepath")
+  done <<< "$sorted_rows"
+
 
   # Crash detection
   declare -A crash_map
@@ -97,7 +105,7 @@ HELP
     local mod ago full_sid
     mod=$(stat -c "%Y" "$f")
     ago=$(( (now - mod) / 60 ))
-    full_sid=$(basename "$f" .jsonl)
+    full_sid=$(basename "$f" | sed -e "s/\.jsonl$//" -e "s/\.json$//")
     if [ -n "${crash_full[$full_sid]+x}" ] && [ "$ago" -lt 4320 ]; then
       crashed_files+=("$f")
     elif [ "$ago" -lt 1440 ]; then
@@ -120,15 +128,20 @@ HELP
   if [ ${#fresh_files[@]} -eq 0 ]; then
     printf "  \033[90m(none)\033[0m\n"
   else
-    printf "\033[1m  %-30s %-10s %-10s %s\033[0m\n" "PROJECT" "SESSION" "ACTIVE" "TOPIC"
+    printf "\033[1m  %-30s %-5s %-10s %-10s %s\033[0m\n" "PROJECT" "PROV" "SESSION" "ACTIVE" "TOPIC"
     for f in "${fresh_files[@]}"; do
       _ccs_session_row "$f"
-    done | sort -t$'\t' -k1,1 -k2,2n | while IFS=$'\t' read -r proj _ _ color display; do
+    done | sort -t'|' -k2,2 -k3,3n | while IFS='|' read -r prov proj ago status color display_proj sid ago_str topic badge filepath; do
       if [ -n "$prev_project" ] && [ "$proj" != "$prev_project" ]; then
         echo
       fi
       prev_project="$proj"
-      printf "  ${color}%s\033[0m\n" "$display"
+      
+      local prov_display="[${prov}]"
+      if [ "$prov" = "C" ]; then prov_display="\033[38;5;166m[C]\033[0m"; fi
+      if [ "$prov" = "G" ]; then prov_display="\033[38;5;27m[G]\033[0m"; fi
+      
+      printf "  ${color}%-30s\033[0m %b %-10s %-10s %s%s\n" "$display_proj" "$prov_display" "$sid" "$ago_str" "$topic" " $badge"
       active_count=$((active_count + 1))
     done
   fi
@@ -138,11 +151,15 @@ HELP
   if [ ${#crashed_files[@]} -eq 0 ]; then
     printf "  \033[32m(none)\033[0m\n"
   else
-    printf "\033[1m  %-30s %-10s %-10s %s\033[0m\n" "PROJECT" "SESSION" "LAST ACTIVE" "TOPIC"
+    printf "\033[1m  %-30s %-5s %-10s %-10s %s\033[0m\n" "PROJECT" "PROV" "SESSION" "LAST ACTIVE" "TOPIC"
     for f in "${crashed_files[@]}"; do
       _ccs_session_row "$f"
-    done | sort -t$'\t' -k1,1 -k2,2n | while IFS=$'\t' read -r proj _ _ _ display; do
-      printf "  \033[31m%s 💀\033[0m\n" "$display"
+    done | sort -t'|' -k2,2 -k3,3n | while IFS='|' read -r prov proj ago status color display_proj sid ago_str topic badge filepath; do
+      local prov_display="[${prov}]"
+      if [ "$prov" = "C" ]; then prov_display="\033[38;5;166m[C]\033[0m"; fi
+      if [ "$prov" = "G" ]; then prov_display="\033[38;5;27m[G]\033[0m"; fi
+      
+      printf "  \033[31m%-30s\033[0m %b \033[31m%-10s %-10s %s 💀\033[0m\n" "$display_proj" "$prov_display" "$sid" "$ago_str" "$topic"
     done
     printf "\n  \033[1m%d crashed\033[0m → \033[33mccs-crash\033[0m for detail, \033[33mccs-crash --clean\033[0m to dismiss\n" "${#crashed_files[@]}"
   fi
@@ -220,17 +237,11 @@ _ccs_status_md() {
   if [ ${#fresh_files[@]} -eq 0 ]; then
     echo "_(none)_"
   else
-    # Sort by project, then by age
     local sorted_rows
     sorted_rows=$(for f in "${fresh_files[@]}"; do
-      local mod ago project dir
-      mod=$(stat -c "%Y" "$f")
-      ago=$(( (now - mod) / 60 ))
-      dir=$(basename "$(dirname "$f")")
-      project=$(echo "$dir" | sed "s/^${_CCS_HOME_ENCODED}-*//; s/-/\//g")
-      [ -z "$project" ] && project="~(home)"
-      printf '%s\t%d\t%s\n' "$project" "$ago" "$f"
-    done | sort -t$'\t' -k1,1 -k2,2n)
+      _ccs_session_row "$f"
+    done | sort -t'|' -k2,2 -k3,3n)
+
 
     # Table header (table mode only)
     if [ "$fmt" = "table" ]; then
@@ -243,44 +254,44 @@ _ccs_status_md() {
     local pick_file="$HOME/.claude/.ccs-pick-index"
     : > "$pick_file"
 
-    while IFS=$'\t' read -r project ago f; do
-      local ago_str icon sid topic full_sid
+    while IFS='|' read -r prov project ago status color display_proj sid ago_str topic badge filepath; do
       session_idx=$((session_idx + 1))
 
-      full_sid=$(basename "$f" .jsonl)
-      sid=$(echo "$full_sid" | cut -c1-8)
-      topic=$(_ccs_topic_from_jsonl "$f")
-
+      local icon
       if [ "$ago" -lt 10 ]; then
-        icon="🟢"; ago_str="${ago}m ago"
+        icon="🟢"
       elif [ "$ago" -lt 60 ]; then
-        icon="🟡"; ago_str="${ago}m ago"
+        icon="🟡"
       else
-        icon="🔵"; ago_str="$((ago / 60))h ago"
+        icon="🔵"
       fi
 
-      # Write to pick index: idx \t sid_prefix \t topic
+      # Write to pick index: idx | sid_prefix | topic
       printf '%d\t%s\t%s\n' "$session_idx" "$sid" "$topic" >> "$pick_file"
+
+      local prov_md=""
+      if [ "$prov" = "C" ]; then prov_md="[Claude] "; fi
+      if [ "$prov" = "G" ]; then prov_md="[Gemini] "; fi
 
       if [ "$fmt" = "table" ]; then
         local status_label
         if [ "$ago" -lt 10 ]; then status_label="active"
         elif [ "$ago" -lt 60 ]; then status_label="recent"
         else status_label="idle"; fi
-        topic=$(echo "$topic" | sed 's/|/\\|/g')
-        project=$(echo "$project" | sed 's/|/\\|/g')
-        echo "| ${session_idx} | ${project} | \`${sid}\` | ${ago_str} | ${icon} ${status_label} | ${topic} |"
+        local safe_topic=$(echo "$topic" | sed 's/|/\|/g')
+        local safe_project=$(echo "$project" | sed 's/|/\|/g')
+        echo "| ${session_idx} | ${safe_project} | \`${sid}\` | ${ago_str} | ${icon} ${status_label} | ${prov_md}${safe_topic} |"
       else
         # List mode — group by project with header + hr
         if [ "$project" != "$prev_project" ]; then
           [ -n "$prev_project" ] && echo "---"
           local proj_count
-          proj_count=$(echo "$sorted_rows" | grep -c "^${project}	")
+          proj_count=$(echo "$sorted_rows" | awk -F'|' -v p="$project" '$2 == p' | wc -l)
           echo "📁 **${project}** (${proj_count})"
           echo
         fi
         prev_project="$project"
-        echo "${icon} **${session_idx}.** **${topic}** \`${sid}\` ${ago_str}"
+        echo "${icon} **${session_idx}.** ${prov_md}**${topic}** \`${sid}\` ${ago_str}"
         echo
       fi
     done <<< "$sorted_rows"
@@ -294,34 +305,24 @@ _ccs_status_md() {
   else
     local crash_sorted
     crash_sorted=$(for f in "${crashed_files[@]}"; do
-      local mod ago project dir
-      mod=$(stat -c "%Y" "$f")
-      ago=$(( (now - mod) / 60 ))
-      dir=$(basename "$(dirname "$f")")
-      project=$(echo "$dir" | sed "s/^${_CCS_HOME_ENCODED}-*//; s/-/\//g")
-      [ -z "$project" ] && project="~(home)"
-      printf '%s\t%d\t%s\n' "$project" "$ago" "$f"
-    done | sort -t$'\t' -k1,1 -k2,2n)
+      _ccs_session_row "$f"
+    done | sort -t'|' -k2,2 -k3,3n)
 
-    while IFS=$'\t' read -r project ago f; do
-      local ago_str sid topic full_sid
+    while IFS='|' read -r prov project ago status color display_proj sid ago_str topic badge filepath; do
       session_idx=$((session_idx + 1))
-      full_sid=$(basename "$f" .jsonl)
-      sid=$(echo "$full_sid" | cut -c1-8)
-      topic=$(_ccs_topic_from_jsonl "$f")
-
-      if [ "$ago" -lt 60 ]; then ago_str="${ago}m ago"
-      elif [ "$ago" -lt 1440 ]; then ago_str="$((ago / 60))h ago"
-      else ago_str="$((ago / 1440))d ago"; fi
 
       printf '%d\t%s\t%s\n' "$session_idx" "$sid" "$topic" >> "$pick_file"
 
+      local prov_md=""
+      if [ "$prov" = "C" ]; then prov_md="[Claude] "; fi
+      if [ "$prov" = "G" ]; then prov_md="[Gemini] "; fi
+
       if [ "$fmt" = "table" ]; then
-        topic=$(echo "$topic" | sed 's/|/\\|/g')
-        project=$(echo "$project" | sed 's/|/\\|/g')
-        echo "| ${session_idx} | ${project} | \`${sid}\` | ${ago_str} | 💀 crashed | ${topic} |"
+        local safe_topic=$(echo "$topic" | sed 's/|/\|/g')
+        local safe_project=$(echo "$project" | sed 's/|/\|/g')
+        echo "| ${session_idx} | ${safe_project} | \`${sid}\` | ${ago_str} | 💀 crashed | ${prov_md}${safe_topic} |"
       else
-        echo "💀 **${session_idx}.** **${topic}** \`${sid}\` ${ago_str}"
+        echo "💀 **${session_idx}.** ${prov_md}**${topic}** \`${sid}\` ${ago_str}"
         echo
       fi
     done <<< "$crash_sorted"
@@ -363,9 +364,9 @@ _ccs_status_md() {
         echo "| PID | RAM | Working Dir | Started | Topic |"
         echo "|-----|-----|-------------|---------|-------|"
       fi
-      topic=$(echo "$topic" | sed 's/|/\\|/g')
-      cwd=$(echo "$cwd" | sed 's/|/\\|/g')
-      echo "| ${pid} | ${mb} MB | ${cwd} | ${started} | ${topic} |"
+      local safe_topic=$(echo "$topic" | sed 's/|/\|/g')
+      local safe_cwd=$(echo "$cwd" | sed 's/|/\|/g')
+      echo "| ${pid} | ${mb} MB | ${safe_cwd} | ${started} | ${safe_topic} |"
     else
       echo "🔴 PID ${pid} · ${mb} MB · ${cwd} · ${started}"
       echo "> ${topic}"
@@ -376,12 +377,11 @@ _ccs_status_md() {
   if ! $has_zombie; then
     echo "_(none)_ ✓"
   else
-    echo
     echo "> **${zombie_count}** zombie(s), **${zombie_mb} MB** RAM → \`ccs-cleanup\` to free"
   fi
+  echo
 
   # Stale sessions
-  echo
   echo "### 💤 Stale Sessions"
   echo
   if [ ${#stale_files[@]} -eq 0 ]; then
@@ -389,11 +389,6 @@ _ccs_status_md() {
   else
     echo "> **${#stale_files[@]}** open session(s) untouched > 1 day → \`ccs-sessions 168\` to inspect"
   fi
-
-  # Pick hint
-  echo
-  echo "---"
-  echo "_Reply with a number to see session details → \`ccs-pick N\`_"
 }
 alias ccs='ccs-status'
 
@@ -402,7 +397,7 @@ ccs-pick() {
   if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
     cat <<'HELP'
 ccs-pick <N|SESSION-ID> [-n COUNT]  — show details for a session
-[personal tool, not official Claude Code]
+[personal tool, not official Code CLI]
 
 Accepts a numeric index (from ccs-status --md) or a session ID prefix.
 

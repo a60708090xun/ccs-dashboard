@@ -1,14 +1,14 @@
-# ccs-dashboard
+# Code CLI Sessions (CCS) Dashboard
 
 [English](../README.md)
 
-Claude Code session 的任務指揮中心 — 跨 repo 追蹤、回顧、交接。
+Code CLI Sessions (Claude, Gemini 等) 的任務指揮中心 — 跨 repo 追蹤、回顧、交接。
 
-Claude Code 把對話存在 `~/.claude/projects/` 的 JSONL 檔裡，但沒有內建工具讓你回顧或管理這些 session。ccs-dashboard 解析這些 JSONL，讓你直接問 Claude 或從 terminal 掌握所有 session 狀態。
+Code CLI 工具 (如 Claude 或 Gemini) 將對話存放在特定目錄中，但缺乏統一的管理介面。ccs-dashboard 解析這些對話紀錄，讓你直接問 agent 或從 terminal 掌握所有 session 狀態。
 
 ## 背景
 
-如果你重度使用 Claude Code — 多個 repo、多個 terminal、多個任務同時進行 — 很快會撞上這些牆：
+如果你重度使用 Code CLI Sessions — 多個 Provider、多個 repo、多個任務同時進行 — 很快會撞上這些牆：
 
 - **Session 是隱形的。** Claude Code 沒有內建方式列出、搜尋或比較 session。每個 terminal 都是獨立的孤島，關掉 tab 就失去 context。
 - **多 repo 混亂。** 同時修後端 bug、做前端功能、更新文件？你很難記得哪個 session 在哪個 repo 做什麼。
@@ -191,7 +191,7 @@ Terminal          Markdown    狀態        說明
 | less | ccs-details 互動模式展開 |
 | xclip / xsel | ccs-resume-prompt --copy |
 
-資料來源：`~/.claude/projects/` 下的 JSONL session log。
+資料來源：`~/.claude/projects/` (Claude) 與 `~/.gemini/` (Gemini) 下的 session log。
 
 ## 檔案結構
 

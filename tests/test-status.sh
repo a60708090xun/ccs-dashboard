@@ -152,7 +152,7 @@ _ccs_is_archived() { return 1; }
 # Disable set -e: ccs-status may return non-zero
 # from internal helpers (zombie detection etc.)
 set +e
-status_out=$(CCS_PROJECTS_DIR="$MOCK_STATUS" \
+status_out=$(CCS_PROJECTS_DIR="$MOCK_STATUS" CCS_GEMINI_DIR="$MOCK_STATUS" \
   ccs-status --md 2>/dev/null)
 set -e
 # D1 (old crash >3d) should NOT appear in Crashed section

@@ -1,14 +1,14 @@
-# ccs-dashboard
+# Code CLI Sessions (CCS) Dashboard
 
 [中文版 (zh-TW)](docs/README.zh-TW.md)
 
-Mission control for your Claude Code sessions — track, review, and hand off across repos.
+Mission control for your Code CLI Sessions (Claude, Gemini, etc.) — track, review, and hand off across repos.
 
-Claude Code stores conversations as JSONL files under `~/.claude/projects/`, but provides no built-in tools to review or manage them. ccs-dashboard parses these JSONL files so you can see what's going on across all your sessions — either by asking Claude directly or from the command line.
+Code CLI tools (like Claude or Gemini) store conversations as session files, but provide limited built-in tools to review or manage them. ccs-dashboard parses these files so you can see what's going on across all your sessions — either by asking the agent directly or from the command line.
 
 ## Background
 
-If you use Claude Code heavily — multiple repos, multiple terminals, multiple tasks in flight — you'll quickly hit these walls:
+If you use Code CLI Sessions heavily — multiple providers, multiple repos, multiple tasks in flight — you'll quickly hit these walls:
 
 - **Sessions are invisible.** No built-in way to list, search, or compare sessions. Each terminal is its own silo. Close the tab and the context is gone.
 - **Multi-repo chaos.** Working on a backend fix, a frontend feature, and a docs update simultaneously? Good luck remembering which session was doing what, in which repo.
@@ -191,7 +191,7 @@ Strikethrough     -           archived    has last-prompt marker
 | less | ccs-details interactive viewer |
 | xclip / xsel | ccs-resume-prompt --copy |
 
-Data source: JSONL session logs under `~/.claude/projects/`.
+Data source: session logs under `~/.claude/projects/` (Claude) and `~/.gemini/` (Gemini).
 
 ## File structure
 

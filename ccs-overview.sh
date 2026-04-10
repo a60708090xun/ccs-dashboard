@@ -120,9 +120,9 @@ _ccs_overview_md() {
 
     # Parse row fields (tab-separated: project, ago_min, status, color, display...)
     local project ago_min status sid topic
-    project=$(echo "$row" | cut -f1)
-    ago_min=$(echo "$row" | cut -f2)
-    status=$(echo "$row" | cut -f3)
+    project=$(echo "$row" | cut -f2)
+    ago_min=$(echo "$row" | cut -f3)
+    status=$(echo "$row" | cut -f4)
 
     local resolved_path
     resolved_path=$(_ccs_resolve_project_path "$dir")
@@ -293,9 +293,9 @@ _ccs_overview_json() {
     local row="${_rows[$i]}"
 
     local project ago_min status
-    project=$(echo "$row" | cut -f1)
-    ago_min=$(echo "$row" | cut -f2)
-    status=$(echo "$row" | cut -f3)
+    project=$(echo "$row" | cut -f2)
+    ago_min=$(echo "$row" | cut -f3)
+    status=$(echo "$row" | cut -f4)
 
     local resolved_path
     resolved_path=$(_ccs_resolve_project_path "$dir")
@@ -432,7 +432,7 @@ _ccs_overview_todos() {
     local f="${_files[$i]}"
     local row="${_rows[$i]}"
     local project
-    project=$(echo "$row" | cut -f1)
+    project=$(echo "$row" | cut -f2)
 
     local data
     data=$(_ccs_overview_session_data "$f")
@@ -836,14 +836,14 @@ _ccs_overview_terminal() {
     local row="${_rows[$i]}"
 
     local project ago_min status color
-    project=$(echo "$row" | cut -f1)
-    ago_min=$(echo "$row" | cut -f2)
-    status=$(echo "$row" | cut -f3)
-    color=$(echo "$row" | cut -f4)
+    project=$(echo "$row" | cut -f2)
+    ago_min=$(echo "$row" | cut -f3)
+    status=$(echo "$row" | cut -f4)
+    color=$(echo "$row" | cut -f5)
 
     # Override color for crash-interrupted sessions (high confidence)
     local full_sid
-    full_sid=$(basename "$f" .jsonl)
+    full_sid=$(basename "$f" | sed -e "s/\.jsonl$//" -e "s/\.json$//")
     local crash_suffix=""
     if [ -n "${4:-}" ] && [ -n "${_crash_term[$full_sid]+x}" ] && [[ "${_crash_term[$full_sid]}" == high:* ]]; then
       color="\033[31m"

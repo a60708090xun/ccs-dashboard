@@ -3,9 +3,9 @@ name: ccs-orchestrator
 description: "MANDATORY for any ccs-* command execution. Never run ccs-* commands via Bash directly — always invoke this skill instead. Triggers on: ccs-status, ccs-overview, ccs-crash, ccs-checkpoint, ccs-recap, ccs-feature, ccs-handoff, ccs-pick, ccs-health, ccs-dispatch, ccs-jobs, ccs-review, ccs-project. Also triggers on: 'checkpoint', 'overview', 'recap', 'sessions', 'crash', 'health', 'handoff', 'dispatch', 'review', 'session review', 'project report', 'project insights', '回顧', '報告', 'weekly report', '週報', '專案報告', '專案洞察', '跑一下checkpoint', '目前狀態', '工作總覽', 'what am I working on', 'show my sessions', 'セッションの状態'. This skill handles output rendering (via _ccs_to_file + Read) so results display correctly in session view."
 ---
 
-# CCS Orchestrator
+# Code CLI Sessions (CCS) Orchestrator
 
-跨 session 工作指揮台。觀察所有 active Claude Code session 的狀態、待辦事項、git 狀態，並提供互動式導覽。
+跨 session 工作指揮台。觀察所有 active Code CLI session (Claude, Gemini 等) 的狀態、待辦事項、git 狀態，並提供互動式導覽。
 
 **定位：觀察者 + 顧問**——只讀取和呈現資訊，不控制其他 session。
 
