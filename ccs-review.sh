@@ -111,7 +111,7 @@ _ccs_session_stats() {
 _ccs_review_json() {
   local jsonl="$1"
   local sid
-  sid=$(basename "$jsonl" .jsonl)
+  sid=$(basename "$jsonl" | sed -e 's/\.jsonl$//' -e 's/\.json$//')
 
   local dir project
   dir=$(basename "$(dirname "$jsonl")")

@@ -18,7 +18,7 @@ _ccs_crash_md() {
   local i
   for ((i = 0; i < count; i++)); do
     local f="${_files[$i]}"
-    local sid=$(basename "$f" .jsonl)
+    local sid=$(basename "$f" | sed -e 's/\.jsonl$//' -e 's/\.json$//')
     [ -n "${_map[$sid]+x}" ] || continue
 
     local conf_path="${_map[$sid]}"
@@ -73,7 +73,7 @@ _ccs_crash_md() {
   for ((_i = 0; _i < ${#_files[@]}; _i++)); do
     local _cf="${_files[$_i]}"
     local _csid
-    _csid=$(basename "$_cf" .jsonl)
+    _csid=$(basename "$_cf" | sed -e 's/\.jsonl$//' -e 's/\.json$//')
     [ -n "${_map[$_csid]+x}" ] || continue
     local _age=$(( (_now_epoch - $(stat -c %Y "$_cf")) / 60 ))
     [ "$_age" -ge 4320 ] && (( _stale++ ))
@@ -105,7 +105,7 @@ _ccs_crash_json() {
   local i
   for ((i = 0; i < count; i++)); do
     local f="${_files[$i]}"
-    local sid=$(basename "$f" .jsonl)
+    local sid=$(basename "$f" | sed -e 's/\.jsonl$//' -e 's/\.json$//')
     [ -n "${_map[$sid]+x}" ] || continue
 
     local conf_path="${_map[$sid]}"
@@ -196,7 +196,7 @@ _ccs_crash_clean_by_id() {
     local count=${#_files[@]}
     for ((i = 0; i < count; i++)); do
       local f="${_files[$i]}"
-      local sid=$(basename "$f" .jsonl)
+      local sid=$(basename "$f" | sed -e 's/\.jsonl$//' -e 's/\.json$//')
       [ -n "${_map[$sid]+x}" ] || continue
       if [[ "$sid" == "$id"* ]]; then
         matches+=("$sid")
@@ -291,7 +291,7 @@ _ccs_crash_clean_all() {
 
   for ((i = 0; i < count; i++)); do
     local f="${_files[$i]}"
-    local sid=$(basename "$f" .jsonl)
+    local sid=$(basename "$f" | sed -e 's/\.jsonl$//' -e 's/\.json$//')
     [ -n "${_map[$sid]+x}" ] || continue
 
     _ccs_archive_session "$f"
@@ -497,7 +497,7 @@ _ccs_recap_collect() {
       _pc=$(jq -c 'select(.type == "user" and ((.isMeta // false) == false))' "$jsonl" 2>/dev/null | wc -l)
       [ "${_pc:-0}" -lt 2 ] && continue
 
-      sid=$(basename "$jsonl" .jsonl)
+      sid=$(basename "$jsonl" | sed -e 's/\.jsonl$//' -e 's/\.json$//')
       topic=$(_ccs_topic_from_jsonl "$jsonl")
       last_iso=$(date -d "@$mtime" -Iseconds)
 
@@ -646,7 +646,7 @@ _ccs_recap_collect() {
     while IFS= read -r jsonl; do
       mtime=$(stat -c %Y "$jsonl" 2>/dev/null) || continue
       (( mtime < from_epoch )) && continue
-      sid=$(basename "$jsonl" .jsonl)
+      sid=$(basename "$jsonl" | sed -e 's/\.jsonl$//' -e 's/\.json$//')
       topic=$(_ccs_topic_from_jsonl "$jsonl")
       dl_text=$(jq -r 'select(.type == "user" and .isMeta != true) |
         .message.content | if type == "string" then . else "" end' "$jsonl" 2>/dev/null |
@@ -1088,7 +1088,7 @@ _ccs_checkpoint_collect() {
       (( mtime < since_epoch )) && continue
 
       local sid topic is_archived age_min
-      sid=$(basename "$jsonl" .jsonl)
+      sid=$(basename "$jsonl" | sed -e 's/\.jsonl$//' -e 's/\.json$//')
       topic=$(_ccs_topic_from_jsonl "$jsonl")
       age_min=$(( (now_epoch - mtime) / 60 ))
 

@@ -358,7 +358,7 @@ _ccs_project_json() {
     local f
     for f in "${session_files[@]}"; do
       local sid topic sstats turns duration_min session_date
-      sid=$(basename "$f" .jsonl | cut -c1-8)
+      sid=$(basename "$f" | sed -e 's/\.jsonl$//' -e 's/\.json$//' | cut -c1-8)
       topic=$(_ccs_topic_from_jsonl "$f")
       sstats=$(_ccs_session_stats "$f")
       turns=$(echo "$sstats" | jq '.rounds')
