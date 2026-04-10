@@ -4,18 +4,26 @@ All notable changes to this project will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [Semantic Versioning](https://semver.org/).
 
-n## [0.3.0] — 2026-04-10
+## [0.3.0] — 2026-04-10
 
 ### Added
 
 - **Multi-Provider Dashboard** — Python session collection layer for Claude and Gemini CLI sessions (GH#40, PR #41)
 - **ccs_collect.py** — unified Python-based session parser
+- **ADR-003** — Code CLI Sessions definition
 
 ### Changed
 
-- **ccs-status** — updated to display PROV column and Gemini sessions
+- **ccs-status** — display PROV column and Gemini sessions
 - **ccs-active** — support Gemini session display
 - **ccs-sessions** — support Gemini session display
+- **basename handling** — unified `.jsonl`/`.json` across all modules (9 files, 20 occurrences)
+
+### Fixed
+
+- **_ccs_collect_sessions regression** — restore backward-compatible TAB output format (GH#42, PR #43)
+- **_out_projects** — restore encoded dir name for `_ccs_resolve_project_path`
+- **ccs-overview / ccs-crash / ccs-feature** — fix field index for new prov column
 
 ## [0.2.1] — 2026-03-25
 
