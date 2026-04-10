@@ -267,7 +267,7 @@ _ccs_feature_cluster() {
     local -a ug_ids=()
     for idx in "${ungrouped_indices[@]}"; do
       local ug_sid
-      ug_sid=$(basename "${__fc_files[$idx]}" .jsonl | cut -c1-8)
+      ug_sid=$(basename "${__fc_files[$idx]}" | sed -e 's/\.jsonl$//' -e 's/\.json$//' | cut -c1-8)
       ug_ids+=("$ug_sid")
     done
     local ug_json

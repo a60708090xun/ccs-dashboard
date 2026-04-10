@@ -464,7 +464,7 @@ HELP
     fi
 
     local full_sid mod_date dir project status
-    full_sid=$(basename "$jsonl" .jsonl)
+    full_sid=$(basename "$jsonl" | sed -e 's/\.jsonl$//' -e 's/\.json$//')
     mod_date=$(stat -c "%y" "$jsonl" | cut -d. -f1)
     dir=$(basename "$(dirname "$jsonl")")
     project=$(echo "$dir" | sed "s/^${_CCS_HOME_ENCODED}-*//; s/-/\//g")

@@ -23,7 +23,7 @@ CCS_HEALTH_STALE_DAYS="${CCS_HEALTH_STALE_DAYS:-7}"
 _ccs_health_events() {
   local f="$1"
   local sid
-  sid=$(basename "$f" .jsonl | cut -c1-8)
+  sid=$(basename "$f" | sed -e 's/\.jsonl$//' -e 's/\.json$//' | cut -c1-8)
 
   jq -s --arg sid "$sid" '
     reduce .[] as $line (
@@ -284,7 +284,7 @@ HELP
     # If prefix given, filter by session ID
     if [ -n "$prefix" ]; then
       local bname
-      bname=$(basename "$f" .jsonl)
+      bname=$(basename "$f" | sed -e 's/\.jsonl$//' -e 's/\.json$//')
       if [[ "$bname" != "${prefix}"* ]]; then
         continue
       fi
@@ -312,7 +312,7 @@ HELP
   for f in "${files[@]}"; do
     # Skip crashed sessions — health report is meaningless for dead sessions
     local _h_sid
-    _h_sid=$(basename "$f" .jsonl)
+    _h_sid=$(basename "$f" | sed -e 's/\.jsonl$//' -e 's/\.json$//')
     if [ -n "${_health_crash_map[$_h_sid]+x}" ] && [[ "${_health_crash_map[$_h_sid]}" == high:* ]]; then
       continue
     fi

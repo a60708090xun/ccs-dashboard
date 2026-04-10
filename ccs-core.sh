@@ -583,7 +583,7 @@ _ccs_detect_crash() {
 
     local mtime sid
     mtime=$(stat -c "%Y" "$f" 2>/dev/null) || continue
-    sid=$(basename "$f" .jsonl)
+    sid=$(basename "$f" | sed -e 's/\.jsonl$//' -e 's/\.json$//')
 
     # Path 1: Reboot detection
     # Any pre-boot session without a running process was killed by reboot.

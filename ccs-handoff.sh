@@ -70,7 +70,7 @@ HELP
   local latest="${open_sessions[0]}"
   local full_sid sid mod_date topic
 
-  full_sid=$(basename "$latest" .jsonl)
+  full_sid=$(basename "$latest" | sed -e 's/\.jsonl$//' -e 's/\.json$//')
   sid=$(echo "$full_sid" | cut -c1-8)
   mod_date=$(stat -c "%y" "$latest" | cut -d. -f1)
 
@@ -100,7 +100,7 @@ HELP
   local zombie_count=0
   for f in "${open_sessions[@]}"; do
     local s_sid s_mod s_ago s_age s_topic
-    s_sid=$(basename "$f" .jsonl | cut -c1-8)
+    s_sid=$(basename "$f" | sed -e 's/\.jsonl$//' -e 's/\.json$//' | cut -c1-8)
     s_mod=$(stat -c "%Y" "$f"); s_ago=$(( ($(date +%s) - s_mod) / 60 ))
     if [ "$s_ago" -lt 60 ]; then s_age="${s_ago}m"
     elif [ "$s_ago" -lt 1440 ]; then s_age="$((s_ago/60))h"
@@ -269,7 +269,7 @@ HELP
 
   # ── Session metadata ──
   local full_sid sid topic dir project project_dir
-  full_sid=$(basename "$jsonl" .jsonl)
+  full_sid=$(basename "$jsonl" | sed -e 's/\.jsonl$//' -e 's/\.json$//')
   sid=$(echo "$full_sid" | cut -c1-8)
   topic=$(_ccs_topic_from_jsonl "$jsonl")
 

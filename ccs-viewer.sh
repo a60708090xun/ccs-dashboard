@@ -42,7 +42,7 @@ HELP
     mod=$(stat -c "%Y" "$f")
     ago=$(( (now - mod) / 60 ))
 
-    full_sid=$(basename "$f" .jsonl)
+    full_sid=$(basename "$f" | sed -e 's/\.jsonl$//' -e 's/\.json$//')
     sid=$(echo "$full_sid" | cut -c1-8)
 
     local dir
@@ -286,7 +286,7 @@ HELP
 
   # ── Session metadata ──
   local full_sid sid mod_date topic status dir project
-  full_sid=$(basename "$jsonl" .jsonl)
+  full_sid=$(basename "$jsonl" | sed -e 's/\.jsonl$//' -e 's/\.json$//')
   sid=$(echo "$full_sid" | cut -c1-8)
   mod_date=$(stat -c "%y" "$jsonl" | cut -d. -f1)
 
