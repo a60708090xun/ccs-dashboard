@@ -1,6 +1,6 @@
 dashboard.html
 tmp/
-internal/
 *.swp
 *.bak
 *~
+.worktrees/
