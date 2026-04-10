@@ -28,8 +28,8 @@ _ccs_crash_md() {
     [ "$confidence" = "low" ] && icon="🟡"
 
     local row="${_rows[$i]}"
-    local project=$(echo "$row" | cut -f1)
-    local ago_min=$(echo "$row" | cut -f2)
+    local project=$(echo "$row" | cut -f2)
+    local ago_min=$(echo "$row" | cut -f3)
     local topic=$(_ccs_topic_from_jsonl "$f")
 
     # Session data (last message, todos, git)
@@ -113,7 +113,7 @@ _ccs_crash_json() {
     local detection_path="${conf_path#*:}"
 
     local row="${_rows[$i]}"
-    local project=$(echo "$row" | cut -f1)
+    local project=$(echo "$row" | cut -f2)
     local topic=$(_ccs_topic_from_jsonl "$f")
 
     local data
@@ -242,13 +242,13 @@ _ccs_crash_clean() {
 
   for ((i = 0; i < count; i++)); do
     local f="${_files[$i]}"
-    local sid=$(basename "$f" .jsonl)
+    local sid=$(basename "$f" | sed -e 's/\.jsonl$//' -e 's/\.json$//')
     [ -n "${_map[$sid]+x}" ] || continue
     total=$((total + 1))
 
     local conf_path="${_map[$sid]}"
     local row="${_rows[$i]}"
-    local project=$(echo "$row" | cut -f1)
+    local project=$(echo "$row" | cut -f2)
     local topic=$(_ccs_topic_from_jsonl "$f")
 
     printf '\n\033[1m[%d/%d]\033[0m \033[31m%s\033[0m — %s\n' \

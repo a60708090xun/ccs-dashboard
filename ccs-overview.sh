@@ -118,7 +118,7 @@ _ccs_overview_md() {
     local dir="${_projects[$i]}"
     local row="${_rows[$i]}"
 
-    # Parse row fields (tab-separated: project, ago_min, status, color, display...)
+    # Parse row fields (tab-separated: prov, project, ago_min, status, color, display, badge)
     local project ago_min status sid topic
     project=$(echo "$row" | cut -f2)
     ago_min=$(echo "$row" | cut -f3)
@@ -127,7 +127,7 @@ _ccs_overview_md() {
     local resolved_path
     resolved_path=$(_ccs_resolve_project_path "$dir")
 
-    sid=$(basename "$f" .jsonl | cut -c1-8)
+    sid=$(basename "$f" | sed -e 's/\.jsonl$//' -e 's/\.json$//' | cut -c1-8)
     topic=$(_ccs_topic_from_jsonl "$f")
 
     # Status emoji
@@ -140,7 +140,7 @@ _ccs_overview_md() {
     esac
 
     # Override status icon if crash-interrupted (high confidence)
-    local full_sid=$(basename "$f" .jsonl)
+    local full_sid=$(basename "$f" | sed -e 's/\.jsonl$//' -e 's/\.json$//')
     if [ -n "${4:-}" ] && [ -n "${_crash_md[$full_sid]+x}" ] && [[ "${_crash_md[$full_sid]}" == high:* ]]; then
       emoji="🔴"
     fi
@@ -301,7 +301,7 @@ _ccs_overview_json() {
     resolved_path=$(_ccs_resolve_project_path "$dir")
 
     local sid
-    sid=$(basename "$f" .jsonl | cut -c1-8)
+    sid=$(basename "$f" | sed -e 's/\.jsonl$//' -e 's/\.json$//' | cut -c1-8)
     local topic
     topic=$(_ccs_topic_from_jsonl "$f")
 
@@ -317,7 +317,7 @@ _ccs_overview_json() {
 
     # Per-session crash fields (4th arg is optional)
     local crash_interrupted=false crash_confidence=""
-    local full_sid=$(basename "$f" .jsonl)
+    local full_sid=$(basename "$f" | sed -e 's/\.jsonl$//' -e 's/\.json$//')
     if [ -n "${4:-}" ] && [ -n "${_crash_json[$full_sid]+x}" ]; then
       crash_interrupted=true
       crash_confidence="${_crash_json[$full_sid]%%:*}"
@@ -505,7 +505,7 @@ _ccs_overview_files() {
     local _of="${__of_files[$i]}"
     local _dir="${__of_projects[$i]}"
     local _sid
-    _sid=$(basename "$_of" .jsonl | cut -c1-4)
+    _sid=$(basename "$_of" | sed -e 's/\.jsonl$//' -e 's/\.json$//' | cut -c1-4)
     local _mod
     _mod=$(stat -c "%Y" "$_of" 2>/dev/null || echo 0)
 
