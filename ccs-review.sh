@@ -22,11 +22,16 @@
 # Output: JSON object {"Read": N, "Edit": N, ...}
 _ccs_tool_use_stats() {
   local jsonl="$1"
-  jq -s '
+  local provider=$(_ccs_get_provider "$jsonl")
+  local pipe_cmd="cat"
+  if [ "$provider" = "gemini" ]; then
+    pipe_cmd="jq -c .[]"
+  fi
+  eval "$pipe_cmd '$jsonl'" 2>/dev/null | jq -s '
     [.[] | select(.type == "assistant") |
      .message.content[]? | select(.type == "tool_use") | .name] |
     group_by(.) | map({(.[0]): length}) | add // {}
-  ' "$jsonl" 2>/dev/null
+  ' 2>/dev/null
 }
 
 # ── Cache: write LLM summary ──
@@ -58,13 +63,18 @@ _ccs_review_cache_read() {
 # Output: JSON with rounds, duration, char_count, token_estimate, tool_use
 _ccs_session_stats() {
   local jsonl="$1"
+  local provider=$(_ccs_get_provider "$jsonl")
+  local pipe_cmd="cat"
+  if [ "$provider" = "gemini" ]; then
+    pipe_cmd="jq -c .[]"
+  fi
 
   local rounds
-  rounds=$(jq -s '[.[] | select(.type == "user" and (.message.content | type == "string"))] | length' "$jsonl" 2>/dev/null)
+  rounds=$(eval "$pipe_cmd '$jsonl'" 2>/dev/null | jq -s '[.[] | select(.type == "user" and (.message.content | type == "string"))] | length' 2>/dev/null)
 
   local first_ts last_ts
-  first_ts=$(jq -r 'select(.timestamp) | .timestamp' "$jsonl" 2>/dev/null | head -1)
-  last_ts=$(jq -r 'select(.timestamp) | .timestamp' "$jsonl" 2>/dev/null | tail -1)
+  first_ts=$(eval "$pipe_cmd '$jsonl'" 2>/dev/null | jq -r 'select(.timestamp) | .timestamp' 2>/dev/null | head -1)
+  last_ts=$(eval "$pipe_cmd '$jsonl'" 2>/dev/null | jq -r 'select(.timestamp) | .timestamp' 2>/dev/null | tail -1)
 
   local duration_min=0
   if [ -n "$first_ts" ] && [ -n "$last_ts" ]; then
@@ -75,7 +85,7 @@ _ccs_session_stats() {
   fi
 
   local char_count
-  char_count=$(jq -s '
+  char_count=$(eval "$pipe_cmd '$jsonl'" 2>/dev/null | jq -s '
     [.[] |
       if .type == "user" and (.message.content | type == "string") then
         (.message.content | length)
@@ -83,7 +93,7 @@ _ccs_session_stats() {
         ([.message.content[]? | select(.type == "text") | .text | length] | add // 0)
       else 0 end
     ] | add // 0
-  ' "$jsonl" 2>/dev/null)
+  ' 2>/dev/null)
 
   local token_estimate=$(( char_count * 10 / 25 ))
 
@@ -349,7 +359,7 @@ _ccs_review_weekly_collect() {
   since_epoch=$(date -d "$since" +%s 2>/dev/null)
   until_epoch=$(date -d "$until_date 23:59:59" +%s 2>/dev/null)
 
-  find "$projects_dir" -maxdepth 2 -name "*.jsonl" ! -path "*/subagents/*" -print0 2>/dev/null \
+  find "$projects_dir" -maxdepth 2 \( -name "*.jsonl" -o -name "*.json" \) ! -path "*/subagents/*" -print0 2>/dev/null \
     | while IFS= read -r -d '' f; do
       local mtime
       mtime=$(stat -c "%Y" "$f")
@@ -539,9 +549,9 @@ HELP
   local jsonl
   if [ -n "${CCS_PROJECTS_DIR:-}" ]; then
     if [ -n "$session_id" ]; then
-      jsonl=$(find "$CCS_PROJECTS_DIR" -maxdepth 2 -name "${session_id}*.jsonl" ! -path "*/subagents/*" 2>/dev/null | head -1)
+      jsonl=$(find "$CCS_PROJECTS_DIR" -maxdepth 2 \( -name "${session_id}*.jsonl" -o -name "${session_id}*.json" \) ! -path "*/subagents/*" 2>/dev/null | head -1)
     else
-      jsonl=$(find "$CCS_PROJECTS_DIR" -maxdepth 2 -name "*.jsonl" ! -path "*/subagents/*" -printf '%T@\t%p\n' 2>/dev/null \
+      jsonl=$(find "$CCS_PROJECTS_DIR" -maxdepth 2 \( -name "*.jsonl" -o -name "*.json" \) ! -path "*/subagents/*" -printf '%T@\t%p\n' 2>/dev/null \
         | sort -rn | head -1 | cut -f2)
     fi
   else

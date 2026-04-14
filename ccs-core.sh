@@ -30,8 +30,20 @@ _CCS_DASHBOARD_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 #   1. last-prompt exists AND no assistant event follows it, OR
 #   2. Last user events are /exit commands (Claude Code bug: resume→/exit may not write last-prompt)
 # Returns 0 if archived, 1 if not.
+_ccs_get_provider() {
+  local f="$1"
+  if [[ "$f" == *.json ]]; then
+    echo "gemini"
+  else
+    echo "claude"
+  fi
+}
+
 _ccs_is_archived() {
   local f="$1"
+  if [ "$(_ccs_get_provider "$f")" = "gemini" ]; then
+    return 1 # Gemini doesn't use standard archive markers yet
+  fi
   # Check 1: /exit pattern (handles missing last-prompt after resume→/exit)
   # The /exit sequence writes 3 user events at the very end: caveat, command, stdout.
   # Key signal: last line is a user event containing "Goodbye!" or "See ya!" (exit stdout).
@@ -63,22 +75,39 @@ _ccs_session_row() {
 _ccs_topic_from_jsonl() {
   local f="$1"
   local topic=""
+  local provider=$(_ccs_get_provider "$f")
+  
   if grep -q "change_title" "$f" 2>/dev/null; then
-    topic=$(grep "change_title" "$f" 2>/dev/null | jq -r '
-      .message.content[]? |
-      select(.type == "tool_use" and .name == "mcp__happy__change_title") |
-      .input.title' 2>/dev/null | tail -1)
+    # Both formats can be filtered with standard jq if we unpack Gemini arrays
+    if [ "$provider" = "gemini" ]; then
+      topic=$(jq -r '.[] | select(.type == "tool_use" and .name == "mcp__happy__change_title") | .input.title' "$f" 2>/dev/null | tail -1)
+    else
+      topic=$(grep "change_title" "$f" 2>/dev/null | jq -r '
+        .message.content[]? |
+        select(.type == "tool_use" and .name == "mcp__happy__change_title") |
+        .input.title' 2>/dev/null | tail -1)
+    fi
   fi
   if [ -z "$topic" ]; then
     # Find first real user message (skip meta, local-command, system tags, slash commands)
     # Strip XML tags from content to avoid <command-message> etc. leaking into topic
-    topic=$(jq -r '
-      select(.type == "user" and (.message.content | type == "string")
-        and ((.isMeta // false) == false)
-        and (.message.content | test("^<local-command|^<command-name|^<system-|^\\s*/exit|^\\s*/quit") | not)
-        and (.message.content | test("^\\s*$") | not))
-      | .message.content | gsub("<[^>]+>"; "") | gsub("^\\s+|\\s+$"; "")
-    ' "$f" 2>/dev/null | head -1 | tr '\n' ' ' | cut -c1-120)
+    if [ "$provider" = "gemini" ]; then
+      topic=$(jq -r '
+        .[] | select(.type == "user" and (.message.content | type == "string")
+          and ((.isMeta // false) == false)
+          and (.message.content | test("^<local-command|^<command-name|^<system-|^\\s*/exit|^\\s*/quit") | not)
+          and (.message.content | test("^\\s*$") | not))
+        | .message.content | gsub("<[^>]+>"; "") | gsub("^\\s+|\\s+$"; "")
+      ' "$f" 2>/dev/null | head -1 | tr '\n' ' ' | cut -c1-120)
+    else
+      topic=$(jq -r '
+        select(.type == "user" and (.message.content | type == "string")
+          and ((.isMeta // false) == false)
+          and (.message.content | test("^<local-command|^<command-name|^<system-|^\\s*/exit|^\\s*/quit") | not)
+          and (.message.content | test("^\\s*$") | not))
+        | .message.content | gsub("<[^>]+>"; "") | gsub("^\\s+|\\s+$"; "")
+      ' "$f" 2>/dev/null | head -1 | tr '\n' ' ' | cut -c1-120)
+    fi
   fi
   [ -z "$topic" ] && topic="-"
   echo "$topic"
@@ -89,7 +118,7 @@ _ccs_resolve_jsonl() {
   local projects_dir="$HOME/.claude/projects"
   local prefix="$1" search_all="$2"
   if [ -n "$prefix" ]; then
-    find "$projects_dir" -maxdepth 2 -name "${prefix}*.jsonl" ! -path "*/subagents/*" 2>/dev/null | head -1
+    find "$projects_dir" -maxdepth 2 \( -name "${prefix}*.jsonl" -o -name "${prefix}*.json" \) ! -path "*/subagents/*" 2>/dev/null | head -1
   else
     local search_dir
     if [ "$search_all" = "true" ]; then
@@ -99,7 +128,7 @@ _ccs_resolve_jsonl() {
       encoded_dir=$(_ccs_find_project_dir "$(pwd)") || return 1
       search_dir="$projects_dir/$encoded_dir"
     fi
-    find "$search_dir" -maxdepth 2 -name "*.jsonl" ! -path "*/subagents/*" -printf '%T@\t%p\n' 2>/dev/null \
+    find "$search_dir" -maxdepth 2 \( -name "*.jsonl" -o -name "*.json" \) ! -path "*/subagents/*" -printf '%T@\t%p\n' 2>/dev/null \
       | sort -rn | head -1 | cut -f2
   fi
 }
@@ -446,7 +475,7 @@ HELP
     last_active="-"
     if [ -n "$sid" ]; then
       local jsonl
-      jsonl=$(find "$HOME/.claude/projects" -maxdepth 2 -name "${sid}.jsonl" 2>/dev/null | head -1)
+      jsonl=$(find "$HOME/.claude/projects" -maxdepth 2 \( -name "${sid}.jsonl" -o -name "${sid}.json" \) 2>/dev/null | head -1)
       if [ -n "$jsonl" ]; then
         last_active=$(date -d "$(stat -c '%y' "$jsonl")" '+%Y/%m/%d %H:%M:%S' 2>/dev/null || echo "-")
         topic=$(_ccs_topic_from_jsonl "$jsonl")
@@ -582,7 +611,17 @@ _ccs_detect_crash() {
     [ -f "$f" ] || continue
 
     local mtime sid
-    mtime=$(stat -c "%Y" "$f" 2>/dev/null) || continue
+    if [[ "$f" == *.json ]]; then
+       local last_ts=$(jq -r '.[-1].timestamp // empty' "$f" 2>/dev/null)
+       if [ -n "$last_ts" ]; then
+         mtime=$(date -d "$last_ts" +%s 2>/dev/null || stat -c "%Y" "$f" 2>/dev/null)
+       else
+         mtime=$(stat -c "%Y" "$f" 2>/dev/null)
+       fi
+    else
+       mtime=$(stat -c "%Y" "$f" 2>/dev/null)
+    fi
+    [ -n "$mtime" ] || continue
     sid=$(basename "$f" | sed -e 's/\.jsonl$//' -e 's/\.json$//')
 
     # Path 1: Reboot detection

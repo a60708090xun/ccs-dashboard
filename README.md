@@ -13,19 +13,19 @@ If you use Code CLI Sessions heavily — multiple providers, multiple repos, mul
 - **Sessions are invisible.** No built-in way to list, search, or compare sessions. Each terminal is its own silo. Close the tab and the context is gone.
 - **Multi-repo chaos.** Working on a backend fix, a frontend feature, and a docs update simultaneously? Good luck remembering which session was doing what, in which repo.
 - **Zombie processes pile up.** Suspended claude processes (from terminal multiplexers, crashed tabs, or `Ctrl+Z`) silently eat 190-500 MB each. No warning, no cleanup.
-- **Context doesn't transfer.** Starting a new session means re-explaining everything. The old session's knowledge — files touched, decisions made, remaining todos — is trapped in a JSONL file nobody reads.
+- **Context doesn't transfer.** Starting a new session means re-explaining everything. The old session's knowledge — files touched, decisions made, remaining todos — is trapped in a JSON/JSONL file nobody reads.
 - **No cross-session view.** A single feature might span 5 sessions across 3 days. There's no way to see the full picture without manually digging through logs.
 
 ## Before / After
 
-**Before:** You're left staring at raw JSONL files.
+**Before:** You're left staring at raw JSON/JSONL files.
 
 ```
 $ ls ~/.claude/projects/
 -home-alice-backend-api/    -home-alice-frontend/    -home-alice-docs/
 $ ls ~/.claude/projects/-home-alice-backend-api/
 3a8f1c42-...jsonl  7b2e9d15-...jsonl  a1c4f8e2-...jsonl
-# Now what? Open each 50MB JSONL in vim?
+# Now what? Open each 50MB JSON/JSONL in vim?
 ```
 
 **After:** Just ask Claude. The included [custom skill](https://docs.anthropic.com/en/docs/claude-code/skills) gives you an interactive orchestrator — no commands to memorize.
@@ -183,7 +183,7 @@ Strikethrough     -           archived    has last-prompt marker
 | Required | Purpose |
 |----------|---------|
 | bash 4+ | mapfile, associative arrays |
-| jq | JSONL parsing |
+| jq | JSON/JSONL parsing |
 | coreutils | stat, date, find |
 
 | Optional | Purpose |

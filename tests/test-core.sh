@@ -76,4 +76,13 @@ assert_eq "G: isMeta skipped, real msg used" \
   "real msg " \
   "$(_ccs_topic_from_jsonl "$G")"
 
+# Case H: Gemini basic array format
+H="$TEST_DIR/gemini-topic.json"
+cat > "$H" <<'JSON'
+[{"type":"user","message":{"content":"gemini topic"},"timestamp":"2026-04-13T09:00:00Z"},{"type":"assistant","message":{"content":[{"type":"text","text":"hi"}]},"timestamp":"2026-04-13T09:01:00Z"}]
+JSON
+assert_eq "H: gemini basic topic" \
+  "gemini topic " \
+  "$(_ccs_topic_from_jsonl "$H")"
+
 test_summary

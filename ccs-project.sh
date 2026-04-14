@@ -36,7 +36,7 @@ _ccs_project_collect() {
   while IFS= read -r line; do
     [ -z "$line" ] && continue
     all_files+=("${line#*$'\t'}")
-  done < <(find "$target_dir" -maxdepth 1 -name "*.jsonl" \
+  done < <(find "$target_dir" -maxdepth 1 \( -name "*.jsonl" -o -name "*.json" \) \
     ! -path "*/subagents/*" -printf '%T@\t%p\n' 2>/dev/null \
     | sort -rn)
 
@@ -321,7 +321,7 @@ _ccs_project_json() {
   # Total count for truncation indicator
   local projects_dir="${CCS_PROJECTS_DIR:-$HOME/.claude/projects}"
   local total_count
-  total_count=$(find "$projects_dir/$encoded_dir" -maxdepth 1 -name "*.jsonl" \
+  total_count=$(find "$projects_dir/$encoded_dir" -maxdepth 1 \( -name "*.jsonl" -o -name "*.json" \) \
     ! -path "*/subagents/*" 2>/dev/null | wc -l)
 
   local truncated=false truncated_total=null

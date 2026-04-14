@@ -17,8 +17,9 @@
 setup_e2e_dir() {
   local name="${1:?missing e2e test name}"
   setup_test_dir "$name"
-  mkdir -p "$TEST_DIR/projects"
+  mkdir -p "$TEST_DIR/projects" "$TEST_DIR/gemini"
   export CCS_PROJECTS_DIR="$TEST_DIR/projects"
+  export CCS_GEMINI_DIR="$TEST_DIR/gemini"
 }
 
 # create_mock_session SLUG SID
