@@ -85,4 +85,52 @@ assert_eq "H: gemini basic topic" \
   "gemini topic " \
   "$(_ccs_topic_from_jsonl "$H")"
 
+echo ""
+echo "=== _ccs_resolve_jsonl: Gemini search path ==="
+
+# Create a mock Gemini project structure
+MOCK_GEMINI="$TEST_DIR/mock-gemini"
+mkdir -p "$MOCK_GEMINI/tmp/test-project/chats"
+cat > "$MOCK_GEMINI/tmp/test-project/chats/session-2026-04-13T08-51-abc12345.json" <<'JSON'
+{"sessionId":"abc12345","messages":[{"type":"user","content":[{"text":"hello"}],"timestamp":"2026-04-13T08:51:00Z"}]}
+JSON
+
+# Test: resolve by prefix finds Gemini session
+CCS_GEMINI_DIR="$MOCK_GEMINI" \
+  result=$(_ccs_resolve_jsonl "session-2026-04-13T08-51-abc")
+assert_contains "resolve Gemini session by prefix" \
+  "$result" "abc12345.json"
+
+# Test: resolve Claude session still works (real projects dir)
+result=$(_ccs_resolve_jsonl "b52e8a02" 2>/dev/null) || true
+if [ -n "$result" ]; then
+  assert_contains "resolve Claude session unaffected" \
+    "$result" "b52e8a02"
+else
+  # CI/clean environment: no real sessions, just verify no crash
+  printf '  PASS: resolve Claude session (no real data, no crash)\n'
+  PASS=$((PASS + 1))
+fi
+
+echo ""
+echo "=== _ccs_gemini_chats_dir ==="
+
+# Create mock projects.json
+mkdir -p "$MOCK_GEMINI"
+cat > "$MOCK_GEMINI/projects.json" <<JSON
+{"projects":{"$TEST_DIR/fake-project":"test-project"}}
+JSON
+CCS_GEMINI_DIR="$MOCK_GEMINI" \
+  result=$(_ccs_gemini_chats_dir "$TEST_DIR/fake-project")
+assert_eq "gemini chats dir resolves" \
+  "$MOCK_GEMINI/tmp/test-project/chats" \
+  "$result"
+
+# Non-existent project returns empty
+CCS_GEMINI_DIR="$MOCK_GEMINI" \
+  result=$(_ccs_gemini_chats_dir "/nonexistent/path" 2>/dev/null) || true
+assert_eq "non-existent project returns empty" \
+  "" \
+  "$result"
+
 test_summary

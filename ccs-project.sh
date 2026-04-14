@@ -28,17 +28,23 @@ _ccs_project_collect() {
   local until_date="${3:-}"
   local projects_dir="${CCS_PROJECTS_DIR:-$HOME/.claude/projects}"
   local target_dir="$projects_dir/$encoded_dir"
+  local gemini_dir="${CCS_GEMINI_DIR:-$HOME/.gemini}"
+  local gemini_chats="$gemini_dir/tmp/$encoded_dir/chats"
 
-  [ -d "$target_dir" ] || return 1
+  # Need at least one valid search directory
+  [ -d "$target_dir" ] || [ -d "$gemini_chats" ] || return 1
 
-  # Collect all JSONLs, sorted by mtime descending
+  # Collect all session files from Claude and Gemini, sorted by mtime descending
   local -a all_files=()
   while IFS= read -r line; do
     [ -z "$line" ] && continue
     all_files+=("${line#*$'\t'}")
-  done < <(find "$target_dir" -maxdepth 1 \( -name "*.jsonl" -o -name "*.json" \) \
-    ! -path "*/subagents/*" -printf '%T@\t%p\n' 2>/dev/null \
-    | sort -rn)
+  done < <({
+    [ -d "$target_dir" ] && find "$target_dir" -maxdepth 1 \( -name "*.jsonl" -o -name "*.json" \) \
+      ! -path "*/subagents/*" -printf '%T@\t%p\n' 2>/dev/null
+    [ -d "$gemini_chats" ] && find "$gemini_chats" -maxdepth 1 -name "*.json" \
+      ! -name "*.meta.json" -printf '%T@\t%p\n' 2>/dev/null
+  } | sort -rn)
 
   [ ${#all_files[@]} -eq 0 ] && return 0
 
@@ -318,11 +324,16 @@ _ccs_project_json() {
 
   local session_count=${#session_files[@]}
 
-  # Total count for truncation indicator
+  # Total count for truncation indicator (Claude + Gemini)
   local projects_dir="${CCS_PROJECTS_DIR:-$HOME/.claude/projects}"
+  local gemini_dir="${CCS_GEMINI_DIR:-$HOME/.gemini}"
   local total_count
-  total_count=$(find "$projects_dir/$encoded_dir" -maxdepth 1 \( -name "*.jsonl" -o -name "*.json" \) \
-    ! -path "*/subagents/*" 2>/dev/null | wc -l)
+  total_count=$({
+    find "$projects_dir/$encoded_dir" -maxdepth 1 \( -name "*.jsonl" -o -name "*.json" \) \
+      ! -path "*/subagents/*" 2>/dev/null
+    find "$gemini_dir/tmp/$encoded_dir/chats" -maxdepth 1 -name "*.json" \
+      ! -name "*.meta.json" 2>/dev/null
+  } | wc -l)
 
   local truncated=false truncated_total=null
   if [ "$total_count" -gt "$session_count" ]; then

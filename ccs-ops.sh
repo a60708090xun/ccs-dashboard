@@ -188,6 +188,10 @@ _ccs_crash_json() {
 _ccs_archive_session() {
   local f="$1"
   [ -f "$f" ] || return 1
+  # Gemini .json files are JSON arrays — appending JSONL marker would corrupt them
+  if [ "$(_ccs_get_provider "$f")" = "gemini" ]; then
+    return 0
+  fi
   printf '{"type":"last-prompt"}\n' >> "$f"
 }
 

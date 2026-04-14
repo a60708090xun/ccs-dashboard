@@ -17,6 +17,7 @@ _CCS_DASHBOARD_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 #   _ccs_todos_md           — TodoWrite items from JSONL
 #   _ccs_find_project_dir    — find encoded project dir from filesystem path
 #   _ccs_resolve_project_path — resolve JSONL dir name → filesystem path
+#   _ccs_gemini_chats_dir   — resolve current project's Gemini chats directory
 #   _ccs_get_boot_epoch     — system boot time as epoch
 #   _ccs_detect_crash       — detect crash-interrupted sessions
 #
@@ -116,19 +117,46 @@ _ccs_topic_from_jsonl() {
 # ── Helper: resolve JSONL file from args ──
 _ccs_resolve_jsonl() {
   local projects_dir="$HOME/.claude/projects"
-  local prefix="$1" search_all="$2"
+  local prefix="${1:-}" search_all="${2:-}"
   if [ -n "$prefix" ]; then
-    find "$projects_dir" -maxdepth 2 \( -name "${prefix}*.jsonl" -o -name "${prefix}*.json" \) ! -path "*/subagents/*" 2>/dev/null | head -1
+    # Search Claude projects
+    local result
+    result=$(find "$projects_dir" -maxdepth 2 \( -name "${prefix}*.jsonl" -o -name "${prefix}*.json" \) ! -path "*/subagents/*" 2>/dev/null | head -1)
+    if [ -n "$result" ]; then
+      echo "$result"
+      return 0
+    fi
+    # Fallback: search Gemini chats dirs
+    local gemini_dir="${CCS_GEMINI_DIR:-$HOME/.gemini}"
+    find "$gemini_dir/tmp" -maxdepth 3 -path "*/chats/${prefix}*.json" 2>/dev/null | head -1
   else
-    local search_dir
+    local search_dirs=()
     if [ "$search_all" = "true" ]; then
-      search_dir="$projects_dir"
+      search_dirs+=("$projects_dir")
+      # Add all Gemini project chats dirs
+      local gemini_dir="${CCS_GEMINI_DIR:-$HOME/.gemini}"
+      if [ -d "$gemini_dir/tmp" ]; then
+        local d
+        for d in "$gemini_dir/tmp"/*/chats; do
+          [ -d "$d" ] && search_dirs+=("$d")
+        done
+      fi
     else
       local encoded_dir
-      encoded_dir=$(_ccs_find_project_dir "$(pwd)") || return 1
-      search_dir="$projects_dir/$encoded_dir"
+      encoded_dir=$(_ccs_find_project_dir "$(pwd)") || true
+      [ -n "$encoded_dir" ] && search_dirs+=("$projects_dir/$encoded_dir")
+      # Also search current project's Gemini chats dir
+      local gemini_chats
+      gemini_chats=$(_ccs_gemini_chats_dir "$(pwd)") && search_dirs+=("$gemini_chats")
     fi
-    find "$search_dir" -maxdepth 2 \( -name "*.jsonl" -o -name "*.json" \) ! -path "*/subagents/*" -printf '%T@\t%p\n' 2>/dev/null \
+    [ ${#search_dirs[@]} -eq 0 ] && return 1
+    # Find most recently modified session across all search dirs
+    local find_args=()
+    for d in "${search_dirs[@]}"; do
+      [ ${#find_args[@]} -gt 0 ] && find_args+=("-o")
+      find_args+=("-path" "$d/*")
+    done
+    find "${search_dirs[@]}" -maxdepth 2 \( -name "*.jsonl" -o -name "*.json" \) ! -path "*/subagents/*" -printf '%T@\t%p\n' 2>/dev/null \
       | sort -rn | head -1 | cut -f2
   fi
 }
@@ -732,6 +760,37 @@ _ccs_find_project_dir() {
       return 0
     }
   done
+  return 1
+}
+
+# ── Helper: resolve Gemini chats directory for a filesystem path ──
+# Uses ~/.gemini/projects.json to map path → slug, then returns chats dir.
+# Falls back to current project slug if no argument given.
+_ccs_gemini_chats_dir() {
+  local target="${1:-$(pwd)}"
+  local gemini_dir="${CCS_GEMINI_DIR:-$HOME/.gemini}"
+  local projects_json="$gemini_dir/projects.json"
+  [ -f "$projects_json" ] || return 1
+
+  # Find the slug for this path (exact match or longest prefix match)
+  local slug
+  slug=$(python3 -c "
+import json, sys, os
+target = os.path.realpath('$target')
+pj = json.load(open('$projects_json'))
+best_path, best_slug = '', ''
+for path, slug in pj.get('projects', {}).items():
+    rp = os.path.realpath(path)
+    if target == rp or target.startswith(rp + '/'):
+        if len(rp) > len(best_path):
+            best_path, best_slug = rp, slug
+if best_slug:
+    print(best_slug)
+" 2>/dev/null)
+  [ -z "$slug" ] && return 1
+
+  local chats_dir="$gemini_dir/tmp/$slug/chats"
+  [ -d "$chats_dir" ] && echo "$chats_dir" && return 0
   return 1
 }
 

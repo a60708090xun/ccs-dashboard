@@ -372,7 +372,7 @@ _ccs_feature_md() {
       for ug_sid in "${ug_sids[@]}"; do
         # Find session file by prefix
         local ug_file
-        ug_file=$(find "$HOME/.claude/projects" \( -name "${ug_sid}*.jsonl" -o -name "${ug_sid}*.json" \) -type f 2>/dev/null | head -1)
+        ug_file=$(_ccs_resolve_jsonl "$ug_sid")
         if [ -n "$ug_file" ]; then
           local ug_topic ug_ago
           ug_topic=$(_ccs_topic_from_jsonl "$ug_file")
@@ -479,7 +479,7 @@ _ccs_feature_terminal() {
       mapfile -t ug_sids < <(echo "$ungrouped_json" | jq -r '.sessions[]')
       for ug_sid in "${ug_sids[@]}"; do
         local ug_file
-        ug_file=$(find "$HOME/.claude/projects" \( -name "${ug_sid}*.jsonl" -o -name "${ug_sid}*.json" \) -type f 2>/dev/null | head -1)
+        ug_file=$(_ccs_resolve_jsonl "$ug_sid")
         if [ -n "$ug_file" ]; then
           local ug_topic ug_ago ug_mod ug_now
           ug_topic=$(_ccs_topic_from_jsonl "$ug_file")
@@ -545,7 +545,7 @@ _ccs_feature_detail_md() {
     mapfile -t session_sids < <(echo "$feature_line" | jq -r '.sessions[]')
     for sid in "${session_sids[@]}"; do
       local sfile
-      sfile=$(find "$HOME/.claude/projects" \( -name "${sid}*.jsonl" -o -name "${sid}*.json" \) -type f 2>/dev/null | head -1)
+      sfile=$(_ccs_resolve_jsonl "$sid")
       [ -z "$sfile" ] && continue
       local sdata
       sdata=$(_ccs_overview_session_data "$sfile")
@@ -562,7 +562,7 @@ _ccs_feature_detail_md() {
   first_sid=$(echo "$feature_line" | jq -r '.sessions[0] // ""')
   if [ -n "$first_sid" ]; then
     local first_file
-    first_file=$(find "$HOME/.claude/projects" \( -name "${first_sid}*.jsonl" -o -name "${first_sid}*.json" \) -type f 2>/dev/null | head -1)
+    first_file=$(_ccs_resolve_jsonl "$first_sid")
     if [ -n "$first_file" ]; then
       local encoded_dir
       encoded_dir=$(basename "$(dirname "$first_file")")
@@ -595,7 +595,7 @@ _ccs_feature_detail_md() {
   for sid in "${session_sids2[@]}"; do
     sn=$((sn + 1))
     local sfile
-    sfile=$(find "$HOME/.claude/projects" \( -name "${sid}*.jsonl" -o -name "${sid}*.json" \) -type f 2>/dev/null | head -1)
+    sfile=$(_ccs_resolve_jsonl "$sid")
     if [ -n "$sfile" ]; then
       local stopic smod snow sago
       stopic=$(_ccs_topic_from_jsonl "$sfile")
@@ -644,7 +644,7 @@ _ccs_feature_timeline_md() {
   local -a entries=()
   for sid in "${session_sids[@]}"; do
     local sfile
-    sfile=$(find "$HOME/.claude/projects" \( -name "${sid}*.jsonl" -o -name "${sid}*.json" \) -type f 2>/dev/null | head -1)
+    sfile=$(_ccs_resolve_jsonl "$sid")
     [ -z "$sfile" ] && continue
     local smod
     smod=$(stat -c "%Y" "$sfile" 2>/dev/null)
@@ -795,7 +795,7 @@ HELP
       }
       # Validate session exists
       local found
-      found=$(find "$HOME/.claude/projects" \( -name "${session_prefix}*.jsonl" -o -name "${session_prefix}*.json" \) -type f 2>/dev/null | head -1)
+      found=$(_ccs_resolve_jsonl "$session_prefix")
       [ -z "$found" ] && { echo "Session '$session_prefix' not found." >&2; return 1; }
 
       jq -nc --arg s "$session_prefix" --arg f "$feature_id" \
@@ -863,7 +863,7 @@ HELP
       }
       # Validate session exists
       local found
-      found=$(find "$HOME/.claude/projects" \( -name "${session_prefix}*.jsonl" -o -name "${session_prefix}*.json" \) -type f 2>/dev/null | head -1)
+      found=$(_ccs_resolve_jsonl "$session_prefix")
       [ -z "$found" ] && { echo "Session '$session_prefix' not found." >&2; return 1; }
 
       jq -nc --arg s "$session_prefix" --arg f "$feature_id" \
