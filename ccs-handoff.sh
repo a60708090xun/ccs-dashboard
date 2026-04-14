@@ -54,7 +54,7 @@ HELP
   while IFS=$'\t' read -r _ path; do
     open_sessions+=("$path")
   done < <(
-    find "$session_dir" -maxdepth 1 -name "*.jsonl" -mmin -10080 ! -path "*/subagents/*" -print0 2>/dev/null \
+    find "$session_dir" -maxdepth 1 \( -name "*.jsonl" -o -name "*.json" \) -mmin -10080 ! -path "*/subagents/*" -print0 2>/dev/null \
     | while IFS= read -r -d '' f; do
         _ccs_is_archived "$f" && continue
         printf '%s\t%s\n' "$(stat -c '%Y' "$f")" "$f"
@@ -306,11 +306,18 @@ HELP
     [[ "$content" =~ ^[[:space:]]*/quit ]] && continue
     [ -z "${content// /}" ] && continue
     real_to_raw+=("$raw_idx")
-  done < <(jq -r '
-    select(.type == "user" and (.message.content | type == "string")) |
-    [(.isMeta // false | tostring), (.message.content | .[:80] | gsub("\n"; " "))] |
-    @tsv
-  ' "$jsonl" 2>/dev/null)
+  local provider=$(_ccs_get_provider "$jsonl")
+  done < <(
+    if [ "$provider" = "gemini" ]; then
+      jq -c ".[]" "$jsonl" 2>/dev/null
+    else
+      cat "$jsonl" 2>/dev/null
+    fi | jq -r '
+      select(.type == "user" and (.message.content | type == "string")) |
+      [(.isMeta // false | tostring), (.message.content | .[:80] | gsub("\n"; " "))] |
+      @tsv
+    ' 2>/dev/null
+  )
 
   local real_count=${#real_to_raw[@]}
   local start_from=$((real_count - pair_count + 1))
@@ -347,16 +354,14 @@ ${assistant_preview}
 
   # ── Extract tool usage from last assistant turn ──
   local recent_files=""
-  recent_files=$(jq -r '
-    select(.type == "assistant") |
-    .message.content[]? |
-    select(.type == "tool_use") |
-    if .name == "Read" then "R " + .input.file_path
-    elif .name == "Edit" then "E " + .input.file_path
-    elif .name == "Write" then "W " + .input.file_path
-    elif .name == "Bash" then "$ " + (.input.command | split("\n") | first | .[:80])
-    else empty end
-  ' "$jsonl" 2>/dev/null | tail -10 | sort -u)
+  local jq_recent_filter='select(.type == "assistant") | .message.content[]? | select(.type == "tool_use") | if .name == "Read" then "R " + .input.file_path elif .name == "Edit" then "E " + .input.file_path elif .name == "Write" then "W " + .input.file_path elif .name == "Bash" then "$ " + (.input.command | split("\n") | first | .[:80]) else empty end'
+  recent_files=$( (
+    if [ "$provider" = "gemini" ]; then
+      jq -c ".[]" "$jsonl" 2>/dev/null
+    else
+      cat "$jsonl" 2>/dev/null
+    fi
+  ) | jq -r "$jq_recent_filter" 2>/dev/null | tail -10 | sort -u)
 
   # ── Build the prompt ──
   local prompt=""
@@ -398,7 +403,12 @@ PROMPT_EOF
       printf "\033[90m---\033[0m\n"
       printf "\033[90mPaste the above into a new session, or use:\033[0m\n"
       printf "\033[33m  ccs-resume-prompt %s --copy     \033[90m# copy to clipboard\033[0m\n" "$sid"
-      printf "\033[33m  claude --resume %s  \033[90m# resume with full context (heavier)\033[0m\n" "$full_sid"
+      local provider=$(_ccs_get_provider "$jsonl")
+      if [ "$provider" = "gemini" ]; then
+        printf "\033[33m  gemini --session %s  \033[90m# resume with full context (heavier)\033[0m\n" "$full_sid"
+      else
+        printf "\033[33m  claude --resume %s  \033[90m# resume with full context (heavier)\033[0m\n" "$full_sid"
+      fi
     fi
   fi
 

@@ -6,6 +6,20 @@
 # Outputs a JSON object with: last_exchange, todos, deadline_context
 _ccs_overview_session_data() {
   local jsonl="$1"
+  local provider=$(_ccs_get_provider "$jsonl")
+  local jq_user_filter
+  local jq_todos_filter
+  local jq_deadline_filter
+
+  if [ "$provider" = "gemini" ]; then
+    jq_user_filter='.[] | select(.type == "user" and (.message.content | type == "string"))'
+    jq_todos_filter='.[] | select(.type == "assistant") | .message.content[]? | select(.type == "tool_use" and .name == "TodoWrite") | [.input.todos[]? | {content, status}]'
+    jq_deadline_filter='.[] | select(.type == "user" and (.message.content | type == "string") and ((.isMeta // false) == false)) | .message.content'
+  else
+    jq_user_filter='select(.type == "user" and (.message.content | type == "string"))'
+    jq_todos_filter='select(.type == "assistant") | .message.content[]? | select(.type == "tool_use" and .name == "TodoWrite") | [.input.todos[]? | {content, status}]'
+    jq_deadline_filter='select(.type == "user" and (.message.content | type == "string") and ((.isMeta // false) == false)) | .message.content'
+  fi
 
   # --- Last Exchange (last non-meta user-assistant pair) ---
   # _ccs_get_pair expects a 1-based index into ALL user prompts (including meta).
@@ -14,9 +28,7 @@ _ccs_overview_session_data() {
   # filter out meta/system, take the last one's raw index.
   local user_text="" asst_text=""
   local last_raw_idx
-  last_raw_idx=$(jq -c '
-    select(.type == "user" and (.message.content | type == "string"))
-  ' "$jsonl" 2>/dev/null \
+  last_raw_idx=$(jq -c "$jq_user_filter" "$jsonl" 2>/dev/null \
     | jq -sc '
       [to_entries[] | {
         raw_idx: (.key + 1),
@@ -40,25 +52,16 @@ _ccs_overview_session_data() {
 
   # --- Todos (last TodoWrite) ---
   local todos_json
-  todos_json=$(jq -c '
-    select(.type == "assistant") |
-    .message.content[]? |
-    select(.type == "tool_use" and .name == "TodoWrite") |
-    [.input.todos[]? | {content, status}]
-  ' "$jsonl" 2>/dev/null | tail -1)
+  todos_json=$(jq -c "$jq_todos_filter" "$jsonl" 2>/dev/null | tail -1)
   [ -z "$todos_json" ] && todos_json="[]"
 
   # --- Deadline Context (keyword search in last 5 non-meta user messages) ---
   local deadline_ctx=""
-  deadline_ctx=$(jq -r '
-    select(.type == "user" and (.message.content | type == "string")
-      and ((.isMeta // false) == false)) |
-    .message.content
-  ' "$jsonl" 2>/dev/null \
+  deadline_ctx=$(jq -r "$jq_deadline_filter" "$jsonl" 2>/dev/null \
     | tail -5 \
-    | grep -iE '(deadline|before|週|月底|by |due|urgent|ASAP|趕|今天|明天|後天)' \
+    | grep -iE '"'"'(deadline|before|週|月底|by |due|urgent|ASAP|趕|今天|明天|後天)'"'"' \
     | cut -c1-150 \
-    | paste -sd '|' -)
+    | paste -sd '"'"'|'"'"' -)
 
   # Output JSON
   jq -nc \
@@ -66,11 +69,11 @@ _ccs_overview_session_data() {
     --arg asst_text "$asst_text" \
     --argjson todos "$todos_json" \
     --arg deadline "$deadline_ctx" \
-    '{
+    '"'"'{
       last_exchange: {user: $user_text, assistant: $asst_text},
       todos: $todos,
       deadline_context: (if $deadline == "" then null else $deadline end)
-    }'
+    }'"'"'
 }
 
 # ── Helper: render overview as Markdown ──

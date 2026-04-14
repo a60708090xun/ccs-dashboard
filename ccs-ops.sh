@@ -62,7 +62,12 @@ _ccs_crash_md() {
     echo "- **最後訊息：** $last_user"
     [ -n "$todo_summary" ] && echo "- **Todos：** $todo_summary"
     [ -n "$git_branch" ] && echo "- **Git：** $git_branch ($git_dirty uncommitted files)"
-    echo "- **Resume：** \`claude --resume $sid\`"
+    local provider=$(_ccs_get_provider "$jsonl")
+    local resume_cmd="claude --resume $sid"
+    if [ "$provider" = "gemini" ]; then
+      resume_cmd="gemini --session $sid"
+    fi
+    echo "- **Resume：** \`$resume_cmd\`"
     echo "- **Detail：** \`ccs-session ${sid:0:8}\`"
     echo ""
   done
@@ -135,18 +140,24 @@ _ccs_crash_json() {
     local mtime=$(stat -c "%Y" "$f" 2>/dev/null)
     local last_iso=$(date -d "@$mtime" --iso-8601=seconds 2>/dev/null)
 
-    jq -nc \
-      --arg sid "$sid" \
-      --arg conf "$confidence" \
-      --arg dpath "$detection_path" \
-      --arg proj "$project" \
-      --arg topic "$topic" \
-      --arg last_act "$last_iso" \
-      --arg last_msg "$last_user" \
-      --argjson todos "${todos:-[]}" \
-      --arg git_br "$git_branch" \
-      --argjson git_d "$git_dirty" \
-      --arg resume "claude --resume $sid" \
+    local provider=$(_ccs_get_provider "$jsonl")
+    local resume_cmd="claude --resume $sid"
+    if [ "$provider" = "gemini" ]; then
+      resume_cmd="gemini --session $sid"
+    fi
+
+    jq -n -c \
+    --arg sid "$sid" \
+    --arg conf "$confidence" \
+    --arg dpath "$path" \
+    --arg proj "$project" \
+    --arg topic "$topic" \
+    --arg last_act "$last_iso" \
+    --arg last_msg "$last_user" \
+    --argjson todos "${todos:-[]}" \
+    --arg git_br "$git_branch" \
+    --argjson git_d "$git_dirty" \
+    --arg resume "$resume_cmd" \
       '{
         session_id: $sid[0:8],
         session_uuid: $sid,
@@ -400,7 +411,7 @@ _ccs_detect_last_workday() {
     # 跳過今天
     (( day_epoch >= today_start )) && continue
     active_dates["$day_start"]=$day_epoch
-  done < <(find "$claude_dir" -name "*.jsonl" -printf "%T@\n" 2>/dev/null)
+  done < <(find "$claude_dir" \( -name "*.jsonl" -o -name "*.json" \) -printf "%T@\n" 2>/dev/null)
 
   if [ ${#active_dates[@]} -eq 0 ]; then
     # 無任何歷史 session，fallback 到昨天
@@ -434,7 +445,7 @@ _ccs_recap_scan_projects() {
     [ -z "${seen[$dir]+_}" ] || continue
     seen["$dir"]=1
     echo "$dir"
-  done < <(find "$claude_dir" -maxdepth 2 -name "*.jsonl" ! -path "*/subagents/*" 2>/dev/null)
+  done < <(find "$claude_dir" -maxdepth 2 \( -name "*.jsonl" -o -name "*.json" \) ! -path "*/subagents/*" 2>/dev/null)
 }
 
 # _ccs_recap_collect — 收集 recap 數據，輸出 JSON
@@ -572,7 +583,7 @@ _ccs_recap_collect() {
       (( todos_done += td_done ))
       (( todos_pending += td_pending ))
       (( todos_in_progress += td_ip ))
-    done < <(find "$session_dir" -maxdepth 1 -name "*.jsonl" ! -path "*/subagents/*" 2>/dev/null)
+    done < <(find "$session_dir" -maxdepth 1 \( -name "*.jsonl" -o -name "*.json" \) ! -path "*/subagents/*" 2>/dev/null)
 
     # Features（從 features.jsonl 讀取此專案的 features）
     local data_dir
@@ -623,7 +634,7 @@ _ccs_recap_collect() {
         elif .name == "Write" then "W\t" + .input.file_path
         elif .name == "Read" then "R\t" + .input.file_path
         else empty end' "$jsonl" 2>/dev/null)
-    done < <(find "$session_dir" -maxdepth 1 -name "*.jsonl" ! -path "*/subagents/*" 2>/dev/null)
+    done < <(find "$session_dir" -maxdepth 1 \( -name "*.jsonl" -o -name "*.json" \) ! -path "*/subagents/*" 2>/dev/null)
 
     # 排序取 top 5（合併 edits + reads 的所有 key，避免遺漏只有 Read 的檔案）
     unset all_hot_files 2>/dev/null
@@ -657,7 +668,7 @@ _ccs_recap_collect() {
           --arg t "$dl_text" --arg sid "$sid" --arg topic "$topic" \
           '. += [{text:$t, session_id:$sid, session_topic:$topic}]')
       fi
-    done < <(find "$session_dir" -maxdepth 1 -name "*.jsonl" ! -path "*/subagents/*" 2>/dev/null)
+    done < <(find "$session_dir" -maxdepth 1 \( -name "*.jsonl" -o -name "*.json" \) ! -path "*/subagents/*" 2>/dev/null)
 
     # 組裝此專案的 JSON
     jq -n \
@@ -1165,7 +1176,7 @@ _ccs_checkpoint_collect() {
       else
         wip_json=$(echo "$wip_json" | jq -c --argjson e "$entry" '. + [$e]')
       fi
-    done < <(find "$session_dir" -maxdepth 1 -name "*.jsonl" ! -path "*/subagents/*" 2>/dev/null)
+    done < <(find "$session_dir" -maxdepth 1 \( -name "*.jsonl" -o -name "*.json" \) ! -path "*/subagents/*" 2>/dev/null)
   done
 
   # Build result

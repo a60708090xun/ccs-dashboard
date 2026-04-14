@@ -25,7 +25,13 @@ _ccs_health_events() {
   local sid
   sid=$(basename "$f" | sed -e 's/\.jsonl$//' -e 's/\.json$//' | cut -c1-8)
 
-  jq -s --arg sid "$sid" '
+  local provider=$(_ccs_get_provider "$f")
+  local pipe_cmd="cat"
+  if [ "$provider" = "gemini" ]; then
+    pipe_cmd="jq -c .[]"
+  fi
+
+  eval "$pipe_cmd '$f'" 2>/dev/null | jq -s --arg sid "$sid" '
     reduce .[] as $line (
       {
         first_ts: null, last_ts: null, prompt_count: 0,
@@ -291,7 +297,7 @@ HELP
     fi
     files+=("$f")
   done < <(find "$projects_dir" \
-    -maxdepth 2 -name "*.jsonl" -type f \
+    -maxdepth 2 \( -name "*.jsonl" -o -name "*.json" \) -type f \
     ! -path "*/subagents/*" \
     -print0 2>/dev/null)
 

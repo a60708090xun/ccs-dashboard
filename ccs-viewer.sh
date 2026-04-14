@@ -31,7 +31,7 @@ HELP
   local open_files=()
   while IFS= read -r -d '' f; do
     _ccs_is_archived "$f" || open_files+=("$f")
-  done < <(find "$projects_dir" -maxdepth 2 -name "*.jsonl" -mmin -$((7 * 1440)) ! -path "*/subagents/*" -print0 2>/dev/null)
+  done < <(find "$projects_dir" -maxdepth 2 \( -name "*.jsonl" -o -name "*.json" \) -mmin -$((7 * 1440)) ! -path "*/subagents/*" -print0 2>/dev/null)
 
   # Split fresh / stale
   local fresh_rows="" stale_count=0
@@ -99,7 +99,7 @@ HELP
     topic="-"
     if [ -n "$sid" ]; then
       local jsonl
-      jsonl=$(find "$projects_dir" -maxdepth 2 -name "${sid}.jsonl" 2>/dev/null | head -1)
+      jsonl=$(find "$projects_dir" -maxdepth 2 \( -name "${sid}.jsonl" -o -name "${sid}.json" \) 2>/dev/null | head -1)
       [ -n "$jsonl" ] && topic=$(_ccs_topic_from_jsonl "$jsonl")
     fi
 
@@ -384,7 +384,12 @@ HELP
     printf "\033[1;32m━━ Response ━━\033[0m\n"
     echo "$assistant_text" | head -30
     echo
-    printf "\033[90mResume: claude --resume %s\033[0m\n" "$full_sid"
+    local provider=$(_ccs_get_provider "$jsonl")
+    if [ "$provider" = "gemini" ]; then
+      printf "\033[90mResume: gemini --session %s\033[0m\n" "$full_sid"
+    else
+      printf "\033[90mResume: claude --resume %s\033[0m\n" "$full_sid"
+    fi
     return 0
   fi
 
@@ -490,6 +495,11 @@ HELP
   done
 
   clear
-  printf "\033[90mResume: claude --resume %s\033[0m\n" "$full_sid"
+  local provider=$(_ccs_get_provider "$jsonl")
+  if [ "$provider" = "gemini" ]; then
+    printf "\033[90mResume: gemini --session %s\033[0m\n" "$full_sid"
+  else
+    printf "\033[90mResume: claude --resume %s\033[0m\n" "$full_sid"
+  fi
 }
 

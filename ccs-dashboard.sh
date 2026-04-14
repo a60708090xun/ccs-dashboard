@@ -186,7 +186,7 @@ HELP
     last_active="-"
     if [ -n "$sid" ]; then
       local jsonl
-      jsonl=$(find "$projects_dir" -maxdepth 2 -name "${sid}.jsonl" 2>/dev/null | head -1)
+      jsonl=$(find "$projects_dir" -maxdepth 2 \( -name "${sid}.jsonl" -o -name "${sid}.json" \) 2>/dev/null | head -1)
       if [ -n "$jsonl" ]; then
         last_active=$(date -d "$(stat -c '%y' "$jsonl")" '+%Y/%m/%d %H:%M:%S' 2>/dev/null || echo "-")
         topic=$(_ccs_topic_from_jsonl "$jsonl")
@@ -355,7 +355,7 @@ _ccs_status_md() {
     topic="-"
     if [ -n "$sid" ]; then
       local jsonl
-      jsonl=$(find "$projects_dir" -maxdepth 2 -name "${sid}.jsonl" 2>/dev/null | head -1)
+      jsonl=$(find "$projects_dir" -maxdepth 2 \( -name "${sid}.jsonl" -o -name "${sid}.json" \) 2>/dev/null | head -1)
       [ -n "$jsonl" ] && topic=$(_ccs_topic_from_jsonl "$jsonl")
     fi
 
@@ -482,7 +482,15 @@ HELP
     fi
 
     local total_prompts
-    total_prompts=$(jq -c 'select(.type == "user" and (.message.content | type == "string"))' "$jsonl" 2>/dev/null | wc -l)
+    local provider=$(_ccs_get_provider "$jsonl")
+    local jq_filter='select(.type == "user" and (.message.content | type == "string"))'
+    total_prompts=$( (
+      if [ "$provider" = "gemini" ]; then
+        jq -c ".[]" "$jsonl" 2>/dev/null
+      else
+        cat "$jsonl" 2>/dev/null
+      fi
+    ) | jq -c "$jq_filter" 2>/dev/null | wc -l)
 
     echo "### 🔍 #${idx} ${topic}"
     echo
@@ -506,7 +514,12 @@ HELP
       echo "${assistant_text}"
       echo
       echo "---"
-      echo "_Resume: \`claude --resume ${full_sid}\`_"
+      local provider=$(_ccs_get_provider "$jsonl")
+      if [ "$provider" = "gemini" ]; then
+        echo "_Resume: \`gemini --session ${full_sid}\`_"
+      else
+        echo "_Resume: \`claude --resume ${full_sid}\`_"
+      fi
       return 0
     fi
 
@@ -539,7 +552,12 @@ HELP
     done
     echo
     echo "---"
-    echo "_Resume: \`claude --resume ${full_sid}\`_"
+    local provider=$(_ccs_get_provider "$jsonl")
+    if [ "$provider" = "gemini" ]; then
+      echo "_Resume: \`gemini --session ${full_sid}\`_"
+    else
+      echo "_Resume: \`claude --resume ${full_sid}\`_"
+    fi
   else
     ccs-details --last "$sid"
   fi

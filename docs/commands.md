@@ -167,7 +167,7 @@ ccs-recap --project    # 僅當前專案
 
 ## ccs-resume-prompt [session-id-prefix]
 
-從 JSONL session 自動產生精簡 bootstrap prompt（< 2000 tokens），設計用來貼入全新 session 無縫接手。
+從 JSON/JSONL session 自動產生精簡 bootstrap prompt（< 2000 tokens），設計用來貼入全新 session 無縫接手。
 
 包含：project context、git 狀態、最近對話摘要、最近操作的檔案。
 
@@ -210,7 +210,7 @@ ccs-crash --idle-window N      # Path 2 window（分鐘，預設 1440）
 
 判斷 session 是否仍在執行使用兩種方法：
 
-1. **精確匹配**：`ps` 抓 `--resume <session-id>`（適用 `claude --resume` 啟動的 session）
+1. **精確匹配**：`ps` 抓 `--resume <session-id>` 或 `--session <session-id>`（適用 `claude --resume` 或 `gemini --session` 啟動的 session）
 2. **cwd 匹配**：比對 Code CLI process (如 claude) 的工作目錄與 session 的 project 路徑（適用 Happy 啟動或 terminal 直接開的 session）。路徑使用正規化比對（`/._` 統一為 `-`）解決 Code CLI 工具路徑編碼歧義。
 
 Hung detection 僅對精確匹配的 session 生效，cwd 匹配因無法確定 process 對應哪個 session，不做 hung 判斷。
@@ -256,7 +256,7 @@ Done: 14 sessions archived.
 - **最後活動：** 09:38（9m ago）
 - **最後訊息：** 好
 - **Git：** master (4 uncommitted files)
-- **Resume：** `claude --resume b9acc81f-...`
+- **Resume：** `claude --resume b9acc81f-...` 或 `gemini --session b9acc81f-...`
 - **Detail：** `ccs-session b9acc81f`
 
 ---
