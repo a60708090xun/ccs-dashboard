@@ -141,20 +141,50 @@ def collect_claude_sessions(show_all):
 
 def get_gemini_topic(data):
     topic = "-"
-    messages = data.get('messages', [])
+    if isinstance(data, list):
+        messages = data
+    elif isinstance(data, dict):
+        messages = data.get('messages', [])
+    else:
+        return topic
+
     for msg in reversed(messages):
-        if msg.get('role') == 'model':
+        # Handle tool calls for title changes
+        # Type can be 'model', 'assistant', or 'gemini'
+        role = msg.get('role', msg.get('type', ''))
+        if role in ['model', 'assistant', 'gemini']:
+            # Check content for toolCall (v0.34 and earlier)
             for content in msg.get('content', []):
-                if content.get('type') == 'toolCall' and content.get('name') == 'mcp__happy__change_title':
+                if isinstance(content, dict) and content.get('type') == 'toolCall' and content.get('name') == 'mcp__happy__change_title':
                     args = content.get('args', {})
+                    topic_str = args.get('title', '')
+                    if topic_str:
+                        return topic_str.replace('\n', ' ').replace('\t', ' ').replace('|', ':')
+            # Check toolCalls array (v0.35+)
+            for tc in msg.get('toolCalls', []):
+                if tc.get('name') == 'mcp__happy__change_title':
+                    args = tc.get('args', {})
                     topic_str = args.get('title', '')
                     if topic_str:
                         return topic_str.replace('\n', ' ').replace('\t', ' ').replace('|', ':')
 
     for msg in messages:
-        if msg.get('role') == 'user':
-            for content in msg.get('content', []):
-                if content.get('type') == 'text':
+        # Check role or type for user
+        role = msg.get('role', msg.get('type', ''))
+        if role == 'user':
+            content_list = msg.get('content', [])
+            if isinstance(content_list, str):
+                # Handle old format where content might be a string
+                text = content_list.strip()
+                if text and not text.startswith('/'):
+                    import re
+                    clean_text = re.sub(r'<[^>]+>', '', text).strip()
+                    if clean_text:
+                        return clean_text[:120].replace('\n', ' ').replace('\t', ' ').replace('|', ':')
+            elif isinstance(content_list, list):
+                for content in content_list:
+                    if not isinstance(content, dict): continue
+                    # Handle text directly or with type:'text'
                     text = content.get('text', '').strip()
                     if text and not text.startswith('/'):
                         import re
@@ -171,35 +201,52 @@ def process_gemini_file(filepath):
         return None
         
     filename = os.path.basename(filepath)
-    sid = data.get('sessionId', filename.replace('.json', ''))
+    if isinstance(data, dict):
+        sid = data.get('sessionId', filename.replace('.json', ''))
+        last_updated_val = data.get('lastUpdated', 0)
+    else:
+        sid = filename.replace('.json', '')
+        last_updated_val = 0
+        
     display_sid = sid.split('-')[-1][:8] if '-' in sid else sid[:8]
     
-    last_updated = data.get('lastUpdated', 0)
-    if last_updated is None: last_updated = 0
+    if last_updated_val is None: last_updated_val = 0
     
-    now = time.time() * 1000 
-    
-    if last_updated == 0:
+    mtime = 0
+    if isinstance(last_updated_val, str):
         try:
-            last_updated = os.path.getmtime(filepath) * 1000
+            from datetime import datetime
+            # Handle Z suffix for older Python versions
+            iso_str = last_updated_val.replace('Z', '+00:00')
+            dt = datetime.fromisoformat(iso_str)
+            mtime = dt.timestamp()
+        except (ValueError, ImportError):
+            mtime = 0
+    else:
+        try:
+            # Assume it's a number (ms)
+            mtime = float(last_updated_val) / 1000.0
+        except (ValueError, TypeError):
+            mtime = 0
+            
+    if mtime <= 0:
+        try:
+            mtime = os.path.getmtime(filepath)
         except OSError:
             return None
     
-    try:
-        last_updated = float(last_updated)
-    except (ValueError, TypeError):
-        last_updated = 0
-        
-    ago_mins = int((now - last_updated) / 60000)
+    now = time.time()
+    ago_mins = int((now - mtime) / 60)
     if ago_mins < 0: ago_mins = 0
     
-    is_archived = False 
-    status, color = get_status_and_color(ago_mins, is_archived)
-    ago_str = get_ago_str(ago_mins)
+    is_archived = data.get('archived') is True
+    status, color = get_status_and_color(ago_mins, is_archived)    ago_str = get_ago_str(ago_mins)
     topic = get_gemini_topic(data)
     
     # Project is the dir name above 'chats'
-    project = os.path.basename(os.path.dirname(os.path.dirname(filepath)))
+    parent_dir = os.path.dirname(os.path.dirname(filepath))
+    project = os.path.basename(parent_dir)
+    if not project: project = "unknown"
     
     return {
         'provider': 'G', 'filepath': filepath, 'project': project,

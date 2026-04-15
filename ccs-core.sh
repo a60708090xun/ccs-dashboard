@@ -43,7 +43,13 @@ _ccs_get_provider() {
 _ccs_is_archived() {
   local f="$1"
   if [ "$(_ccs_get_provider "$f")" = "gemini" ]; then
-    return 1 # Gemini doesn't use standard archive markers yet
+    # Gemini: check for injected "archived": true flag
+    local is_archived
+    is_archived=$(jq -r '.archived // false' "$f" 2>/dev/null)
+    if [ "$is_archived" = "true" ]; then
+      return 0
+    fi
+    return 1
   fi
   # Check 1: /exit pattern (handles missing last-prompt after resume→/exit)
   # The /exit sequence writes 3 user events at the very end: caveat, command, stdout.
@@ -79,9 +85,18 @@ _ccs_topic_from_jsonl() {
   local provider=$(_ccs_get_provider "$f")
   
   if grep -q "change_title" "$f" 2>/dev/null; then
-    # Both formats can be filtered with standard jq if we unpack Gemini arrays
     if [ "$provider" = "gemini" ]; then
-      topic=$(jq -r '.[] | select(.type == "tool_use" and .name == "mcp__happy__change_title") | .input.title' "$f" 2>/dev/null | tail -1)
+      # Gemini can be top-level array or object with .messages
+      # New object format (v0.35+): .messages[] | .toolCalls[]
+      topic=$(jq -r '
+        (if type == "array" then . else .messages // [] end)[]? |
+        select(.type == "gemini" or .type == "assistant" or .type == "model" or .role == "model") |
+        (
+          (.toolCalls[]? | select(.name == "mcp__happy__change_title") | .args.title) //
+          (.content[]? | select(.type == "toolCall" and .name == "mcp__happy__change_title") | .args.title) //
+          (select(.type == "tool_use" and .name == "mcp__happy__change_title") | .input.title)
+        )
+      ' "$f" 2>/dev/null | tail -1)
     else
       topic=$(grep "change_title" "$f" 2>/dev/null | jq -r '
         .message.content[]? |
@@ -94,11 +109,11 @@ _ccs_topic_from_jsonl() {
     # Strip XML tags from content to avoid <command-message> etc. leaking into topic
     if [ "$provider" = "gemini" ]; then
       topic=$(jq -r '
-        .[] | select(.type == "user" and (.message.content | type == "string")
-          and ((.isMeta // false) == false)
-          and (.message.content | test("^<local-command|^<command-name|^<system-|^\\s*/exit|^\\s*/quit") | not)
-          and (.message.content | test("^\\s*$") | not))
-        | .message.content | gsub("<[^>]+>"; "") | gsub("^\\s+|\\s+$"; "")
+        (if type == "array" then . else .messages // [] end)[]? |
+        select((.type == "user" or .role == "user") and ((.isMeta // false) == false)) |
+        (.content | if type == "array" then .[] | .text else . end) |
+        select(type == "string" and (test("^/") | not) and (test("^\\s*$") | not)) |
+        gsub("<[^>]+>"; "") | gsub("^\\s+|\\s+$"; "")
       ' "$f" 2>/dev/null | head -1 | tr '\n' ' ' | cut -c1-120)
     else
       topic=$(jq -r '
@@ -618,16 +633,18 @@ _ccs_detect_crash() {
   local idle_window_start=$((now - idle_window * 60))
 
   # Get running session info (once)
-  # Method 1: session IDs from --resume args
+  # Method 1: session IDs from --resume or --session args
   local running_sids=""
-  running_sids=$(ps -eo args 2>/dev/null | grep -oP '(?<=--resume )[0-9a-f-]{36}' | sort -u)
-  # Method 2: normalized cwds of all claude processes
+  running_sids=$(ps -eo args 2>/dev/null | grep -oP '(?<=--resume )[0-9a-f-]{36}|(?<=--session )[0-9a-f-]{36}' | sort -u)
+  # Method 2: normalized cwds of all claude or gemini processes
   # Claude Code encodes paths by replacing /._  with -, so we normalize both sides
   # to alphanumeric segments joined by - for comparison.
   local running_cwds_normalized=""
   running_cwds_normalized=$({
     for p in $(pgrep -u "$(id -u)" -f "claude.*--output-format" 2>/dev/null) \
-             $(pgrep -u "$(id -u)" -x "claude" 2>/dev/null); do
+             $(pgrep -u "$(id -u)" -x "claude" 2>/dev/null) \
+             $(pgrep -u "$(id -u)" -x "gemini" 2>/dev/null) \
+             $(pgrep -u "$(id -u)" -f "bin/gemini|index.mjs gemini|happy-coder" 2>/dev/null); do
       readlink "/proc/$p/cwd" 2>/dev/null
     done
   } | sort -u | sed 's/[\/._]/-/g; s/--*/-/g; s/^-//')
@@ -640,7 +657,9 @@ _ccs_detect_crash() {
 
     local mtime sid
     if [[ "$f" == *.json ]]; then
-       local last_ts=$(jq -r '.[-1].timestamp // empty' "$f" 2>/dev/null)
+       # Claude format: [..., {"timestamp": "..."}]
+       # Gemini format: {"lastUpdated": "...", "messages": [...]}
+       local last_ts=$(jq -r 'if type == "array" then .[-1].timestamp else .lastUpdated end // empty' "$f" 2>/dev/null)
        if [ -n "$last_ts" ]; then
          mtime=$(date -d "$last_ts" +%s 2>/dev/null || stat -c "%Y" "$f" 2>/dev/null)
        else
@@ -651,6 +670,7 @@ _ccs_detect_crash() {
     fi
     [ -n "$mtime" ] || continue
     sid=$(basename "$f" | sed -e 's/\.jsonl$//' -e 's/\.json$//')
+    echo "DEBUG: checking $sid, f=$f, mtime=$mtime, age=$((now-mtime))" >&2
 
     # Path 1: Reboot detection
     # Any pre-boot session without a running process was killed by reboot.
@@ -660,7 +680,7 @@ _ccs_detect_crash() {
     #   within window = was actively writing near boot time
     #   outside window = was idle but process killed by reboot
     if [ "$boot_epoch" -gt 0 ] && [ "$mtime" -lt "$reboot_upper" ]; then
-      echo "$running_sids" | grep -q "$sid" && continue
+      echo "$running_sids" | grep -qw "$sid" && continue
       if [ "$mtime" -ge "$reboot_window_start" ]; then
         _crash_out["$sid"]="high:reboot"
       else
@@ -678,14 +698,14 @@ _ccs_detect_crash() {
     # Method 1: exact session ID match (--resume sessions) — precise
     # Method 2: cwd match (Happy-launched sessions without --resume) — approximate
     local is_running_exact=false is_running_cwd=false
-    if echo "$running_sids" | grep -q "$sid"; then
+    if echo "$running_sids" | grep -qw "$sid"; then
       is_running_exact=true
     elif [ -n "${_cd_projects[$i]}" ]; then
       # Normalize project dir name to match normalized cwds
       # Both sides: replace /._  with -, collapse multiple -, strip leading -
       local _proj_normalized
       _proj_normalized=$(echo "${_cd_projects[$i]}" | sed 's/[\/._]/-/g; s/--*/-/g; s/^-//')
-      [ -n "$_proj_normalized" ] && echo "$running_cwds_normalized" | grep -qF "$_proj_normalized" &&
+      [ -n "$_proj_normalized" ] && echo "$running_cwds_normalized" | grep -qE ".*$_proj_normalized$" &&
       is_running_cwd=true
     fi
 
@@ -706,16 +726,36 @@ _ccs_detect_crash() {
     # Process running (exact or cwd) — not crashed
     ("$is_running_exact" || "$is_running_cwd") && continue
 
-    # Check for interrupt signals in last assistant message (raw JSONL)
-    # Last assistant message: content array with no text entries = mid-execution crash
-    local has_text
-    has_text=$(tac "$f" 2>/dev/null | grep -m1 '"type":"assistant"' | jq -r '
-      if .message.content then
-        ([.message.content[] | select(.type == "text" and (.text | length > 0))] | length)
-      else
-        0
-      end
-    ' 2>/dev/null)
+    # Check for interrupt signals in last assistant message
+    # Mid-execution crash: assistant message started but contains no text content
+    local has_text=0
+    if [[ "$f" == *.json ]]; then
+      # Gemini or Claude-exported-JSON: parse whole file
+      has_text=$(jq -r '
+        (if type == "array" then . else .messages // [] end) |
+        [.[] | select(.type == "assistant" or .type == "gemini" or .type == "model")] | last |
+        (.message.content // .content) as $c |
+        if $c | type == "array" then
+          ([$c[] | select(.type == "text" and (.text | length > 0))] | length)
+        elif $c | type == "string" then
+          ($c | length)
+        else 0 end
+      ' "$f" 2>/dev/null)
+    else
+      # Claude JSONL: use tac for speed, but only call jq if assistant message found
+      local last_asst
+      last_asst=$(tac "$f" 2>/dev/null | grep -m1 -E '"type":"(assistant|gemini|model)"')
+      if [ -n "$last_asst" ]; then
+        has_text=$(echo "$last_asst" | jq -r '
+          (.message.content // .content) as $c |
+          if $c | type == "array" then
+            ([$c[] | select(.type == "text" and (.text | length > 0))] | length)
+          elif $c | type == "string" then
+            ($c | length)
+          else 0 end
+        ' 2>/dev/null)
+      fi
+    fi
 
     if [ "${has_text:-0}" = "0" ]; then
       _crash_out["$sid"]="high:non-reboot"

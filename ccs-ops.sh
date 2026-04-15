@@ -62,7 +62,7 @@ _ccs_crash_md() {
     echo "- **最後訊息：** $last_user"
     [ -n "$todo_summary" ] && echo "- **Todos：** $todo_summary"
     [ -n "$git_branch" ] && echo "- **Git：** $git_branch ($git_dirty uncommitted files)"
-    local provider=$(_ccs_get_provider "$jsonl")
+    local provider=$(_ccs_get_provider "$f")
     local resume_cmd="claude --resume $sid"
     if [ "$provider" = "gemini" ]; then
       resume_cmd="gemini --session $sid"
@@ -140,7 +140,7 @@ _ccs_crash_json() {
     local mtime=$(stat -c "%Y" "$f" 2>/dev/null)
     local last_iso=$(date -d "@$mtime" --iso-8601=seconds 2>/dev/null)
 
-    local provider=$(_ccs_get_provider "$jsonl")
+    local provider=$(_ccs_get_provider "$f")
     local resume_cmd="claude --resume $sid"
     if [ "$provider" = "gemini" ]; then
       resume_cmd="gemini --session $sid"
@@ -190,6 +190,13 @@ _ccs_archive_session() {
   [ -f "$f" ] || return 1
   # Gemini .json files are JSON arrays — appending JSONL marker would corrupt them
   if [ "$(_ccs_get_provider "$f")" = "gemini" ]; then
+    # Use jq to inject an "archived": true flag into the top-level object
+    local tmpf
+    tmpf=$(mktemp)
+    if jq '. + {"archived": true}' "$f" > "$tmpf" 2>/dev/null; then
+      cat "$tmpf" > "$f"
+    fi
+    rm -f "$tmpf"
     return 0
   fi
   printf '{"type":"last-prompt"}\n' >> "$f"
