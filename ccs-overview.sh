@@ -12,9 +12,9 @@ _ccs_overview_session_data() {
   local jq_deadline_filter
 
   if [ "$provider" = "gemini" ]; then
-    jq_user_filter='.[] | select(.type == "user" and (.message.content | type == "string"))'
-    jq_todos_filter='.[] | select(.type == "assistant") | .message.content[]? | select(.type == "tool_use" and .name == "TodoWrite") | [.input.todos[]? | {content, status}]'
-    jq_deadline_filter='.[] | select(.type == "user" and (.message.content | type == "string") and ((.isMeta // false) == false)) | .message.content'
+    jq_user_filter='.messages[] | select(.type == "user" or .role == "user")'
+    jq_todos_filter='.messages[] | select(.type == "gemini" or .type == "assistant" or .role == "model" or .type == "model") | (.toolCalls // (.content | if type == "array" then [.[]? | select(.toolCall or .type == "toolCall") | (.toolCall // .)] else [] end))[]? | select(.name == "write_todos" or .name == "TodoWrite") | .args.todos // .input.todos'
+    jq_deadline_filter='.messages[] | select((.type == "user" or .role == "user") and ((.isMeta // false) == false)) | .content | if type == "array" then [.[]? | select(.text) | .text] | join(" ") else . end'
   else
     jq_user_filter='select(.type == "user" and (.message.content | type == "string"))'
     jq_todos_filter='select(.type == "assistant") | .message.content[]? | select(.type == "tool_use" and .name == "TodoWrite") | [.input.todos[]? | {content, status}]'
@@ -33,10 +33,11 @@ _ccs_overview_session_data() {
       [to_entries[] | {
         raw_idx: (.key + 1),
         is_meta: (.value.isMeta // false),
-        content: .value.message.content
+        content: .value.content
       }]
       | [.[] | select(
           .is_meta == false
+          and (.content | type == "string")
           and (.content | test("^\\s*/exit|^\\s*/quit|^<local-command|^<command-name|^<system-") | not)
           and (.content | test("^\\s*$") | not)
         )]
@@ -59,9 +60,9 @@ _ccs_overview_session_data() {
   local deadline_ctx=""
   deadline_ctx=$(jq -r "$jq_deadline_filter" "$jsonl" 2>/dev/null \
     | tail -5 \
-    | grep -iE '"'"'(deadline|before|週|月底|by |due|urgent|ASAP|趕|今天|明天|後天)'"'"' \
+    | grep -iE '(deadline|before|週|月底|by |due|urgent|ASAP|趕|今天|明天|後天)' \
     | cut -c1-150 \
-    | paste -sd '"'"'|'"'"' -)
+    | paste -sd '|' -)
 
   # Output JSON
   jq -nc \
@@ -69,11 +70,11 @@ _ccs_overview_session_data() {
     --arg asst_text "$asst_text" \
     --argjson todos "$todos_json" \
     --arg deadline "$deadline_ctx" \
-    '"'"'{
+    '{
       last_exchange: {user: $user_text, assistant: $asst_text},
       todos: $todos,
       deadline_context: (if $deadline == "" then null else $deadline end)
-    }'"'"'
+    }'
 }
 
 # ── Helper: render overview as Markdown ──
@@ -845,15 +846,19 @@ _ccs_overview_terminal() {
     color=$(echo "$row" | cut -f5)
 
     # Override color for crash-interrupted sessions (high confidence)
-    local full_sid
+    local full_sid sid
     full_sid=$(basename "$f" | sed -e "s/\.jsonl$//" -e "s/\.json$//")
+    if [[ "$f" == *.json ]]; then
+      sid=$(echo "$full_sid" | rev | cut -d- -f1 | rev | cut -c1-8)
+    else
+      sid="${full_sid:0:8}"
+    fi
+
     local crash_suffix=""
     if [ -n "${4:-}" ] && [ -n "${_crash_term[$full_sid]+x}" ] && [[ "${_crash_term[$full_sid]}" == high:* ]]; then
       color="\033[31m"
       crash_suffix=" 💀"
     fi
-
-    local sid="${full_sid:0:8}"
     local topic
     topic=$(_ccs_topic_from_jsonl "$f")
 
