@@ -83,7 +83,7 @@ HELP
     local real_sid
     real_sid=$(jq -r '.sessionId // empty' "$latest" 2>/dev/null)
     if [ -n "$real_sid" ]; then
-      sid=$(echo "$real_sid" | awk -F'-' '{print $NF}' | cut -c1-8)
+      sid=$(echo "$real_sid" | awk -F'-' '{print $1}' | cut -c1-8)
     else
       sid=$(echo "$full_sid" | cut -c1-8)
     fi
