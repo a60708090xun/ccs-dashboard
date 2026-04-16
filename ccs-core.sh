@@ -17,6 +17,7 @@ _CCS_DASHBOARD_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 #   _ccs_todos_md           — TodoWrite items from JSONL
 #   _ccs_find_project_dir    — find encoded project dir from filesystem path
 #   _ccs_resolve_project_path — resolve JSONL dir name → filesystem path
+#   _ccs_gemini_chats_dir   — resolve current project's Gemini chats directory
 #   _ccs_get_boot_epoch     — system boot time as epoch
 #   _ccs_detect_crash       — detect crash-interrupted sessions
 #
@@ -30,8 +31,26 @@ _CCS_DASHBOARD_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 #   1. last-prompt exists AND no assistant event follows it, OR
 #   2. Last user events are /exit commands (Claude Code bug: resume→/exit may not write last-prompt)
 # Returns 0 if archived, 1 if not.
+_ccs_get_provider() {
+  local f="$1"
+  if [[ "$f" == *.json ]]; then
+    echo "gemini"
+  else
+    echo "claude"
+  fi
+}
+
 _ccs_is_archived() {
   local f="$1"
+  if [ "$(_ccs_get_provider "$f")" = "gemini" ]; then
+    # Gemini: check for injected "archived": true flag
+    local is_archived
+    is_archived=$(jq -r '.archived // false' "$f" 2>/dev/null)
+    if [ "$is_archived" = "true" ]; then
+      return 0
+    fi
+    return 1
+  fi
   # Check 1: /exit pattern (handles missing last-prompt after resume→/exit)
   # The /exit sequence writes 3 user events at the very end: caveat, command, stdout.
   # Key signal: last line is a user event containing "Goodbye!" or "See ya!" (exit stdout).
@@ -63,22 +82,46 @@ _ccs_session_row() {
 _ccs_topic_from_jsonl() {
   local f="$1"
   local topic=""
-  if grep -q "change_title" "$f" 2>/dev/null; then
-    topic=$(grep "change_title" "$f" 2>/dev/null | jq -r '
-      .message.content[]? |
-      select(.type == "tool_use" and .name == "mcp__happy__change_title") |
-      .input.title' 2>/dev/null | tail -1)
+  local provider=$(_ccs_get_provider "$f")
+  
+  if [ "$provider" = "gemini" ]; then
+    # Check toolCalls for title change (support both .messages[] and top-level array)
+    topic=$(jq -r '
+      (if type == "array" then . else .messages // [] end)[]? |
+      select(.toolCalls) | .toolCalls[] |
+      select(.name == "mcp__happy__change_title") |
+      .args.title' "$f" 2>/dev/null | tail -1)
+  else
+    if grep -q "change_title" "$f" 2>/dev/null; then
+      topic=$(grep "change_title" "$f" 2>/dev/null | jq -r '
+        .message.content[]? |
+        select(.type == "tool_use" and .name == "mcp__happy__change_title") |
+        .input.title' 2>/dev/null | tail -1)
+    fi
   fi
+
   if [ -z "$topic" ]; then
     # Find first real user message (skip meta, local-command, system tags, slash commands)
     # Strip XML tags from content to avoid <command-message> etc. leaking into topic
-    topic=$(jq -r '
-      select(.type == "user" and (.message.content | type == "string")
-        and ((.isMeta // false) == false)
-        and (.message.content | test("^<local-command|^<command-name|^<system-|^\\s*/exit|^\\s*/quit") | not)
-        and (.message.content | test("^\\s*$") | not))
-      | .message.content | gsub("<[^>]+>"; "") | gsub("^\\s+|\\s+$"; "")
-    ' "$f" 2>/dev/null | head -1 | tr '\n' ' ' | cut -c1-120)
+    if [ "$provider" = "gemini" ]; then
+      topic=$(jq -r '
+        (if type == "array" then . else .messages // [] end)[]?
+        | select((.type == "user" or .role == "user") and ((.isMeta // false) == false))
+        | (.content // .message.content)
+        | if type == "array" then [.[]? | select(.text) | .text] | join(" ") else . end
+        | select(test("^<local-command|^<command-name|^<system-|^\\s*/exit|^\\s*/quit") | not)
+        | select(test("^\\s*$") | not)
+        | gsub("<[^>]+>"; "") | gsub("^\\s+|\\s+$"; "")
+      ' "$f" 2>/dev/null | head -1 | tr '\n' ' ' | cut -c1-120)
+    else
+      topic=$(jq -r '
+        select(.type == "user" and (.message.content | type == "string")
+          and ((.isMeta // false) == false)
+          and (.message.content | test("^<local-command|^<command-name|^<system-|^\\s*/exit|^\\s*/quit") | not)
+          and (.message.content | test("^\\s*$") | not))
+        | .message.content | gsub("<[^>]+>"; "") | gsub("^\\s+|\\s+$"; "")
+      ' "$f" 2>/dev/null | head -1 | tr '\n' ' ' | cut -c1-120)
+    fi
   fi
   [ -z "$topic" ] && topic="-"
   echo "$topic"
@@ -87,31 +130,86 @@ _ccs_topic_from_jsonl() {
 # ── Helper: resolve JSONL file from args ──
 _ccs_resolve_jsonl() {
   local projects_dir="$HOME/.claude/projects"
-  local prefix="$1" search_all="$2"
+  local prefix="${1:-}" search_all="${2:-}"
   if [ -n "$prefix" ]; then
-    find "$projects_dir" -maxdepth 2 -name "${prefix}*.jsonl" ! -path "*/subagents/*" 2>/dev/null | head -1
+    # Search Claude projects
+    local result
+    result=$(find "$projects_dir" -maxdepth 2 \( -name "${prefix}*.jsonl" -o -name "${prefix}*.json" \) ! -path "*/subagents/*" 2>/dev/null | head -1)
+    if [ -n "$result" ]; then
+      echo "$result"
+      return 0
+    fi
+    # Fallback: search Gemini chats dirs (more flexibly for UUIDs)
+    local gemini_dir="${CCS_GEMINI_DIR:-$HOME/.gemini}"
+    find "$gemini_dir/tmp" -maxdepth 3 \( -name "*${prefix}*.json" \) 2>/dev/null | grep "/chats/" | head -1
   else
-    local search_dir
+    local search_dirs=()
     if [ "$search_all" = "true" ]; then
-      search_dir="$projects_dir"
+      search_dirs+=("$projects_dir")
+      # Add all Gemini project chats dirs
+      local gemini_dir="${CCS_GEMINI_DIR:-$HOME/.gemini}"
+      if [ -d "$gemini_dir/tmp" ]; then
+        local d
+        for d in "$gemini_dir/tmp"/*/chats; do
+          [ -d "$d" ] && search_dirs+=("$d")
+        done
+      fi
     else
       local encoded_dir
-      encoded_dir=$(_ccs_find_project_dir "$(pwd)") || return 1
-      search_dir="$projects_dir/$encoded_dir"
+      encoded_dir=$(_ccs_find_project_dir "$(pwd)") || true
+      [ -n "$encoded_dir" ] && search_dirs+=("$projects_dir/$encoded_dir")
+      # Also search current project's Gemini chats dir
+      local gemini_chats
+      gemini_chats=$(_ccs_gemini_chats_dir "$(pwd)") && search_dirs+=("$gemini_chats")
     fi
-    find "$search_dir" -maxdepth 2 -name "*.jsonl" ! -path "*/subagents/*" -printf '%T@\t%p\n' 2>/dev/null \
+    [ ${#search_dirs[@]} -eq 0 ] && return 1
+    # Find most recently modified session across all search dirs
+    local find_args=()
+    for d in "${search_dirs[@]}"; do
+      [ ${#find_args[@]} -gt 0 ] && find_args+=("-o")
+      find_args+=("-path" "$d/*")
+    done
+    find "${search_dirs[@]}" -maxdepth 2 \( -name "*.jsonl" -o -name "*.json" \) ! -path "*/subagents/*" -printf '%T@\t%p\n' 2>/dev/null \
       | sort -rn | head -1 | cut -f2
   fi
 }
 
 # ── Helper: extract prompt-response pairs index from JSONL ──
-# Output: tab-separated lines: prompt_line_num \t prompt_text_preview
+# Output: tab-separated lines: real_idx \t has_resp \t is_meta \t preview
 _ccs_build_pairs_index() {
   local jsonl="$1"
-  # Extract all user prompts (string content = real user input, not tool_result)
-  # and the next assistant text response after each
-  jq -r 'select(.type == "user" and (.message.content | type == "string")) | .message.content | gsub("\n"; " ") | .[:120]' "$jsonl" 2>/dev/null \
-    | cat -n
+  local provider=$(_ccs_get_provider "$jsonl")
+  
+  local jq_user_filter
+  if [ "$provider" = "gemini" ]; then
+    jq_user_filter='select(.value.type == "user" or .value.role == "user")
+      | select(.value.isMeta != true)
+      | (.value.content // .value.message.content | if type == "array" then [.[]? | select(.text) | .text] | join(" ") else . end) as $txt
+      | select($txt | test("^<local-command|^<command-name|^<system-|^\\s*/exit|^\\s*/quit") | not)
+      | select($txt | test("^\\s*$") | not)'
+  else
+    jq_user_filter='select(.value.type == "user" and (.value.message.content | type == "string"))
+      | select(.value.isMeta != true)
+      | select(.value.message.content | test("^<local-command|^<command-name|^<system-|^\\s*/exit|^\\s*/quit") | not)
+      | select(.value.message.content | test("^\\s*$") | not)'
+  fi
+
+  jq -r "
+    (if type == \"array\" then . else .messages // [] end)
+    | to_entries as \$all
+    | [ \$all[] | select(.value.type == \"user\" or .value.role == \"user\") ] as \$all_users
+    | [ \$all[] | $jq_user_filter ] as \$filtered_users
+    | range(0; (\$filtered_users | length)) as \$i
+    | \$filtered_users[\$i] as \$u
+    | (\$u.key) as \$start_pos
+    | (\$all_users | map(.key == \$u.key) | index(true) + 1) as \$ri
+    | (if \$i + 1 < (\$filtered_users | length) then \$filtered_users[\$i+1].key else (\$all | length) end) as \$end_pos
+    | (\$all[\$start_pos + 1 : \$end_pos] | map(select(.value.type == \"assistant\" or .value.type == \"gemini\" or .value.type == \"model\" or .value.role == \"assistant\" or .value.role == \"model\")) | length > 0 | tostring) as \$has_resp
+    | (\$u.value.content // \$u.value.message.content | if type == \"array\" then [.[]? | select(.text) | .text] | join(\" \") else . end) as \$text
+    | (\$u.value.isMeta // false | tostring) as \$is_meta
+    | (\$text | .[:120] | gsub(\"\\n\"; \" \")) as \$preview
+    | \"\(\$ri)\t\(\$has_resp)\t\(\$is_meta)\t\(\$preview)\"
+  " "$jsonl" 2>/dev/null
 }
 
 # ── Helper: extract the Nth prompt-response pair ──
@@ -123,32 +221,70 @@ _ccs_get_pair() {
 
   # Extract user prompts, assistant text, AND tool_use summaries
   # so interrupted turns still show what the agent was doing
-  jq -c '
-    if .type == "user" and (.message.content | type == "string") then
-      {role: "user", text: .message.content}
-    elif .type == "assistant" then
-      (.message.content | if type == "array" then
-        [.[] | select(.type == "text") | .text] | join("\n")
-      else . end) as $t |
-      (.message.content | if type == "array" then
-        [.[] | select(.type == "tool_use") |
-          if .name == "Read" then "📖 Read " + .input.file_path
-          elif .name == "Edit" then "✏️ Edit " + .input.file_path
-          elif .name == "Write" then "📝 Write " + .input.file_path
-          elif .name == "Bash" then "$ " + (.input.command | split("\n") | first | .[:80])
-          elif .name == "Grep" then "🔍 Grep " + .input.pattern
-          elif .name == "Glob" then "🔍 Glob " + .input.pattern
-          elif .name == "Agent" then "🤖 Agent: " + (.input.description // "")
-          else "🔧 " + .name end
-        ] | join("\n")
-      else "" end) as $tools |
-      (.message.content | if type == "array" then
-        [.[] | select(.type == "thinking") | "💭 (thinking...)"] | join("\n")
-      else "" end) as $thinking |
-      {role: "assistant", text: $t, tools: $tools, thinking: $thinking}
-    else empty end
-  ' "$jsonl" 2>/dev/null \
-    | jq -sc --argjson idx "$pair_idx" '
+  if [ "$(_ccs_get_provider "$jsonl")" = "gemini" ]; then
+    jq -c '
+      (if type == "array" then . else .messages // [] end)[]? |
+      if (.type == "user" or .role == "user") then
+        {role: "user", text: ((.content // .message.content) | if type == "array" then [.[]? | select(.text) | .text] | join("\n") else (. // "") end)}
+      elif (.type == "assistant" or .type == "gemini" or .type == "model" or .role == "assistant" or .role == "model") then
+        (.content // .message.content | if type == "array" then
+          [.[]? | select(.text) | .text] | join("\n")
+        elif type == "string" then .
+        else "" end) as $t |
+        (((.content // .message.content) | if type == "array" then
+          [.[]? | select(.toolCall or .type == "toolCall") | (.toolCall // .) |
+            if .name == "read_file" then "📖 Read " + (.args.file_path // "")
+            elif .name == "replace" then "✏️ Edit " + (.args.file_path // "")
+            elif .name == "write_file" then "📝 Write " + (.args.file_path // "")
+            elif .name == "run_shell_command" then "$ " + (.args.command | split("\n") | first | .[:80])
+            elif .name == "grep_search" then "🔍 Grep " + (.args.pattern // "")
+            elif .name == "glob" then "🔍 Glob " + (.args.pattern // "")
+            elif .name == "activate_skill" then "🤖 Skill: " + .args.name
+            else "🔧 " + .name end
+          ]
+        else [] end) +
+        (.toolCalls | if type == "array" then
+          [.[]? |
+            if .name == "read_file" then "📖 Read " + (.args.file_path // "")
+            elif .name == "replace" then "✏️ Edit " + (.args.file_path // "")
+            elif .name == "write_file" then "📝 Write " + (.args.file_path // "")
+            elif .name == "run_shell_command" then "$ " + (.args.command | split("\n") | first | .[:80])
+            elif .name == "grep_search" then "🔍 Grep " + (.args.pattern // "")
+            elif .name == "glob" then "🔍 Glob " + (.args.pattern // "")
+            elif .name == "activate_skill" then "🤖 Skill: " + .args.name
+            else "🔧 " + .name end
+          ]
+        else [] end) | join("\n")) as $tools |
+        {role: "assistant", text: $t, tools: $tools}
+      else empty end
+    ' "$jsonl" 2>/dev/null
+  else
+    jq -c '
+      if .type == "user" and (.message.content | type == "string") then
+        {role: "user", text: .message.content}
+      elif .type == "assistant" then
+        (.message.content | if type == "array" then
+          [.[] | select(.type == "text") | .text] | join("\n")
+        else . end) as $t |
+        (.message.content | if type == "array" then
+          [.[] | select(.type == "tool_use") |
+            if .name == "Read" then "📖 Read " + .input.file_path
+            elif .name == "Edit" then "✏️ Edit " + .input.file_path
+            elif .name == "Write" then "📝 Write " + .input.file_path
+            elif .name == "Bash" then "$ " + (.input.command | split("\n") | first | .[:80])
+            elif .name == "Grep" then "🔍 Grep " + .input.pattern
+            elif .name == "Glob" then "🔍 Glob " + .input.pattern
+            elif .name == "Agent" then "🤖 Agent: " + (.input.description // "")
+            else "🔧 " + .name end
+          ] | join("\n")
+        else "" end) as $tools |
+        (.message.content | if type == "array" then
+          [.[] | select(.type == "thinking") | "💭 (thinking...)"] | join("\n")
+        else "" end) as $thinking |
+        {role: "assistant", text: $t, tools: $tools, thinking: $thinking}
+      else empty end
+    ' "$jsonl" 2>/dev/null
+  fi | jq -sc --argjson idx "$pair_idx" '
       . as $arr |
       [to_entries[] | select(.value.role == "user")] as $users |
       if ($idx < 1 or $idx > ($users | length)) then empty
@@ -162,15 +298,18 @@ _ccs_get_pair() {
           tools: ([.[].tools] | map(select(length > 0)) | join("\n")),
           thinking: ([.[].thinking] | map(select(length > 0)) | join("\n"))
         }) as $resp |
-        if ($resp.texts | length) > 0 then
-          {role: "assistant", text: $resp.texts}
+        (if ($resp.texts | length) > 0 and ($resp.tools | length) > 0 then
+          $resp.texts + "\n\n" + $resp.tools
+        elif ($resp.texts | length) > 0 then
+          $resp.texts
         elif ($resp.tools | length) > 0 then
-          {role: "assistant", text: ("⚡ interrupted — agent was executing:\n" + $resp.tools)}
+          "⚡ interrupted — agent was executing:\n" + $resp.tools
         elif ($resp.thinking | length) > 0 then
-          {role: "assistant", text: "⚡ interrupted — agent was thinking"}
+          "⚡ interrupted — agent was thinking"
         else
-          {role: "assistant", text: ""}
-        end
+          ""
+        end) as $combined_text |
+        {role: "assistant", text: $combined_text}
       end
     '
 }
@@ -179,10 +318,21 @@ _ccs_get_pair() {
 # Usage: _ccs_conversation_md <jsonl> <pair_count> <max_user_lines> <max_asst_lines>
 _ccs_conversation_md() {
   local jsonl="$1" pair_count="${2:-5}" max_ulines="${3:-5}" max_alines="${4:-8}"
+  local provider=$(_ccs_get_provider "$jsonl")
+  local asst_label="Claude"
+  [ "$provider" = "gemini" ] && asst_label="Gemini"
 
   # Build filtered pair indices (reuse ccs-resume-prompt logic)
   local -a real_to_raw=()
   local raw_idx=0
+  
+  local jq_filter
+  if [ "$provider" = "gemini" ]; then
+    jq_filter='(if type == "array" then . else .messages // [] end)[]? | select(.type == "user" or .role == "user") | [((.isMeta // false) | tostring), ((.content // .message.content) | if type == "array" then [.[]? | select(.text) | .text] | join(" ") else . end | .[:80] | gsub("\n"; " "))] | @tsv'
+  else
+    jq_filter='select(.type == "user" and (.message.content | type == "string")) | [(.isMeta // false | tostring), (.message.content | .[:80] | gsub("\n"; " "))] | @tsv'
+  fi
+
   while IFS=$'\t' read -r is_meta content; do
     raw_idx=$((raw_idx + 1))
     [ "$is_meta" = "true" ] && continue
@@ -193,11 +343,7 @@ _ccs_conversation_md() {
     [[ "$content" =~ ^[[:space:]]*/quit ]] && continue
     [ -z "${content// /}" ] && continue
     real_to_raw+=("$raw_idx")
-  done < <(jq -r '
-    select(.type == "user" and (.message.content | type == "string")) |
-    [(.isMeta // false | tostring), (.message.content | .[:80] | gsub("\n"; " "))] |
-    @tsv
-  ' "$jsonl" 2>/dev/null)
+  done < <(jq -r "$jq_filter" "$jsonl" 2>/dev/null)
 
   local real_count=${#real_to_raw[@]}
   local start_from=$((real_count - pair_count + 1))
@@ -223,36 +369,63 @@ _ccs_conversation_md() {
 ..."
 
     printf '**[%d/%d] User:**\n%s\n\n' "$ri" "$real_count" "$user_preview"
-    printf '**[%d/%d] Claude:**\n%s\n\n' "$ri" "$real_count" "$asst_preview"
+    printf '**[%d/%d] %s:**\n%s\n\n' "$ri" "$real_count" "$asst_label" "$asst_preview"
   done
 }
 
 # ── Helper: extract recent file operations from JSONL ──
 _ccs_recent_files_md() {
   local jsonl="$1"
-  jq -r '
-    select(.type == "assistant") |
-    .message.content[]? |
-    select(.type == "tool_use") |
-    if .name == "Read" then "R " + .input.file_path
-    elif .name == "Edit" then "E " + .input.file_path
-    elif .name == "Write" then "W " + .input.file_path
-    elif .name == "Bash" then "$ " + (.input.command | split("\n") | first | .[:80])
-    else empty end
-  ' "$jsonl" 2>/dev/null | tail -15 | sort -u
+  local provider=$(_ccs_get_provider "$jsonl")
+  if [ "$provider" = "gemini" ]; then
+    jq -r '
+      (if type == "array" then . else .messages // [] end)[]? |
+      select(.type == "assistant" or .type == "gemini" or .type == "model" or .role == "assistant" or .role == "model") |
+      (.toolCalls // (.content // .message.content | if type == "array" then [.[]? | select(.toolCall or .type == "toolCall") | (.toolCall // .)] else [] end))[]? |
+      if .name == "read_file" then "R " + .args.file_path
+      elif .name == "replace" then "E " + .args.file_path
+      elif .name == "write_file" then "W " + .args.file_path
+      elif .name == "run_shell_command" then "$ " + (.args.command | split("\n") | first | .[:80])
+      elif .name == "grep_search" then "🔍 Grep " + .args.pattern
+      elif .name == "glob" then "🔍 Glob " + .args.pattern
+      else empty end
+    ' "$jsonl" 2>/dev/null | tail -15 | sort -u
+  else
+    jq -r '
+      select(.type == "assistant") |
+      .message.content[]? |
+      select(.type == "tool_use") |
+      if .name == "Read" then "R " + .input.file_path
+      elif .name == "Edit" then "E " + .input.file_path
+      elif .name == "Write" then "W " + .input.file_path
+      elif .name == "Bash" then "$ " + (.input.command | split("\n") | first | .[:80])
+      else empty end
+    ' "$jsonl" 2>/dev/null | tail -15 | sort -u
+  fi
 }
 
 # ── Helper: extract TodoWrite items from JSONL ──
 _ccs_todos_md() {
   local jsonl="$1"
-  # Find the last TodoWrite call and extract its items
-  jq -r '
-    select(.type == "assistant") |
-    .message.content[]? |
-    select(.type == "tool_use" and .name == "TodoWrite") |
-    .input.todos[]? |
-    (if .status == "completed" then "- [x] " elif .status == "in_progress" then "- [~] " else "- [ ] " end) + .content
-  ' "$jsonl" 2>/dev/null | tail -20
+  local provider=$(_ccs_get_provider "$jsonl")
+  if [ "$provider" = "gemini" ]; then
+    jq -r '
+      (if type == "array" then . else .messages // [] end)[]? |
+      select(.type == "assistant" or .type == "gemini" or .type == "model" or .role == "assistant" or .role == "model") |
+      (.toolCalls // (.content // .message.content | if type == "array" then [.[]? | select(.toolCall or .type == "toolCall") | (.toolCall // .)] else [] end))[]? |
+      select(.name == "write_todos") |
+      .args.todos[]? |
+      (if .status == "completed" then "- [x] " elif .status == "in_progress" then "- [~] " else "- [ ] " end) + .content
+    ' "$jsonl" 2>/dev/null | tail -20
+  else
+    jq -r '
+      select(.type == "assistant") |
+      .message.content[]? |
+      select(.type == "tool_use" and .name == "TodoWrite") |
+      .input.todos[]? |
+      (if .status == "completed" then "- [x] " elif .status == "in_progress" then "- [~] " else "- [ ] " end) + .content
+    ' "$jsonl" 2>/dev/null | tail -20
+  fi
 }
 
 # ── ccs-sessions [hours] — all sessions within N hours (default 24) ──
@@ -446,7 +619,7 @@ HELP
     last_active="-"
     if [ -n "$sid" ]; then
       local jsonl
-      jsonl=$(find "$HOME/.claude/projects" -maxdepth 2 -name "${sid}.jsonl" 2>/dev/null | head -1)
+      jsonl=$(find "$HOME/.claude/projects" -maxdepth 2 \( -name "${sid}.jsonl" -o -name "${sid}.json" \) 2>/dev/null | head -1)
       if [ -n "$jsonl" ]; then
         last_active=$(date -d "$(stat -c '%y' "$jsonl")" '+%Y/%m/%d %H:%M:%S' 2>/dev/null || echo "-")
         topic=$(_ccs_topic_from_jsonl "$jsonl")
@@ -561,16 +734,18 @@ _ccs_detect_crash() {
   local idle_window_start=$((now - idle_window * 60))
 
   # Get running session info (once)
-  # Method 1: session IDs from --resume args
+  # Method 1: session IDs from --resume or --session args
   local running_sids=""
-  running_sids=$(ps -eo args 2>/dev/null | grep -oP '(?<=--resume )[0-9a-f-]{36}' | sort -u)
-  # Method 2: normalized cwds of all claude processes
+  running_sids=$(ps -eo args 2>/dev/null | grep -oP '(?<=--resume )[0-9a-f-]{36}|(?<=--session )[0-9a-f-]{36}' | sort -u)
+  # Method 2: normalized cwds of all claude or gemini processes
   # Claude Code encodes paths by replacing /._  with -, so we normalize both sides
   # to alphanumeric segments joined by - for comparison.
   local running_cwds_normalized=""
   running_cwds_normalized=$({
     for p in $(pgrep -u "$(id -u)" -f "claude.*--output-format" 2>/dev/null) \
-             $(pgrep -u "$(id -u)" -x "claude" 2>/dev/null); do
+             $(pgrep -u "$(id -u)" -x "claude" 2>/dev/null) \
+             $(pgrep -u "$(id -u)" -x "gemini" 2>/dev/null) \
+             $(pgrep -u "$(id -u)" -f "bin/gemini|index.mjs gemini|happy-coder" 2>/dev/null); do
       readlink "/proc/$p/cwd" 2>/dev/null
     done
   } | sort -u | sed 's/[\/._]/-/g; s/--*/-/g; s/^-//')
@@ -582,8 +757,21 @@ _ccs_detect_crash() {
     [ -f "$f" ] || continue
 
     local mtime sid
-    mtime=$(stat -c "%Y" "$f" 2>/dev/null) || continue
+    if [[ "$f" == *.json ]]; then
+       # Claude format: [..., {"timestamp": "..."}]
+       # Gemini format: {"lastUpdated": "...", "messages": [...]}
+       local last_ts=$(jq -r 'if type == "array" then .[-1].timestamp else .lastUpdated end // empty' "$f" 2>/dev/null)
+       if [ -n "$last_ts" ]; then
+         mtime=$(date -d "$last_ts" +%s 2>/dev/null || stat -c "%Y" "$f" 2>/dev/null)
+       else
+         mtime=$(stat -c "%Y" "$f" 2>/dev/null)
+       fi
+    else
+       mtime=$(stat -c "%Y" "$f" 2>/dev/null)
+    fi
+    [ -n "$mtime" ] || continue
     sid=$(basename "$f" | sed -e 's/\.jsonl$//' -e 's/\.json$//')
+    echo "DEBUG: checking $sid, f=$f, mtime=$mtime, age=$((now-mtime))" >&2
 
     # Path 1: Reboot detection
     # Any pre-boot session without a running process was killed by reboot.
@@ -593,7 +781,7 @@ _ccs_detect_crash() {
     #   within window = was actively writing near boot time
     #   outside window = was idle but process killed by reboot
     if [ "$boot_epoch" -gt 0 ] && [ "$mtime" -lt "$reboot_upper" ]; then
-      echo "$running_sids" | grep -q "$sid" && continue
+      echo "$running_sids" | grep -qw "$sid" && continue
       if [ "$mtime" -ge "$reboot_window_start" ]; then
         _crash_out["$sid"]="high:reboot"
       else
@@ -611,14 +799,14 @@ _ccs_detect_crash() {
     # Method 1: exact session ID match (--resume sessions) — precise
     # Method 2: cwd match (Happy-launched sessions without --resume) — approximate
     local is_running_exact=false is_running_cwd=false
-    if echo "$running_sids" | grep -q "$sid"; then
+    if echo "$running_sids" | grep -qw "$sid"; then
       is_running_exact=true
     elif [ -n "${_cd_projects[$i]}" ]; then
       # Normalize project dir name to match normalized cwds
       # Both sides: replace /._  with -, collapse multiple -, strip leading -
       local _proj_normalized
       _proj_normalized=$(echo "${_cd_projects[$i]}" | sed 's/[\/._]/-/g; s/--*/-/g; s/^-//')
-      [ -n "$_proj_normalized" ] && echo "$running_cwds_normalized" | grep -qF "$_proj_normalized" &&
+      [ -n "$_proj_normalized" ] && echo "$running_cwds_normalized" | grep -qE ".*$_proj_normalized$" &&
       is_running_cwd=true
     fi
 
@@ -639,16 +827,36 @@ _ccs_detect_crash() {
     # Process running (exact or cwd) — not crashed
     ("$is_running_exact" || "$is_running_cwd") && continue
 
-    # Check for interrupt signals in last assistant message (raw JSONL)
-    # Last assistant message: content array with no text entries = mid-execution crash
-    local has_text
-    has_text=$(tac "$f" 2>/dev/null | grep -m1 '"type":"assistant"' | jq -r '
-      if .message.content then
-        ([.message.content[] | select(.type == "text" and (.text | length > 0))] | length)
-      else
-        0
-      end
-    ' 2>/dev/null)
+    # Check for interrupt signals in last assistant message
+    # Mid-execution crash: assistant message started but contains no text content
+    local has_text=0
+    if [[ "$f" == *.json ]]; then
+      # Gemini or Claude-exported-JSON: parse whole file
+      has_text=$(jq -r '
+        (if type == "array" then . else .messages // [] end) |
+        [.[] | select(.type == "assistant" or .type == "gemini" or .type == "model")] | last |
+        (.message.content // .content) as $c |
+        if $c | type == "array" then
+          ([$c[] | select(.type == "text" and (.text | length > 0))] | length)
+        elif $c | type == "string" then
+          ($c | length)
+        else 0 end
+      ' "$f" 2>/dev/null)
+    else
+      # Claude JSONL: use tac for speed, but only call jq if assistant message found
+      local last_asst
+      last_asst=$(tac "$f" 2>/dev/null | grep -m1 -E '"type":"(assistant|gemini|model)"')
+      if [ -n "$last_asst" ]; then
+        has_text=$(echo "$last_asst" | jq -r '
+          (.message.content // .content) as $c |
+          if $c | type == "array" then
+            ([$c[] | select(.type == "text" and (.text | length > 0))] | length)
+          elif $c | type == "string" then
+            ($c | length)
+          else 0 end
+        ' 2>/dev/null)
+      fi
+    fi
 
     if [ "${has_text:-0}" = "0" ]; then
       _crash_out["$sid"]="high:non-reboot"
@@ -693,6 +901,37 @@ _ccs_find_project_dir() {
       return 0
     }
   done
+  return 1
+}
+
+# ── Helper: resolve Gemini chats directory for a filesystem path ──
+# Uses ~/.gemini/projects.json to map path → slug, then returns chats dir.
+# Falls back to current project slug if no argument given.
+_ccs_gemini_chats_dir() {
+  local target="${1:-$(pwd)}"
+  local gemini_dir="${CCS_GEMINI_DIR:-$HOME/.gemini}"
+  local projects_json="$gemini_dir/projects.json"
+  [ -f "$projects_json" ] || return 1
+
+  # Find the slug for this path (exact match or longest prefix match)
+  local slug
+  slug=$(python3 -c "
+import json, sys, os
+target = os.path.realpath('$target')
+pj = json.load(open('$projects_json'))
+best_path, best_slug = '', ''
+for path, slug in pj.get('projects', {}).items():
+    rp = os.path.realpath(path)
+    if target == rp or target.startswith(rp + '/'):
+        if len(rp) > len(best_path):
+            best_path, best_slug = rp, slug
+if best_slug:
+    print(best_slug)
+" 2>/dev/null)
+  [ -z "$slug" ] && return 1
+
+  local chats_dir="$gemini_dir/tmp/$slug/chats"
+  [ -d "$chats_dir" ] && echo "$chats_dir" && return 0
   return 1
 }
 

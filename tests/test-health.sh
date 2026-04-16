@@ -4,6 +4,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+source ccs-core.sh
 source ccs-health.sh
 
 pass=0 fail=0

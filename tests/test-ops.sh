@@ -93,4 +93,35 @@ else
   PASS=$((PASS + 1))
 fi
 
+echo ""
+echo "=== _ccs_archive_session: Gemini safety ==="
+
+# Claude JSONL: should append last-prompt marker
+CLAUDE_F="$TEST_DIR/claude-session.jsonl"
+cat > "$CLAUDE_F" <<'JSONL'
+{"type":"user","message":{"content":"hello"},"timestamp":"2026-04-14T09:00:00Z"}
+JSONL
+_ccs_archive_session "$CLAUDE_F"
+if tail -1 "$CLAUDE_F" | grep -q '"last-prompt"'; then
+  printf '  PASS: Claude session gets last-prompt marker\n'
+  PASS=$((PASS + 1))
+else
+  printf '  FAIL: Claude session missing last-prompt marker\n'
+  FAIL=$((FAIL + 1))
+fi
+
+# Gemini JSON: should get archived flag
+GEMINI_F="$TEST_DIR/gemini-session.json"
+cat > "$GEMINI_F" <<'JSON'
+{"sessionId":"test","messages":[{"type":"user","content":[{"text":"hi"}]}]}
+JSON
+_ccs_archive_session "$GEMINI_F"
+if jq -e '.archived == true' "$GEMINI_F" >/dev/null 2>&1; then
+  printf '  PASS: Gemini session gets archived:true flag\n'
+  PASS=$((PASS + 1))
+else
+  printf '  FAIL: Gemini session missing archived flag\n'
+  FAIL=$((FAIL + 1))
+fi
+
 test_summary

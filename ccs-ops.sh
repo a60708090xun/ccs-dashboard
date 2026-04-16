@@ -62,7 +62,12 @@ _ccs_crash_md() {
     echo "- **最後訊息：** $last_user"
     [ -n "$todo_summary" ] && echo "- **Todos：** $todo_summary"
     [ -n "$git_branch" ] && echo "- **Git：** $git_branch ($git_dirty uncommitted files)"
-    echo "- **Resume：** \`claude --resume $sid\`"
+    local provider=$(_ccs_get_provider "$f")
+    local resume_cmd="claude --resume $sid"
+    if [ "$provider" = "gemini" ]; then
+      resume_cmd="gemini --session $sid"
+    fi
+    echo "- **Resume：** \`$resume_cmd\`"
     echo "- **Detail：** \`ccs-session ${sid:0:8}\`"
     echo ""
   done
@@ -135,18 +140,24 @@ _ccs_crash_json() {
     local mtime=$(stat -c "%Y" "$f" 2>/dev/null)
     local last_iso=$(date -d "@$mtime" --iso-8601=seconds 2>/dev/null)
 
-    jq -nc \
-      --arg sid "$sid" \
-      --arg conf "$confidence" \
-      --arg dpath "$detection_path" \
-      --arg proj "$project" \
-      --arg topic "$topic" \
-      --arg last_act "$last_iso" \
-      --arg last_msg "$last_user" \
-      --argjson todos "${todos:-[]}" \
-      --arg git_br "$git_branch" \
-      --argjson git_d "$git_dirty" \
-      --arg resume "claude --resume $sid" \
+    local provider=$(_ccs_get_provider "$f")
+    local resume_cmd="claude --resume $sid"
+    if [ "$provider" = "gemini" ]; then
+      resume_cmd="gemini --session $sid"
+    fi
+
+    jq -n -c \
+    --arg sid "$sid" \
+    --arg conf "$confidence" \
+    --arg dpath "$path" \
+    --arg proj "$project" \
+    --arg topic "$topic" \
+    --arg last_act "$last_iso" \
+    --arg last_msg "$last_user" \
+    --argjson todos "${todos:-[]}" \
+    --arg git_br "$git_branch" \
+    --argjson git_d "$git_dirty" \
+    --arg resume "$resume_cmd" \
       '{
         session_id: $sid[0:8],
         session_uuid: $sid,
@@ -177,6 +188,17 @@ _ccs_crash_json() {
 _ccs_archive_session() {
   local f="$1"
   [ -f "$f" ] || return 1
+  # Gemini .json files are JSON arrays — appending JSONL marker would corrupt them
+  if [ "$(_ccs_get_provider "$f")" = "gemini" ]; then
+    # Use jq to inject an "archived": true flag into the top-level object
+    local tmpf
+    tmpf=$(mktemp)
+    if jq '. + {"archived": true}' "$f" > "$tmpf" 2>/dev/null; then
+      cat "$tmpf" > "$f"
+    fi
+    rm -f "$tmpf"
+    return 0
+  fi
   printf '{"type":"last-prompt"}\n' >> "$f"
 }
 
@@ -400,7 +422,7 @@ _ccs_detect_last_workday() {
     # 跳過今天
     (( day_epoch >= today_start )) && continue
     active_dates["$day_start"]=$day_epoch
-  done < <(find "$claude_dir" -name "*.jsonl" -printf "%T@\n" 2>/dev/null)
+  done < <(find "$claude_dir" \( -name "*.jsonl" -o -name "*.json" \) -printf "%T@\n" 2>/dev/null)
 
   if [ ${#active_dates[@]} -eq 0 ]; then
     # 無任何歷史 session，fallback 到昨天
@@ -434,7 +456,7 @@ _ccs_recap_scan_projects() {
     [ -z "${seen[$dir]+_}" ] || continue
     seen["$dir"]=1
     echo "$dir"
-  done < <(find "$claude_dir" -maxdepth 2 -name "*.jsonl" ! -path "*/subagents/*" 2>/dev/null)
+  done < <(find "$claude_dir" -maxdepth 2 \( -name "*.jsonl" -o -name "*.json" \) ! -path "*/subagents/*" 2>/dev/null)
 }
 
 # _ccs_recap_collect — 收集 recap 數據，輸出 JSON
@@ -493,8 +515,13 @@ _ccs_recap_collect() {
       (( mtime < from_epoch )) && continue
 
       # Skip short sessions (< 2 user prompts) to reduce noise
-      local _pc
-      _pc=$(jq -c 'select(.type == "user" and ((.isMeta // false) == false))' "$jsonl" 2>/dev/null | wc -l)
+      local _pc provider
+      provider=$(_ccs_get_provider "$jsonl")
+      if [ "$provider" = "gemini" ]; then
+        _pc=$(jq -c '.messages[] | select(.type == "user" or .role == "user")' "$jsonl" 2>/dev/null | wc -l)
+      else
+        _pc=$(jq -c 'select(.type == "user" and ((.isMeta // false) == false))' "$jsonl" 2>/dev/null | wc -l)
+      fi
       [ "${_pc:-0}" -lt 2 ] && continue
 
       sid=$(basename "$jsonl" | sed -e 's/\.jsonl$//' -e 's/\.json$//')
@@ -516,21 +543,30 @@ _ccs_recap_collect() {
       td_done=0 td_pending=0 td_ip=0
       pending_items=()
       completed_items=()
+      local jq_todos_filter
+      if [ "$provider" = "gemini" ]; then
+        jq_todos_filter='[.messages[] | select(.type == "gemini" or .type == "assistant" or .role == "model" or .type == "model") | (.toolCalls // (.content | if type == "array" then [.[]? | select(.toolCall or .type == "toolCall") | (.toolCall // .)] else [] end))[]? | select(.name == "write_todos" or .name == "TodoWrite") | .args.todos // .input.todos] | last // [] | .[]? | [.status, .content] | @tsv'
+      else
+        jq_todos_filter='[.[] | select(.type == "assistant") | .message.content[]? | select(.type == "tool_use" and .name == "TodoWrite") | .input.todos] | last // [] | .[]? | [.status, .content] | @tsv'
+      fi
+
       while IFS=$'\t' read -r t_status t_content; do
         case "$t_status" in
           completed)    (( td_done++ )); completed_items+=("$t_content") ;;
           pending)      (( td_pending++ )); pending_items+=("$t_content") ;;
           in_progress)  (( td_ip++ )); pending_items+=("$t_content") ;;
         esac
-      done < <(jq -s -r '[.[] | select(.type == "assistant") | .message.content[]? |
-        select(.type == "tool_use" and .name == "TodoWrite") |
-        .input.todos] | last // [] | .[]? | [.status, .content] | @tsv' "$jsonl" 2>/dev/null)
+      done < <(jq -s -r "$jq_todos_filter" "$jsonl" 2>/dev/null)
 
       # Last exchange preview
       local preview=""
-      preview=$(jq -r 'select(.type == "user" and .isMeta != true) |
-        .message.content | if type == "string" then . else "" end |
-        gsub("\n"; " ") | .[:80]' "$jsonl" 2>/dev/null | tail -1)
+      if [ "$provider" = "gemini" ]; then
+        preview=$(jq -r '.messages[] | select(.type == "user" or .role == "user") | .content | if type == "array" then [.[]? | select(.text) | .text] | join(" ") else . end | gsub("\n"; " ") | .[:80]' "$jsonl" 2>/dev/null | tail -1)
+      else
+        preview=$(jq -r 'select(.type == "user" and .isMeta != true) |
+          .message.content | if type == "string" then . else "" end |
+          gsub("\n"; " ") | .[:80]' "$jsonl" 2>/dev/null | tail -1)
+      fi
 
       # 組裝 session JSON
       local pending_json completed_json
@@ -572,7 +608,7 @@ _ccs_recap_collect() {
       (( todos_done += td_done ))
       (( todos_pending += td_pending ))
       (( todos_in_progress += td_ip ))
-    done < <(find "$session_dir" -maxdepth 1 -name "*.jsonl" ! -path "*/subagents/*" 2>/dev/null)
+    done < <(find "$session_dir" -maxdepth 1 \( -name "*.jsonl" -o -name "*.json" \) ! -path "*/subagents/*" 2>/dev/null)
 
     # Features（從 features.jsonl 讀取此專案的 features）
     local data_dir
@@ -623,7 +659,7 @@ _ccs_recap_collect() {
         elif .name == "Write" then "W\t" + .input.file_path
         elif .name == "Read" then "R\t" + .input.file_path
         else empty end' "$jsonl" 2>/dev/null)
-    done < <(find "$session_dir" -maxdepth 1 -name "*.jsonl" ! -path "*/subagents/*" 2>/dev/null)
+    done < <(find "$session_dir" -maxdepth 1 \( -name "*.jsonl" -o -name "*.json" \) ! -path "*/subagents/*" 2>/dev/null)
 
     # 排序取 top 5（合併 edits + reads 的所有 key，避免遺漏只有 Read 的檔案）
     unset all_hot_files 2>/dev/null
@@ -648,8 +684,16 @@ _ccs_recap_collect() {
       (( mtime < from_epoch )) && continue
       sid=$(basename "$jsonl" | sed -e 's/\.jsonl$//' -e 's/\.json$//')
       topic=$(_ccs_topic_from_jsonl "$jsonl")
-      dl_text=$(jq -r 'select(.type == "user" and .isMeta != true) |
-        .message.content | if type == "string" then . else "" end' "$jsonl" 2>/dev/null |
+      local provider
+      provider=$(_ccs_get_provider "$jsonl")
+      local jq_dl_filter
+      if [ "$provider" = "gemini" ]; then
+        jq_dl_filter='.messages[] | select((.type == "user" or .role == "user") and .isMeta != true) | .content | if type == "array" then [.[]? | select(.text) | .text] | join(" ") else . end'
+      else
+        jq_dl_filter='select(.type == "user" and .isMeta != true) | .message.content | if type == "string" then . else "" end'
+      fi
+
+      dl_text=$(jq -r "$jq_dl_filter" "$jsonl" 2>/dev/null |
         grep -iE '(deadline|due|urgent|ASAP|月底|趕|今天|明天|後天|這週|下週|本週|by (monday|tuesday|wednesday|thursday|friday|tomorrow|end of))' |
         head -1 | sed 's/^[[:space:]]*//' | cut -c1-80)
       if [ -n "$dl_text" ]; then
@@ -657,7 +701,7 @@ _ccs_recap_collect() {
           --arg t "$dl_text" --arg sid "$sid" --arg topic "$topic" \
           '. += [{text:$t, session_id:$sid, session_topic:$topic}]')
       fi
-    done < <(find "$session_dir" -maxdepth 1 -name "*.jsonl" ! -path "*/subagents/*" 2>/dev/null)
+    done < <(find "$session_dir" -maxdepth 1 \( -name "*.jsonl" -o -name "*.json" \) ! -path "*/subagents/*" 2>/dev/null)
 
     # 組裝此專案的 JSON
     jq -n \
@@ -1114,10 +1158,15 @@ _ccs_checkpoint_collect() {
       fi
 
       # Extract todos (pending/in_progress only)
-      local todos_json="[]"
-      todos_json=$(jq -s -c '[.[] | select(.type == "assistant") | .message.content[]? |
-        select(.type == "tool_use" and .name == "TodoWrite") |
-        .input.todos] | last // [] | [.[]? | select(.status != "completed") | {status, content}]' "$jsonl" 2>/dev/null)
+      local todos_json="[]" provider
+      provider=$(_ccs_get_provider "$jsonl")
+      if [ "$provider" = "gemini" ]; then
+        todos_json=$(jq -c '[.messages[] | select(.type == "gemini" or .type == "assistant" or .role == "model" or .type == "model") | (.toolCalls // (.content | if type == "array" then [.[]? | select(.toolCall or .type == "toolCall") | (.toolCall // .)] else [] end))[]? | select(.name == "write_todos" or .name == "TodoWrite") | .args.todos // .input.todos] | last // [] | [.[]? | select(.status != "completed") | {status, content}]' "$jsonl" 2>/dev/null)
+      else
+        todos_json=$(jq -s -c '[.[] | select(.type == "assistant") | .message.content[]? |
+          select(.type == "tool_use" and .name == "TodoWrite") |
+          .input.todos] | last // [] | [.[]? | select(.status != "completed") | {status, content}]' "$jsonl" 2>/dev/null)
+      fi
       [ -z "$todos_json" ] || [ "$todos_json" = "null" ] && todos_json="[]"
       local todo_count
       todo_count=$(echo "$todos_json" | jq 'length')
@@ -1127,8 +1176,15 @@ _ccs_checkpoint_collect() {
       if (( age_min > 120 )); then
         # Naturally ended? (last message is assistant + no pending todos)
         local last_type
-        last_type=$(jq -s '[.[] | select(.type == "assistant" or .type == "user")] | last | .type // ""' "$jsonl" 2>/dev/null)
-        if [ "$last_type" = '"assistant"' ] && (( todo_count == 0 )); then
+        if [ "$provider" = "gemini" ]; then
+          last_type=$(jq -r '.messages[] | select(.type == "user" or .role == "user" or .type == "gemini" or .type == "assistant" or .type == "model" or .role == "model") | .type // .role' "$jsonl" 2>/dev/null | tail -1)
+          # Normalize
+          [[ "$last_type" =~ ^(gemini|assistant|model)$ ]] && last_type="assistant"
+        else
+          last_type=$(jq -s -r '[.[] | select(.type == "assistant" or .type == "user")] | last | .type // ""' "$jsonl" 2>/dev/null)
+        fi
+
+        if [ "$last_type" = "assistant" ] && (( todo_count == 0 )); then
           # Treat as done
           done_json=$(echo "$done_json" | jq -c --arg p "$proj_name" --arg t "$topic" --arg s "$sid" \
             '. + [{project: $p, topic: $t, session: $s}]')
@@ -1137,7 +1193,14 @@ _ccs_checkpoint_collect() {
           is_blocked=true
         fi
       else
-        if jq -r 'select(.type == "user" and (.message.content | type == "string") and ((.isMeta // false) == false)) | .message.content' "$jsonl" 2>/dev/null \
+        local jq_msg_filter
+        if [ "$provider" = "gemini" ]; then
+          jq_msg_filter='.messages[] | select((.type == "user" or .role == "user") and .isMeta != true) | .content | if type == "array" then [.[]? | select(.text) | .text] | join(" ") else . end'
+        else
+          jq_msg_filter='select(.type == "user" and (.message.content | type == "string") and ((.isMeta // false) == false)) | .message.content'
+        fi
+
+        if jq -r "$jq_msg_filter" "$jsonl" 2>/dev/null \
           | tail -5 \
           | grep -qiE '(blocked|卡住|等待|waiting|stuck)'; then
           is_blocked=true
@@ -1165,7 +1228,7 @@ _ccs_checkpoint_collect() {
       else
         wip_json=$(echo "$wip_json" | jq -c --argjson e "$entry" '. + [$e]')
       fi
-    done < <(find "$session_dir" -maxdepth 1 -name "*.jsonl" ! -path "*/subagents/*" 2>/dev/null)
+    done < <(find "$session_dir" -maxdepth 1 \( -name "*.jsonl" -o -name "*.json" \) ! -path "*/subagents/*" 2>/dev/null)
   done
 
   # Build result

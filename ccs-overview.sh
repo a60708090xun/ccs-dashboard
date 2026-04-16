@@ -6,6 +6,20 @@
 # Outputs a JSON object with: last_exchange, todos, deadline_context
 _ccs_overview_session_data() {
   local jsonl="$1"
+  local provider=$(_ccs_get_provider "$jsonl")
+  local jq_user_filter
+  local jq_todos_filter
+  local jq_deadline_filter
+
+  if [ "$provider" = "gemini" ]; then
+    jq_user_filter='.messages[] | select(.type == "user" or .role == "user")'
+    jq_todos_filter='.messages[] | select(.type == "gemini" or .type == "assistant" or .role == "model" or .type == "model") | (.toolCalls // (.content | if type == "array" then [.[]? | select(.toolCall or .type == "toolCall") | (.toolCall // .)] else [] end))[]? | select(.name == "write_todos" or .name == "TodoWrite") | .args.todos // .input.todos'
+    jq_deadline_filter='.messages[] | select((.type == "user" or .role == "user") and ((.isMeta // false) == false)) | .content | if type == "array" then [.[]? | select(.text) | .text] | join(" ") else . end'
+  else
+    jq_user_filter='select(.type == "user" and (.message.content | type == "string"))'
+    jq_todos_filter='select(.type == "assistant") | .message.content[]? | select(.type == "tool_use" and .name == "TodoWrite") | [.input.todos[]? | {content, status}]'
+    jq_deadline_filter='select(.type == "user" and (.message.content | type == "string") and ((.isMeta // false) == false)) | .message.content'
+  fi
 
   # --- Last Exchange (last non-meta user-assistant pair) ---
   # _ccs_get_pair expects a 1-based index into ALL user prompts (including meta).
@@ -14,17 +28,16 @@ _ccs_overview_session_data() {
   # filter out meta/system, take the last one's raw index.
   local user_text="" asst_text=""
   local last_raw_idx
-  last_raw_idx=$(jq -c '
-    select(.type == "user" and (.message.content | type == "string"))
-  ' "$jsonl" 2>/dev/null \
+  last_raw_idx=$(jq -c "$jq_user_filter" "$jsonl" 2>/dev/null \
     | jq -sc '
       [to_entries[] | {
         raw_idx: (.key + 1),
         is_meta: (.value.isMeta // false),
-        content: .value.message.content
+        content: .value.content
       }]
       | [.[] | select(
           .is_meta == false
+          and (.content | type == "string")
           and (.content | test("^\\s*/exit|^\\s*/quit|^<local-command|^<command-name|^<system-") | not)
           and (.content | test("^\\s*$") | not)
         )]
@@ -40,21 +53,12 @@ _ccs_overview_session_data() {
 
   # --- Todos (last TodoWrite) ---
   local todos_json
-  todos_json=$(jq -c '
-    select(.type == "assistant") |
-    .message.content[]? |
-    select(.type == "tool_use" and .name == "TodoWrite") |
-    [.input.todos[]? | {content, status}]
-  ' "$jsonl" 2>/dev/null | tail -1)
+  todos_json=$(jq -c "$jq_todos_filter" "$jsonl" 2>/dev/null | tail -1)
   [ -z "$todos_json" ] && todos_json="[]"
 
   # --- Deadline Context (keyword search in last 5 non-meta user messages) ---
   local deadline_ctx=""
-  deadline_ctx=$(jq -r '
-    select(.type == "user" and (.message.content | type == "string")
-      and ((.isMeta // false) == false)) |
-    .message.content
-  ' "$jsonl" 2>/dev/null \
+  deadline_ctx=$(jq -r "$jq_deadline_filter" "$jsonl" 2>/dev/null \
     | tail -5 \
     | grep -iE '(deadline|before|週|月底|by |due|urgent|ASAP|趕|今天|明天|後天)' \
     | cut -c1-150 \
@@ -842,15 +846,19 @@ _ccs_overview_terminal() {
     color=$(echo "$row" | cut -f5)
 
     # Override color for crash-interrupted sessions (high confidence)
-    local full_sid
+    local full_sid sid
     full_sid=$(basename "$f" | sed -e "s/\.jsonl$//" -e "s/\.json$//")
+    if [[ "$f" == *.json ]]; then
+      sid=$(echo "$full_sid" | rev | cut -d- -f1 | rev | cut -c1-8)
+    else
+      sid="${full_sid:0:8}"
+    fi
+
     local crash_suffix=""
     if [ -n "${4:-}" ] && [ -n "${_crash_term[$full_sid]+x}" ] && [[ "${_crash_term[$full_sid]}" == high:* ]]; then
       color="\033[31m"
       crash_suffix=" 💀"
     fi
-
-    local sid="${full_sid:0:8}"
     local topic
     topic=$(_ccs_topic_from_jsonl "$f")
 
