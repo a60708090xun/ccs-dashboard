@@ -232,11 +232,9 @@ cat > "$G_INTERLEAVED" <<'JSON'
 JSON
 
 result=$(_ccs_build_pairs_index "$G_INTERLEAVED")
-# Should be:
-# 1    First msg
-# 2    Second msg
-assert_contains "G_INTERLEAVED index 1" "$result" $'1\tFirst msg'
-assert_contains "G_INTERLEAVED index 2" "$result" $'2\tSecond msg'
+# Output format: ri\thas_resp\tis_meta\tpreview
+assert_contains "G_INTERLEAVED index 1" "$result" "1	true	false	First msg"
+assert_contains "G_INTERLEAVED index 2" "$result" "2	false	false	Second msg"
 
 echo ""
 echo "=== _ccs_get_pair: Gemini duck-typing content ==="

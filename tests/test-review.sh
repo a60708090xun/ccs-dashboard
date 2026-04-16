@@ -69,7 +69,7 @@ assert_eq "D: has conversation" "true" "$(echo "$review_json" | jq 'has("convers
 assert_eq "D: conversation length" "2" "$(echo "$review_json" | jq '.conversation | length')"
 assert_eq "D: todos length" "2" "$(echo "$review_json" | jq '.todos | length')"
 assert_eq "D: summary is null" "null" "$(echo "$review_json" | jq -r '.summary')"
-assert_contains "D: recent_files has Read" "$(echo "$review_json" | jq -r '.recent_files[]')" "R /style.css"
+assert_contains "D: recent_files has Read" "$(echo "$review_json" | jq -r '.recent_files[]')" "📖 Read /style.css"
 
 echo "=== _ccs_review_md: markdown output ==="
 

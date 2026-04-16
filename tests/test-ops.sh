@@ -110,20 +110,17 @@ else
   FAIL=$((FAIL + 1))
 fi
 
-# Gemini JSON: should NOT be modified
+# Gemini JSON: should get archived flag
 GEMINI_F="$TEST_DIR/gemini-session.json"
 cat > "$GEMINI_F" <<'JSON'
 {"sessionId":"test","messages":[{"type":"user","content":[{"text":"hi"}]}]}
 JSON
-local_before=$(wc -c < "$GEMINI_F")
 _ccs_archive_session "$GEMINI_F"
-local_after=$(wc -c < "$GEMINI_F")
-if [ "$local_before" = "$local_after" ]; then
-  printf '  PASS: Gemini session not modified by archive\n'
+if jq -e '.archived == true' "$GEMINI_F" >/dev/null 2>&1; then
+  printf '  PASS: Gemini session gets archived:true flag\n'
   PASS=$((PASS + 1))
 else
-  printf '  FAIL: Gemini session was modified (size: %s → %s)\n' \
-    "$local_before" "$local_after"
+  printf '  FAIL: Gemini session missing archived flag\n'
   FAIL=$((FAIL + 1))
 fi
 
