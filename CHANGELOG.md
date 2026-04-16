@@ -4,6 +4,23 @@ All notable changes to this project will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [Semantic Versioning](https://semver.org/).
 
+## [0.3.1] — 2026-04-16
+
+### Added
+
+- **Handled Gemini CLI v0.35+ JSON Object format** — Complete support for the new object-based session structure.
+- **Robust Duck-typing parser** — Unified logic for extracting topics, turns, and tools across multiple Gemini and Claude versions.
+- **Manual Archiving for Gemini** — Support for injecting `"archived": true` metadata via `ccs-crash --clean` to eliminate false positives.
+- **Enhanced Process Detection** — Support for Happy Coder (Node.js) and standalone `gemini` processes.
+- **Full Command Parity** — `ccs-recap`, `ccs-review`, `ccs-handoff`, `ccs-project`, and `ccs-overview` now fully support Gemini sessions.
+
+### Fixed
+
+- **Sequential Indexing** — Corrected turn indexing for Gemini sessions (1, 2, 3...) to match the interactive viewer and resume prompt.
+- **ISO Millisecond Parsing** — Fixed `jq` date conversion for Gemini timestamps containing milliseconds.
+- **SID Extraction Consistency** — Unified Gemini Session ID display (first 8 chars of UUID) across all modules.
+- **Robustness** — Eliminated `jq` errors caused by `null` content fields in various downstream commands.
+
 ## [0.3.0] — 2026-04-10
 
 ### Added
