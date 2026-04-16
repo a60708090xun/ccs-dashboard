@@ -42,19 +42,27 @@ HELP
   mkdir -p "$handoff_dir"
 
   # Find matching project dir in .claude/projects (fuzzy match)
-  local encoded_dir
-  encoded_dir=$(_ccs_find_project_dir "$project_dir") || {
-    echo "No Claude sessions found for: $project_dir"
+  local encoded_dir session_dir=""
+  encoded_dir=$(_ccs_find_project_dir "$project_dir") && session_dir="$projects_dir/$encoded_dir"
+
+  # Find Gemini chats dir
+  local gemini_chats
+  gemini_chats=$(_ccs_gemini_chats_dir "$project_dir")
+
+  if [ -z "$session_dir" ] && [ -z "$gemini_chats" ]; then
+    echo "No Code CLI sessions found for: $project_dir"
     return 1
-  }
-  local session_dir="$projects_dir/$encoded_dir"
+  fi
 
   # Collect open (non-archived) sessions from last 7 days, sorted by recency
   local open_sessions=()
   while IFS=$'\t' read -r _ path; do
     open_sessions+=("$path")
   done < <(
-    find "$session_dir" -maxdepth 1 \( -name "*.jsonl" -o -name "*.json" \) -mmin -10080 ! -path "*/subagents/*" -print0 2>/dev/null \
+    {
+      [ -n "$session_dir" ] && [ -d "$session_dir" ] && find "$session_dir" -maxdepth 1 \( -name "*.jsonl" -o -name "*.json" \) -mmin -10080 ! -path "*/subagents/*" -print0
+      [ -n "$gemini_chats" ] && [ -d "$gemini_chats" ] && find "$gemini_chats" -maxdepth 1 -name "*.json" -mmin -10080 -print0
+    } 2>/dev/null \
     | while IFS= read -r -d '' f; do
         _ccs_is_archived "$f" && continue
         printf '%s\t%s\n' "$(stat -c '%Y' "$f")" "$f"
@@ -71,7 +79,17 @@ HELP
   local full_sid sid mod_date topic
 
   full_sid=$(basename "$latest" | sed -e 's/\.jsonl$//' -e 's/\.json$//')
-  sid=$(echo "$full_sid" | cut -c1-8)
+  if [ "$(_ccs_get_provider "$latest")" = "gemini" ]; then
+    local real_sid
+    real_sid=$(jq -r '.sessionId // empty' "$latest" 2>/dev/null)
+    if [ -n "$real_sid" ]; then
+      sid=$(echo "$real_sid" | awk -F'-' '{print $NF}' | cut -c1-8)
+    else
+      sid=$(echo "$full_sid" | cut -c1-8)
+    fi
+  else
+    sid=$(echo "$full_sid" | cut -c1-8)
+  fi
   mod_date=$(stat -c "%y" "$latest" | cut -d. -f1)
 
   topic=$(_ccs_topic_from_jsonl "$latest")
@@ -268,16 +286,30 @@ HELP
   fi
 
   # ── Session metadata ──
-  local full_sid sid topic dir project project_dir
+  local full_sid sid topic dir project project_dir provider
+  provider=$(_ccs_get_provider "$jsonl")
   full_sid=$(basename "$jsonl" | sed -e 's/\.jsonl$//' -e 's/\.json$//')
-  sid=$(echo "$full_sid" | cut -c1-8)
+  
+  if [ "$provider" = "gemini" ]; then
+    # Gemini filename: session-YYYY-MM-DDTHH-MM-SID.json
+    sid=$(echo "$full_sid" | rev | cut -d- -f1 | rev | cut -c1-8)
+    dir=$(basename "$(dirname "$(dirname "$jsonl")")")
+    project="$dir"
+  else
+    sid=$(echo "$full_sid" | cut -c1-8)
+    dir=$(basename "$(dirname "$jsonl")")
+    project=$(echo "$dir" | sed "s/^${_CCS_HOME_ENCODED}-*//; s/-/\//g")
+  fi
+  
+  [ -z "$project" ] && project="~(home)"
   topic=$(_ccs_topic_from_jsonl "$jsonl")
 
-  dir=$(basename "$(dirname "$jsonl")")
-  project=$(echo "$dir" | sed "s/^${_CCS_HOME_ENCODED}-*//; s/-/\//g")
-  [ -z "$project" ] && project="~(home)"
   # Reconstruct project_dir from encoded dir name
-  project_dir=$(_ccs_resolve_project_path "$dir" 2>/dev/null)
+  if [ "$provider" = "gemini" ]; then
+    project_dir=$(dirname "$(dirname "$jsonl")")
+  else
+    project_dir=$(_ccs_resolve_project_path "$dir" 2>/dev/null)
+  fi
   [ ! -d "$project_dir" ] && project_dir=""
 
   # ── Git context (if project dir exists) ──
@@ -291,11 +323,20 @@ HELP
   # ── Extract recent conversation pairs ──
   # Count only real user prompts (skip meta/system messages)
   # Build filtered pair indices: map real prompt index → raw prompt index
+  local provider=$(_ccs_get_provider "$jsonl")
   local -a real_to_raw=()
   local raw_idx=0
+
+  local jq_filter
+  if [ "$provider" = "gemini" ]; then
+    jq_filter='(if type == "array" then . else .messages // [] end)[]? | select(.type == "user" or .role == "user") | [((.isMeta // false) | tostring), ((.content // .message.content) | if type == "array" then [.[]? | select(.text) | .text] | join(" ") else . end | .[:80] | gsub("\n"; " "))] | @tsv'
+  else
+    jq_filter='select(.type == "user" and (.message.content | type == "string")) | [(.isMeta // false | tostring), (.message.content | .[:80] | gsub("\n"; " "))] | @tsv'
+  fi
+
   while IFS=$'\t' read -r is_meta content; do
     raw_idx=$((raw_idx + 1))
-    # Skip meta messages (isMeta flag from Claude)
+    # Skip meta messages
     [ "$is_meta" = "true" ] && continue
     # Skip system/command wrapper messages
     case "$content" in
@@ -306,18 +347,7 @@ HELP
     [[ "$content" =~ ^[[:space:]]*/quit ]] && continue
     [ -z "${content// /}" ] && continue
     real_to_raw+=("$raw_idx")
-  local provider=$(_ccs_get_provider "$jsonl")
-  done < <(
-    if [ "$provider" = "gemini" ]; then
-      jq -c ".[]" "$jsonl" 2>/dev/null
-    else
-      cat "$jsonl" 2>/dev/null
-    fi | jq -r '
-      select(.type == "user" and (.message.content | type == "string")) |
-      [(.isMeta // false | tostring), (.message.content | .[:80] | gsub("\n"; " "))] |
-      @tsv
-    ' 2>/dev/null
-  )
+  done < <(jq -r "$jq_filter" "$jsonl" 2>/dev/null)
 
   local real_count=${#real_to_raw[@]}
   local start_from=$((real_count - pair_count + 1))
@@ -325,6 +355,9 @@ HELP
 
   local conversation_summary=""
   local ri
+  local asst_label="Claude"
+  [ "$provider" = "gemini" ] && asst_label="Gemini"
+
   for ((ri = start_from; ri <= real_count; ri++)); do
     local raw_p=${real_to_raw[$((ri - 1))]}
     local pair_json user_text assistant_text user_preview assistant_preview
@@ -347,21 +380,20 @@ HELP
 ### [${ri}/${real_count}] User
 ${user_preview}
 
-### [${ri}/${real_count}] Claude
+### [${ri}/${real_count}] ${asst_label}
 ${assistant_preview}
 "
   done
 
   # ── Extract tool usage from last assistant turn ──
   local recent_files=""
-  local jq_recent_filter='select(.type == "assistant") | .message.content[]? | select(.type == "tool_use") | if .name == "Read" then "R " + .input.file_path elif .name == "Edit" then "E " + .input.file_path elif .name == "Write" then "W " + .input.file_path elif .name == "Bash" then "$ " + (.input.command | split("\n") | first | .[:80]) else empty end'
-  recent_files=$( (
-    if [ "$provider" = "gemini" ]; then
-      jq -c ".[]" "$jsonl" 2>/dev/null
-    else
-      cat "$jsonl" 2>/dev/null
-    fi
-  ) | jq -r "$jq_recent_filter" 2>/dev/null | tail -10 | sort -u)
+  local jq_recent_filter
+  if [ "$provider" = "gemini" ]; then
+    jq_recent_filter='(if type == "array" then . else .messages // [] end)[]? | select(.type == "assistant" or .type == "gemini" or .type == "model" or .role == "assistant" or .role == "model") | (.toolCalls // (.content // .message.content | if type == "array" then [.[]? | select(.toolCall or .type == "toolCall") | (.toolCall // .)] else [] end))[]? | if .name == "read_file" then "R " + .args.file_path elif .name == "replace" then "E " + .args.file_path elif .name == "write_file" then "W " + .args.file_path elif .name == "run_shell_command" then "$ " + (.args.command | split("\n") | first | .[:80]) else empty end'
+  else
+    jq_recent_filter='select(.type == "assistant") | .message.content[]? | select(.type == "tool_use") | if .name == "Read" then "R " + .input.file_path elif .name == "Edit" then "E " + .input.file_path elif .name == "Write" then "W " + .input.file_path elif .name == "Bash" then "$ " + (.input.command | split("\n") | first | .[:80]) else empty end'
+  fi
+  recent_files=$(jq -r "$jq_recent_filter" "$jsonl" 2>/dev/null | tail -10 | sort -u)
 
   # ── Build the prompt ──
   local prompt=""

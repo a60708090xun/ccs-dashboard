@@ -285,14 +285,27 @@ HELP
   fi
 
   # ── Session metadata ──
-  local full_sid sid mod_date topic status dir project
-  full_sid=$(basename "$jsonl" | sed -e 's/\.jsonl$//' -e 's/\.json$//')
-  sid=$(echo "$full_sid" | cut -c1-8)
+  local full_sid sid mod_date topic status dir project provider
+  provider=$(_ccs_get_provider "$jsonl")
+  if [ "$provider" = "gemini" ]; then
+    full_sid=$(jq -r '.sessionId // empty' "$jsonl" 2>/dev/null)
+    [ -z "$full_sid" ] && full_sid=$(basename "$jsonl" | sed 's/\.json$//')
+  else
+    full_sid=$(basename "$jsonl" | sed 's/\.jsonl$//')
+  fi
+  if [ "$provider" = "gemini" ]; then
+    sid=$(echo "$full_sid" | awk -F- '{print $(NF)}' | cut -c1-8)
+  else
+    sid=$(echo "$full_sid" | cut -c1-8)
+  fi
   mod_date=$(stat -c "%y" "$jsonl" | cut -d. -f1)
 
-  dir=$(basename "$(dirname "$jsonl")")
-  project=$(echo "$dir" | sed "s/^${_CCS_HOME_ENCODED}-*//; s/-/\//g")
-  [ -z "$project" ] && project="~(home)"
+  if [ "$provider" = "gemini" ]; then
+    project=$(basename "$(dirname "$(dirname "$jsonl")")")
+  else
+    dir=$(basename "$(dirname "$jsonl")")
+    project=$(_ccs_friendly_project_name "$dir")
+  fi
   topic=$(_ccs_topic_from_jsonl "$jsonl")
 
   if _ccs_is_archived "$jsonl"; then
@@ -307,53 +320,15 @@ HELP
   fi
 
   # ── Build filtered pairs index ──
-  # Read both user and assistant entries in one pass to detect interrupted prompts
   local -a real_to_raw=()
   local -a prompts=()
-  local -a has_response=()  # "1" = has assistant text, "0" = interrupted/no text
-  local raw_idx=0 pending_real=-1
-
-  # Response status: "1" = has response, "resend" = user re-sent, "0" = truly no response
   local -a resp_status=()
-  local pending_real=-1 got_assistant=false
 
-  while IFS=$'\t' read -r role is_meta content; do
-    if [ "$role" = "U" ]; then
-      raw_idx=$((raw_idx + 1))
-      # Previous pending prompt: user sent another before getting assistant text
-      if [ "$pending_real" -ge 0 ]; then
-        resp_status[$pending_real]="resend"  # re-sent (will get response via continuation)
-      fi
-      # Filter meta/system
-      [ "$is_meta" = "true" ] && { pending_real=-1; continue; }
-      case "$content" in
-        '<local-command'*|'<command-name'*|'<system-'*) pending_real=-1; continue ;;
-      esac
-      [[ "$content" =~ ^[[:space:]]*/exit ]] && { pending_real=-1; continue; }
-      [[ "$content" =~ ^[[:space:]]*/quit ]] && { pending_real=-1; continue; }
-      [ -z "${content// /}" ] && { pending_real=-1; continue; }
-      real_to_raw+=("$raw_idx")
-      prompts+=("$content")
-      pending_real=$(( ${#real_to_raw[@]} - 1 ))
-    elif [ "$role" = "A" ] && [ "$pending_real" -ge 0 ]; then
-      # Got assistant text for the pending prompt
-      resp_status[$pending_real]="1"
-      pending_real=-1
-    fi
-  done < <(jq -r '
-    if .type == "user" and (.message.content | type == "string") then
-      ["U", (.isMeta // false | tostring), (.message.content | .[:100] | gsub("\n"; " "))] | @tsv
-    elif .type == "assistant" then
-      (.message.content | if type == "array" then
-        [.[] | select(.type == "text") | .text] | join("")
-      else . end) as $t |
-      if ($t | length) > 0 then ["A", "false", ""] | @tsv else empty end
-    else empty end
-  ' "$jsonl" 2>/dev/null)
-  # Handle last pending prompt
-  if [ "$pending_real" -ge 0 ]; then
-    resp_status[$pending_real]="0"
-  fi
+  while IFS=$'\t' read -r ri has_resp is_meta content; do
+    real_to_raw+=("$ri")
+    prompts+=("$content")
+    [ "$has_resp" = "true" ] && resp_status+=("1") || resp_status+=("0")
+  done < <(_ccs_build_pairs_index "$jsonl")
 
   local real_count=${#real_to_raw[@]}
 

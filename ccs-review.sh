@@ -23,15 +23,32 @@
 _ccs_tool_use_stats() {
   local jsonl="$1"
   local provider=$(_ccs_get_provider "$jsonl")
-  local pipe_cmd="cat"
+  
   if [ "$provider" = "gemini" ]; then
-    pipe_cmd="jq -c .[]"
+    jq -r '
+      (if type == "array" then . else .messages // [] end) |
+      [.[] | select(.type == "gemini" or .type == "assistant") | .toolCalls[]? | .name] |
+      map(
+        if . == "read_file" then "Read"
+        elif . == "replace" then "Edit"
+        elif . == "write_file" then "Write"
+        elif . == "run_shell_command" then "Bash"
+        elif . == "grep_search" then "Grep"
+        elif . == "glob" then "Glob"
+        elif . == "activate_skill" then "Skill"
+        elif . == "list_directory" then "List"
+        elif . == "google_web_search" then "Search"
+        else . end
+      ) |
+      group_by(.) | map({(.[0]): length}) | add // {}
+    ' "$jsonl" 2>/dev/null
+  else
+    jq -s '
+      [.[] | select(.type == "assistant") |
+       .message.content[]? | select(.type == "tool_use") | .name] |
+      group_by(.) | map({(.[0]): length}) | add // {}
+    ' "$jsonl" 2>/dev/null
   fi
-  eval "$pipe_cmd '$jsonl'" 2>/dev/null | jq -s '
-    [.[] | select(.type == "assistant") |
-     .message.content[]? | select(.type == "tool_use") | .name] |
-    group_by(.) | map({(.[0]): length}) | add // {}
-  ' 2>/dev/null
 }
 
 # ── Cache: write LLM summary ──
@@ -64,36 +81,49 @@ _ccs_review_cache_read() {
 _ccs_session_stats() {
   local jsonl="$1"
   local provider=$(_ccs_get_provider "$jsonl")
-  local pipe_cmd="cat"
+
+  local rounds first_ts last_ts duration_min char_count
+  
   if [ "$provider" = "gemini" ]; then
-    pipe_cmd="jq -c .[]"
-  fi
-
-  local rounds
-  rounds=$(eval "$pipe_cmd '$jsonl'" 2>/dev/null | jq -s '[.[] | select(.type == "user" and (.message.content | type == "string"))] | length' 2>/dev/null)
-
-  local first_ts last_ts
-  first_ts=$(eval "$pipe_cmd '$jsonl'" 2>/dev/null | jq -r 'select(.timestamp) | .timestamp' 2>/dev/null | head -1)
-  last_ts=$(eval "$pipe_cmd '$jsonl'" 2>/dev/null | jq -r 'select(.timestamp) | .timestamp' 2>/dev/null | tail -1)
-
-  local duration_min=0
-  if [ -n "$first_ts" ] && [ -n "$last_ts" ]; then
-    local first_epoch last_epoch
-    first_epoch=$(date -d "$first_ts" +%s 2>/dev/null || echo 0)
-    last_epoch=$(date -d "$last_ts" +%s 2>/dev/null || echo 0)
-    duration_min=$(( (last_epoch - first_epoch) / 60 ))
-  fi
-
-  local char_count
-  char_count=$(eval "$pipe_cmd '$jsonl'" 2>/dev/null | jq -s '
-    [.[] |
-      if .type == "user" and (.message.content | type == "string") then
-        (.message.content | length)
-      elif .type == "assistant" then
-        ([.message.content[]? | select(.type == "text") | .text | length] | add // 0)
+    rounds=$(jq -r '(if type == "array" then . else .messages // [] end) | [.[] | select((.type == "user" or .role == "user") and .isMeta != true and ((.content // .message.content | if type == "array" then [.[]? | select(.text) | .text] | join("") else . end) | test("^<local-command|^<command-name|^<system-|^\\s*/exit|^\\s*/quit|^\\s*$") | not))] | length' "$jsonl" 2>/dev/null)
+    first_ts=$(jq -r '.startTime // empty' "$jsonl" 2>/dev/null)
+    last_ts=$(jq -r '.lastUpdated // empty' "$jsonl" 2>/dev/null)
+    duration_min=$(jq -r '
+      if .startTime and .lastUpdated then
+        ((.lastUpdated | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) - (.startTime | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601)) / 60 | floor
       else 0 end
-    ] | add // 0
-  ' 2>/dev/null)
+    ' "$jsonl" 2>/dev/null || echo 0)
+    char_count=$(jq -r '
+      (if type == "array" then . else .messages // [] end) |
+      [.[] |
+        if (.type == "user" or .role == "user" or .type == "assistant" or .type == "gemini" or .type == "model") then
+          ((.content // .message.content) | if type == "array" then [.[]? | select(.text) | .text] | join("") else (. // "") end | length)
+        else 0 end
+      ] | add // 0
+    ' "$jsonl" 2>/dev/null)
+  else
+    rounds=$(jq -s '[.[] | select(.type == "user" and (.message.content | type == "string") and .isMeta != true and (.message.content | test("^<local-command|^<command-name|^<system-|^\\s*/exit|^\\s*/quit|^\\s*$") | not))] | length' "$jsonl" 2>/dev/null)
+    first_ts=$(jq -r 'select(.timestamp) | .timestamp' "$jsonl" 2>/dev/null | head -1)
+    last_ts=$(jq -r 'select(.timestamp) | .timestamp' "$jsonl" 2>/dev/null | tail -1)
+
+    duration_min=0
+    if [ -n "$first_ts" ] && [ -n "$last_ts" ]; then
+      local first_epoch last_epoch
+      first_epoch=$(date -d "$first_ts" +%s 2>/dev/null || echo 0)
+      last_epoch=$(date -d "$last_ts" +%s 2>/dev/null || echo 0)
+      duration_min=$(( (last_epoch - first_epoch) / 60 ))
+    fi
+
+    char_count=$(jq -s '
+      [.[] |
+        if .type == "user" and (.message.content | type == "string") then
+          (.message.content | length)
+        elif .type == "assistant" then
+          ([.message.content[]? | select(.type == "text") | .text | length] | add // 0)
+        else 0 end
+      ] | add // 0
+    ' "$jsonl" 2>/dev/null)
+  fi
 
   local token_estimate=$(( char_count * 10 / 25 ))
 
@@ -123,12 +153,22 @@ _ccs_review_json() {
   local sid
   sid=$(basename "$jsonl" | sed -e 's/\.jsonl$//' -e 's/\.json$//')
 
-  local dir project
-  dir=$(basename "$(dirname "$jsonl")")
-  project=$(_ccs_resolve_project_path "$dir" 2>/dev/null || echo "$dir")
+  local project
+  if [ "$(_ccs_get_provider "$jsonl")" = "gemini" ]; then
+    # Gemini: Project is the directory name above "chats"
+    project=$(basename "$(dirname "$(dirname "$jsonl")")")
+  else
+    local dir
+    dir=$(basename "$(dirname "$jsonl")")
+    project=$(_ccs_resolve_project_path "$dir" 2>/dev/null || echo "$dir")
+  fi
 
   local model
-  model=$(jq -r 'select(.type == "assistant") | .message.model // empty' "$jsonl" 2>/dev/null | head -1)
+  if [ "$(_ccs_get_provider "$jsonl")" = "gemini" ]; then
+    model=$(jq -r '(if type == "array" then . else .messages // [] end)[] | select(.type == "gemini" or .type == "assistant") | .model // empty' "$jsonl" 2>/dev/null | head -1)
+  else
+    model=$(jq -r 'select(.type == "assistant") | .message.model // empty' "$jsonl" 2>/dev/null | head -1)
+  fi
   [ -z "$model" ] && model="unknown"
 
   local topic
@@ -139,55 +179,64 @@ _ccs_review_json() {
 
   # Todos: extract from LAST TodoWrite call only
   local todos_json
-  todos_json=$(jq -s '
-    [.[] | select(.type == "assistant") |
-     .message.content[]? |
-     select(.type == "tool_use" and .name == "TodoWrite")] |
-    if length > 0 then
-      last | .input.todos | map({status: .status, content: .content})
-    else [] end
-  ' "$jsonl" 2>/dev/null)
+  if [ "$(_ccs_get_provider "$jsonl")" = "gemini" ]; then
+    todos_json=$(jq -c '(if type == "array" then . else .messages // [] end) | [.[] | select(.type == "gemini" or .type == "assistant") | .toolCalls[]? | select(.name == "write_todos")] | if length > 0 then last | .args.todos | map({status: .status, content: .content}) else [] end' "$jsonl" 2>/dev/null)
+  else
+    todos_json=$(jq -s '
+      [.[] | select(.type == "assistant") |
+       .message.content[]? |
+       select(.type == "tool_use" and .name == "TodoWrite")] |
+      if length > 0 then
+        last | .input.todos | map({status: .status, content: .content})
+      else [] end
+    ' "$jsonl" 2>/dev/null)
+  fi
   [ -z "$todos_json" ] || [ "$todos_json" = "null" ] && todos_json="[]"
 
   # Recent files
   local recent_files
-  recent_files=$(_ccs_recent_files_md "$jsonl")
+  recent_files=$(_ccs_recent_files_md "$jsonl" | sed 's/^R /📖 Read /; s/^E /✏️ Edit /; s/^W /📝 Write /; s/^\$ /💻 Bash /; s/^🔍 Grep /🔍 Grep /; s/^🔍 Glob /🔍 Glob /')
   local recent_json
   recent_json=$(echo "$recent_files" | jq -Rs 'split("\n") | map(select(length > 0))' 2>/dev/null)
   [ -z "$recent_json" ] && recent_json="[]"
 
   # Conversation pairs
-  local pair_count conv_json="[]"
-  pair_count=$(jq -s '[.[] | select(.type == "user" and (.message.content | type == "string"))] | length' "$jsonl" 2>/dev/null)
-  if [ "$pair_count" -gt 0 ]; then
+  local conv_json="[]"
+  local -a real_indices=()
+  real_indices=($(_ccs_build_pairs_index "$jsonl" | cut -f1))
+
+  if [ ${#real_indices[@]} -gt 0 ]; then
     local pairs_arr="["
-    local i
-    for (( i=1; i<=pair_count; i++ )); do
+    local idx i=1
+    for idx in "${real_indices[@]}"; do
       local pair_data user_text asst_text tools_text
-      pair_data=$(_ccs_get_pair "$jsonl" "$i")
+      pair_data=$(_ccs_get_pair "$jsonl" "$idx")
       user_text=$(echo "$pair_data" | jq -r 'select(.role == "user") | .text' 2>/dev/null)
       asst_text=$(echo "$pair_data" | jq -r 'select(.role == "assistant") | .text' 2>/dev/null)
 
       # Extract tool names for this pair
-      tools_text=$(jq -c '
-        if .type == "user" and (.message.content | type == "string") then
-          {role: "user", text: .message.content}
-        elif .type == "assistant" then
-          (.message.content | if type == "array" then
-            [.[] | select(.type == "tool_use") |
-              if .name == "Read" then "Read " + .input.file_path
-              elif .name == "Edit" then "Edit " + .input.file_path
-              elif .name == "Write" then "Write " + .input.file_path
-              elif .name == "Bash" then "Bash: " + (.input.command | split("\n") | first | .[:60])
-              elif .name == "Grep" then "Grep " + .input.pattern
-              elif .name == "Agent" then "Agent: " + (.input.description // "")
-              else .name end
-            ] | join("\n")
-          else "" end) as $tools |
-          {role: "assistant", tools: $tools}
-        else empty end
-      ' "$jsonl" 2>/dev/null \
-        | jq -sc --argjson idx "$i" '
+      if [ "$(_ccs_get_provider "$jsonl")" = "gemini" ]; then
+        tools_text=$(jq -c '
+          (if type == "array" then . else .messages // [] end)[] |
+          if (.type == "user" or .role == "user") then
+            {role: "user", text: ((.content // .message.content) | if type == "array" then [.[]? | select(.text) | .text] | join("\n") else . end)}
+          elif (.type == "assistant" or .type == "gemini" or .type == "model") then
+            (.toolCalls | if type == "array" then
+              [.[]? |
+                if .name == "read_file" then "📖 Read " + (.args.file_path // "")
+                elif .name == "replace" then "✏️ Edit " + (.args.file_path // "")
+                elif .name == "write_file" then "📝 Write " + (.args.file_path // "")
+                elif .name == "run_shell_command" then "💻 Bash: " + (.args.command | split("\n") | first | .[:60])
+                elif .name == "grep_search" then "🔍 Grep " + .args.pattern
+                elif .name == "glob" then "🔍 Glob " + .args.pattern
+                elif .name == "activate_skill" then "🤖 Skill: " + .args.name
+                else "🔧 " + .name end
+              ] | join("\n")
+            else "" end) as $tools |
+            {role: "assistant", tools: $tools}
+          else empty end
+        ' "$jsonl" 2>/dev/null \
+        | jq -sc --argjson idx "$idx" '
           . as $arr |
           [to_entries[] | select(.value.role == "user")] as $users |
           if ($idx < 1 or $idx > ($users | length)) then ""
@@ -198,6 +247,38 @@ _ccs_review_json() {
             map(select(length > 0)) | join("\n")
           end
         ')
+      else
+        tools_text=$(jq -c '
+          if .type == "user" and (.message.content | type == "string") then
+            {role: "user", text: .message.content}
+          elif .type == "assistant" then
+            (.message.content | if type == "array" then
+              [.[] | select(.type == "tool_use") |
+                if .name == "Read" then "📖 Read " + .input.file_path
+                elif .name == "Edit" then "✏️ Edit " + .input.file_path
+                elif .name == "Write" then "📝 Write " + .input.file_path
+                elif .name == "Bash" then "💻 Bash: " + (.input.command | split("\n") | first | .[:60])
+                elif .name == "Grep" then "🔍 Grep " + .input.pattern
+                elif .name == "Glob" then "🔍 Glob " + .input.pattern
+                elif .name == "Agent" then "🤖 Agent: " + (.input.description // "")
+                else "🔧 " + .name end
+              ] | join("\n")
+            else "" end) as $tools |
+            {role: "assistant", tools: $tools}
+          else empty end
+        ' "$jsonl" 2>/dev/null \
+        | jq -sc --argjson idx "$idx" '
+          . as $arr |
+          [to_entries[] | select(.value.role == "user")] as $users |
+          if ($idx < 1 or $idx > ($users | length)) then ""
+          else
+            $users[$idx - 1].key as $spos |
+            (if $idx < ($users | length) then $users[$idx].key else ($arr | length) end) as $epos |
+            [$arr[$spos + 1 : $epos][] | select(.role == "assistant") | .tools] |
+            map(select(length > 0)) | join("\n")
+          end
+        ')
+      fi
 
       local tools_json
       tools_json=$(echo "$tools_text" | jq -Rs 'split("\n") | map(select(length > 0))' 2>/dev/null)
@@ -209,6 +290,7 @@ _ccs_review_json() {
         --arg asst "$asst_text" \
         --argjson tools "$tools_json" \
         '{index: $idx, user: $user, assistant: $asst, tools: $tools}')
+      i=$((i+1))
     done
     pairs_arr+="]"
     conv_json="$pairs_arr"
@@ -231,9 +313,12 @@ _ccs_review_json() {
     git_json=$(jq -n --arg b "$branch" --argjson c "$recent_commits" '{branch: $b, recent_commits: $c}')
   fi
 
+  local provider=$(_ccs_get_provider "$jsonl")
+
   # Assemble
   jq -n \
     --arg sid "$sid" \
+    --arg provider "$provider" \
     --arg project "$project" \
     --arg topic "$topic" \
     --arg model "$model" \
@@ -245,6 +330,7 @@ _ccs_review_json() {
     --argjson conv "$conv_json" \
     '{
       session_id: $sid,
+      provider: $provider,
       project: $project,
       topic: $topic,
       model: $model,
@@ -269,7 +355,7 @@ _ccs_review_md() {
   local json
   json=$(cat)
 
-  local topic project duration rounds chars tokens model
+  local topic project duration rounds chars tokens model provider
   topic=$(echo "$json" | jq -r '.topic')
   project=$(echo "$json" | jq -r '.project')
   duration=$(echo "$json" | jq -r '.time_range.duration_min')
@@ -277,6 +363,11 @@ _ccs_review_md() {
   chars=$(echo "$json" | jq -r '.stats.char_count')
   tokens=$(echo "$json" | jq -r '.stats.token_estimate')
   model=$(echo "$json" | jq -r '.model')
+  provider=$(echo "$json" | jq -r '.provider')
+
+  local asst_label="Claude"
+  [ "$provider" = "gemini" ] && asst_label="Gemini"
+
   local start_time end_time
   start_time=$(echo "$json" | jq -r '.time_range.start')
   end_time=$(echo "$json" | jq -r '.time_range.end')
@@ -345,8 +436,9 @@ EOF
     echo ""
     echo "## 對話紀錄"
     echo ""
-    echo "$json" | jq -r '.conversation[] |
-      "### [\(.index)] User\n\(.user)\n\n### [\(.index)] Claude\n\(.assistant)\n"'
+    echo "$json" | jq -r --arg asst "$asst_label" '.conversation[] |
+      "### [\(.index)] User\n\(.user)\n\n### [\(.index)] \($asst)\n\(.assistant)\n" +
+      (if (.tools | length) > 0 then "#### Tools\n- " + (.tools | join("\n- ")) + "\n\n" else "" end)'
   fi
 }
 

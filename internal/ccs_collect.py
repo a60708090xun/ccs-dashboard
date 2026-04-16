@@ -197,7 +197,8 @@ def process_gemini_file(filepath):
     try:
         with open(filepath, 'r', encoding='utf-8') as f:
             data = json.load(f)
-    except Exception:
+    except Exception as e:
+        print(f"DEBUG: Failed to load {filepath}: {e}", file=sys.stderr)
         return None
         
     filename = os.path.basename(filepath)
@@ -205,10 +206,11 @@ def process_gemini_file(filepath):
         sid = data.get('sessionId', filename.replace('.json', ''))
         last_updated_val = data.get('lastUpdated', 0)
     else:
+        print(f"DEBUG: Data in {filepath} is not a dict: {type(data)}", file=sys.stderr)
         sid = filename.replace('.json', '')
         last_updated_val = 0
         
-    display_sid = sid.split('-')[-1][:8] if '-' in sid else sid[:8]
+    display_sid = sid[:8]
     
     if last_updated_val is None: last_updated_val = 0
     
@@ -240,7 +242,8 @@ def process_gemini_file(filepath):
     if ago_mins < 0: ago_mins = 0
     
     is_archived = data.get('archived') is True
-    status, color = get_status_and_color(ago_mins, is_archived)    ago_str = get_ago_str(ago_mins)
+    status, color = get_status_and_color(ago_mins, is_archived)
+    ago_str = get_ago_str(ago_mins)
     topic = get_gemini_topic(data)
     
     # Project is the dir name above 'chats'

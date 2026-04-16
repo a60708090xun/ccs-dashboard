@@ -84,36 +84,34 @@ _ccs_topic_from_jsonl() {
   local topic=""
   local provider=$(_ccs_get_provider "$f")
   
-  if grep -q "change_title" "$f" 2>/dev/null; then
-    if [ "$provider" = "gemini" ]; then
-      # Gemini can be top-level array or object with .messages
-      # New object format (v0.35+): .messages[] | .toolCalls[]
-      topic=$(jq -r '
-        (if type == "array" then . else .messages // [] end)[]? |
-        select(.type == "gemini" or .type == "assistant" or .type == "model" or .role == "model") |
-        (
-          (.toolCalls[]? | select(.name == "mcp__happy__change_title") | .args.title) //
-          (.content[]? | select(.type == "toolCall" and .name == "mcp__happy__change_title") | .args.title) //
-          (select(.type == "tool_use" and .name == "mcp__happy__change_title") | .input.title)
-        )
-      ' "$f" 2>/dev/null | tail -1)
-    else
+  if [ "$provider" = "gemini" ]; then
+    # Check toolCalls for title change (support both .messages[] and top-level array)
+    topic=$(jq -r '
+      (if type == "array" then . else .messages // [] end)[]? |
+      select(.toolCalls) | .toolCalls[] |
+      select(.name == "mcp__happy__change_title") |
+      .args.title' "$f" 2>/dev/null | tail -1)
+  else
+    if grep -q "change_title" "$f" 2>/dev/null; then
       topic=$(grep "change_title" "$f" 2>/dev/null | jq -r '
         .message.content[]? |
         select(.type == "tool_use" and .name == "mcp__happy__change_title") |
         .input.title' 2>/dev/null | tail -1)
     fi
   fi
+
   if [ -z "$topic" ]; then
     # Find first real user message (skip meta, local-command, system tags, slash commands)
     # Strip XML tags from content to avoid <command-message> etc. leaking into topic
     if [ "$provider" = "gemini" ]; then
       topic=$(jq -r '
-        (if type == "array" then . else .messages // [] end)[]? |
-        select((.type == "user" or .role == "user") and ((.isMeta // false) == false)) |
-        (.content | if type == "array" then .[] | .text else . end) |
-        select(type == "string" and (test("^/") | not) and (test("^\\s*$") | not)) |
-        gsub("<[^>]+>"; "") | gsub("^\\s+|\\s+$"; "")
+        (if type == "array" then . else .messages // [] end)[]?
+        | select((.type == "user" or .role == "user") and ((.isMeta // false) == false))
+        | (.content // .message.content)
+        | if type == "array" then [.[]? | select(.text) | .text] | join(" ") else . end
+        | select(test("^<local-command|^<command-name|^<system-|^\\s*/exit|^\\s*/quit") | not)
+        | select(test("^\\s*$") | not)
+        | gsub("<[^>]+>"; "") | gsub("^\\s+|\\s+$"; "")
       ' "$f" 2>/dev/null | head -1 | tr '\n' ' ' | cut -c1-120)
     else
       topic=$(jq -r '
@@ -141,9 +139,9 @@ _ccs_resolve_jsonl() {
       echo "$result"
       return 0
     fi
-    # Fallback: search Gemini chats dirs
+    # Fallback: search Gemini chats dirs (more flexibly for UUIDs)
     local gemini_dir="${CCS_GEMINI_DIR:-$HOME/.gemini}"
-    find "$gemini_dir/tmp" -maxdepth 3 -path "*/chats/${prefix}*.json" 2>/dev/null | head -1
+    find "$gemini_dir/tmp" -maxdepth 3 \( -name "*${prefix}*.json" \) 2>/dev/null | grep "/chats/" | head -1
   else
     local search_dirs=()
     if [ "$search_all" = "true" ]; then
@@ -177,13 +175,41 @@ _ccs_resolve_jsonl() {
 }
 
 # ── Helper: extract prompt-response pairs index from JSONL ──
-# Output: tab-separated lines: prompt_line_num \t prompt_text_preview
+# Output: tab-separated lines: real_idx \t has_resp \t is_meta \t preview
 _ccs_build_pairs_index() {
   local jsonl="$1"
-  # Extract all user prompts (string content = real user input, not tool_result)
-  # and the next assistant text response after each
-  jq -r 'select(.type == "user" and (.message.content | type == "string")) | .message.content | gsub("\n"; " ") | .[:120]' "$jsonl" 2>/dev/null \
-    | cat -n
+  local provider=$(_ccs_get_provider "$jsonl")
+  
+  local jq_user_filter
+  if [ "$provider" = "gemini" ]; then
+    jq_user_filter='select(.value.type == "user" or .value.role == "user")
+      | select(.value.isMeta != true)
+      | (.value.content // .value.message.content | if type == "array" then [.[]? | select(.text) | .text] | join(" ") else . end) as $txt
+      | select($txt | test("^<local-command|^<command-name|^<system-|^\\s*/exit|^\\s*/quit") | not)
+      | select($txt | test("^\\s*$") | not)'
+  else
+    jq_user_filter='select(.value.type == "user" and (.value.message.content | type == "string"))
+      | select(.value.isMeta != true)
+      | select(.value.message.content | test("^<local-command|^<command-name|^<system-|^\\s*/exit|^\\s*/quit") | not)
+      | select(.value.message.content | test("^\\s*$") | not)'
+  fi
+
+  jq -r "
+    (if type == \"array\" then . else .messages // [] end)
+    | to_entries as \$all
+    | [ \$all[] | select(.value.type == \"user\" or .value.role == \"user\") ] as \$all_users
+    | [ \$all[] | $jq_user_filter ] as \$filtered_users
+    | range(0; (\$filtered_users | length)) as \$i
+    | \$filtered_users[\$i] as \$u
+    | (\$u.key) as \$start_pos
+    | (\$all_users | map(.key == \$u.key) | index(true) + 1) as \$ri
+    | (if \$i + 1 < (\$filtered_users | length) then \$filtered_users[\$i+1].key else (\$all | length) end) as \$end_pos
+    | (\$all[\$start_pos + 1 : \$end_pos] | map(select(.value.type == \"assistant\" or .value.type == \"gemini\" or .value.type == \"model\" or .value.role == \"assistant\" or .value.role == \"model\")) | length > 0 | tostring) as \$has_resp
+    | (\$u.value.content // \$u.value.message.content | if type == \"array\" then [.[]? | select(.text) | .text] | join(\" \") else . end) as \$text
+    | (\$u.value.isMeta // false | tostring) as \$is_meta
+    | (\$text | .[:120] | gsub(\"\\n\"; \" \")) as \$preview
+    | \"\(\$ri)\t\(\$has_resp)\t\(\$is_meta)\t\(\$preview)\"
+  " "$jsonl" 2>/dev/null
 }
 
 # ── Helper: extract the Nth prompt-response pair ──
@@ -195,32 +221,70 @@ _ccs_get_pair() {
 
   # Extract user prompts, assistant text, AND tool_use summaries
   # so interrupted turns still show what the agent was doing
-  jq -c '
-    if .type == "user" and (.message.content | type == "string") then
-      {role: "user", text: .message.content}
-    elif .type == "assistant" then
-      (.message.content | if type == "array" then
-        [.[] | select(.type == "text") | .text] | join("\n")
-      else . end) as $t |
-      (.message.content | if type == "array" then
-        [.[] | select(.type == "tool_use") |
-          if .name == "Read" then "📖 Read " + .input.file_path
-          elif .name == "Edit" then "✏️ Edit " + .input.file_path
-          elif .name == "Write" then "📝 Write " + .input.file_path
-          elif .name == "Bash" then "$ " + (.input.command | split("\n") | first | .[:80])
-          elif .name == "Grep" then "🔍 Grep " + .input.pattern
-          elif .name == "Glob" then "🔍 Glob " + .input.pattern
-          elif .name == "Agent" then "🤖 Agent: " + (.input.description // "")
-          else "🔧 " + .name end
-        ] | join("\n")
-      else "" end) as $tools |
-      (.message.content | if type == "array" then
-        [.[] | select(.type == "thinking") | "💭 (thinking...)"] | join("\n")
-      else "" end) as $thinking |
-      {role: "assistant", text: $t, tools: $tools, thinking: $thinking}
-    else empty end
-  ' "$jsonl" 2>/dev/null \
-    | jq -sc --argjson idx "$pair_idx" '
+  if [ "$(_ccs_get_provider "$jsonl")" = "gemini" ]; then
+    jq -c '
+      (if type == "array" then . else .messages // [] end)[]? |
+      if (.type == "user" or .role == "user") then
+        {role: "user", text: ((.content // .message.content) | if type == "array" then [.[]? | select(.text) | .text] | join("\n") else (. // "") end)}
+      elif (.type == "assistant" or .type == "gemini" or .type == "model" or .role == "assistant" or .role == "model") then
+        (.content // .message.content | if type == "array" then
+          [.[]? | select(.text) | .text] | join("\n")
+        elif type == "string" then .
+        else "" end) as $t |
+        (((.content // .message.content) | if type == "array" then
+          [.[]? | select(.toolCall or .type == "toolCall") | (.toolCall // .) |
+            if .name == "read_file" then "📖 Read " + (.args.file_path // "")
+            elif .name == "replace" then "✏️ Edit " + (.args.file_path // "")
+            elif .name == "write_file" then "📝 Write " + (.args.file_path // "")
+            elif .name == "run_shell_command" then "$ " + (.args.command | split("\n") | first | .[:80])
+            elif .name == "grep_search" then "🔍 Grep " + (.args.pattern // "")
+            elif .name == "glob" then "🔍 Glob " + (.args.pattern // "")
+            elif .name == "activate_skill" then "🤖 Skill: " + .args.name
+            else "🔧 " + .name end
+          ]
+        else [] end) +
+        (.toolCalls | if type == "array" then
+          [.[]? |
+            if .name == "read_file" then "📖 Read " + (.args.file_path // "")
+            elif .name == "replace" then "✏️ Edit " + (.args.file_path // "")
+            elif .name == "write_file" then "📝 Write " + (.args.file_path // "")
+            elif .name == "run_shell_command" then "$ " + (.args.command | split("\n") | first | .[:80])
+            elif .name == "grep_search" then "🔍 Grep " + (.args.pattern // "")
+            elif .name == "glob" then "🔍 Glob " + (.args.pattern // "")
+            elif .name == "activate_skill" then "🤖 Skill: " + .args.name
+            else "🔧 " + .name end
+          ]
+        else [] end) | join("\n")) as $tools |
+        {role: "assistant", text: $t, tools: $tools}
+      else empty end
+    ' "$jsonl" 2>/dev/null
+  else
+    jq -c '
+      if .type == "user" and (.message.content | type == "string") then
+        {role: "user", text: .message.content}
+      elif .type == "assistant" then
+        (.message.content | if type == "array" then
+          [.[] | select(.type == "text") | .text] | join("\n")
+        else . end) as $t |
+        (.message.content | if type == "array" then
+          [.[] | select(.type == "tool_use") |
+            if .name == "Read" then "📖 Read " + .input.file_path
+            elif .name == "Edit" then "✏️ Edit " + .input.file_path
+            elif .name == "Write" then "📝 Write " + .input.file_path
+            elif .name == "Bash" then "$ " + (.input.command | split("\n") | first | .[:80])
+            elif .name == "Grep" then "🔍 Grep " + .input.pattern
+            elif .name == "Glob" then "🔍 Glob " + .input.pattern
+            elif .name == "Agent" then "🤖 Agent: " + (.input.description // "")
+            else "🔧 " + .name end
+          ] | join("\n")
+        else "" end) as $tools |
+        (.message.content | if type == "array" then
+          [.[] | select(.type == "thinking") | "💭 (thinking...)"] | join("\n")
+        else "" end) as $thinking |
+        {role: "assistant", text: $t, tools: $tools, thinking: $thinking}
+      else empty end
+    ' "$jsonl" 2>/dev/null
+  fi | jq -sc --argjson idx "$pair_idx" '
       . as $arr |
       [to_entries[] | select(.value.role == "user")] as $users |
       if ($idx < 1 or $idx > ($users | length)) then empty
@@ -234,15 +298,18 @@ _ccs_get_pair() {
           tools: ([.[].tools] | map(select(length > 0)) | join("\n")),
           thinking: ([.[].thinking] | map(select(length > 0)) | join("\n"))
         }) as $resp |
-        if ($resp.texts | length) > 0 then
-          {role: "assistant", text: $resp.texts}
+        (if ($resp.texts | length) > 0 and ($resp.tools | length) > 0 then
+          $resp.texts + "\n\n" + $resp.tools
+        elif ($resp.texts | length) > 0 then
+          $resp.texts
         elif ($resp.tools | length) > 0 then
-          {role: "assistant", text: ("⚡ interrupted — agent was executing:\n" + $resp.tools)}
+          "⚡ interrupted — agent was executing:\n" + $resp.tools
         elif ($resp.thinking | length) > 0 then
-          {role: "assistant", text: "⚡ interrupted — agent was thinking"}
+          "⚡ interrupted — agent was thinking"
         else
-          {role: "assistant", text: ""}
-        end
+          ""
+        end) as $combined_text |
+        {role: "assistant", text: $combined_text}
       end
     '
 }
@@ -251,10 +318,21 @@ _ccs_get_pair() {
 # Usage: _ccs_conversation_md <jsonl> <pair_count> <max_user_lines> <max_asst_lines>
 _ccs_conversation_md() {
   local jsonl="$1" pair_count="${2:-5}" max_ulines="${3:-5}" max_alines="${4:-8}"
+  local provider=$(_ccs_get_provider "$jsonl")
+  local asst_label="Claude"
+  [ "$provider" = "gemini" ] && asst_label="Gemini"
 
   # Build filtered pair indices (reuse ccs-resume-prompt logic)
   local -a real_to_raw=()
   local raw_idx=0
+  
+  local jq_filter
+  if [ "$provider" = "gemini" ]; then
+    jq_filter='(if type == "array" then . else .messages // [] end)[]? | select(.type == "user" or .role == "user") | [((.isMeta // false) | tostring), ((.content // .message.content) | if type == "array" then [.[]? | select(.text) | .text] | join(" ") else . end | .[:80] | gsub("\n"; " "))] | @tsv'
+  else
+    jq_filter='select(.type == "user" and (.message.content | type == "string")) | [(.isMeta // false | tostring), (.message.content | .[:80] | gsub("\n"; " "))] | @tsv'
+  fi
+
   while IFS=$'\t' read -r is_meta content; do
     raw_idx=$((raw_idx + 1))
     [ "$is_meta" = "true" ] && continue
@@ -265,11 +343,7 @@ _ccs_conversation_md() {
     [[ "$content" =~ ^[[:space:]]*/quit ]] && continue
     [ -z "${content// /}" ] && continue
     real_to_raw+=("$raw_idx")
-  done < <(jq -r '
-    select(.type == "user" and (.message.content | type == "string")) |
-    [(.isMeta // false | tostring), (.message.content | .[:80] | gsub("\n"; " "))] |
-    @tsv
-  ' "$jsonl" 2>/dev/null)
+  done < <(jq -r "$jq_filter" "$jsonl" 2>/dev/null)
 
   local real_count=${#real_to_raw[@]}
   local start_from=$((real_count - pair_count + 1))
@@ -295,36 +369,63 @@ _ccs_conversation_md() {
 ..."
 
     printf '**[%d/%d] User:**\n%s\n\n' "$ri" "$real_count" "$user_preview"
-    printf '**[%d/%d] Claude:**\n%s\n\n' "$ri" "$real_count" "$asst_preview"
+    printf '**[%d/%d] %s:**\n%s\n\n' "$ri" "$real_count" "$asst_label" "$asst_preview"
   done
 }
 
 # ── Helper: extract recent file operations from JSONL ──
 _ccs_recent_files_md() {
   local jsonl="$1"
-  jq -r '
-    select(.type == "assistant") |
-    .message.content[]? |
-    select(.type == "tool_use") |
-    if .name == "Read" then "R " + .input.file_path
-    elif .name == "Edit" then "E " + .input.file_path
-    elif .name == "Write" then "W " + .input.file_path
-    elif .name == "Bash" then "$ " + (.input.command | split("\n") | first | .[:80])
-    else empty end
-  ' "$jsonl" 2>/dev/null | tail -15 | sort -u
+  local provider=$(_ccs_get_provider "$jsonl")
+  if [ "$provider" = "gemini" ]; then
+    jq -r '
+      (if type == "array" then . else .messages // [] end)[]? |
+      select(.type == "assistant" or .type == "gemini" or .type == "model" or .role == "assistant" or .role == "model") |
+      (.toolCalls // (.content // .message.content | if type == "array" then [.[]? | select(.toolCall or .type == "toolCall") | (.toolCall // .)] else [] end))[]? |
+      if .name == "read_file" then "R " + .args.file_path
+      elif .name == "replace" then "E " + .args.file_path
+      elif .name == "write_file" then "W " + .args.file_path
+      elif .name == "run_shell_command" then "$ " + (.args.command | split("\n") | first | .[:80])
+      elif .name == "grep_search" then "🔍 Grep " + .args.pattern
+      elif .name == "glob" then "🔍 Glob " + .args.pattern
+      else empty end
+    ' "$jsonl" 2>/dev/null | tail -15 | sort -u
+  else
+    jq -r '
+      select(.type == "assistant") |
+      .message.content[]? |
+      select(.type == "tool_use") |
+      if .name == "Read" then "R " + .input.file_path
+      elif .name == "Edit" then "E " + .input.file_path
+      elif .name == "Write" then "W " + .input.file_path
+      elif .name == "Bash" then "$ " + (.input.command | split("\n") | first | .[:80])
+      else empty end
+    ' "$jsonl" 2>/dev/null | tail -15 | sort -u
+  fi
 }
 
 # ── Helper: extract TodoWrite items from JSONL ──
 _ccs_todos_md() {
   local jsonl="$1"
-  # Find the last TodoWrite call and extract its items
-  jq -r '
-    select(.type == "assistant") |
-    .message.content[]? |
-    select(.type == "tool_use" and .name == "TodoWrite") |
-    .input.todos[]? |
-    (if .status == "completed" then "- [x] " elif .status == "in_progress" then "- [~] " else "- [ ] " end) + .content
-  ' "$jsonl" 2>/dev/null | tail -20
+  local provider=$(_ccs_get_provider "$jsonl")
+  if [ "$provider" = "gemini" ]; then
+    jq -r '
+      (if type == "array" then . else .messages // [] end)[]? |
+      select(.type == "assistant" or .type == "gemini" or .type == "model" or .role == "assistant" or .role == "model") |
+      (.toolCalls // (.content // .message.content | if type == "array" then [.[]? | select(.toolCall or .type == "toolCall") | (.toolCall // .)] else [] end))[]? |
+      select(.name == "write_todos") |
+      .args.todos[]? |
+      (if .status == "completed" then "- [x] " elif .status == "in_progress" then "- [~] " else "- [ ] " end) + .content
+    ' "$jsonl" 2>/dev/null | tail -20
+  else
+    jq -r '
+      select(.type == "assistant") |
+      .message.content[]? |
+      select(.type == "tool_use" and .name == "TodoWrite") |
+      .input.todos[]? |
+      (if .status == "completed" then "- [x] " elif .status == "in_progress" then "- [~] " else "- [ ] " end) + .content
+    ' "$jsonl" 2>/dev/null | tail -20
+  fi
 }
 
 # ── ccs-sessions [hours] — all sessions within N hours (default 24) ──
