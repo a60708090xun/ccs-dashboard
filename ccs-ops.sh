@@ -56,7 +56,7 @@ _ccs_crash_md() {
     local mtime=$(stat -c "%Y" "$f" 2>/dev/null)
     local last_time=$(date -d "@$mtime" '+%H:%M' 2>/dev/null)
 
-    echo "### $icon ${sid:0:8} — $project — $topic"
+    echo "### $icon $sid — $project — $topic"
     echo "- **Confidence:** $confidence ($path)"
     echo "- **最後活動：** $last_time（${ago_min}m ago）"
     echo "- **最後訊息：** $last_user"
@@ -270,11 +270,14 @@ _ccs_crash_clean() {
 
     local conf_path="${_map[$sid]}"
     local row="${_rows[$i]}"
+    local prov=$(echo "$row" | cut -f1)
     local project=$(echo "$row" | cut -f2)
     local topic=$(_ccs_topic_from_jsonl "$f")
+    local prov_label="Claude"
+    [ "$prov" = "G" ] && prov_label="Gemini"
 
-    printf '\n\033[1m[%d/%d]\033[0m \033[31m%s\033[0m — %s\n' \
-      "$total" "${#_map[@]}" "${sid:0:8}" "$project"
+    printf '\n\033[1m[%d/%d]\033[0m \033[31m%s\033[0m — %s (%s)\n' \
+      "$total" "${#_map[@]}" "${sid:0:8}" "$project" "$prov_label"
     printf '  Topic: %s\n' "$topic"
     printf '  Type:  %s\n' "$conf_path"
 
@@ -326,7 +329,7 @@ _ccs_crash_clean_all() {
 
 # ── ccs-crash — detect sessions interrupted by crash or unexpected reboot ──
 ccs-crash() {
-  local mode="md" reboot_window=30 idle_window=1440 show_all=false
+  local mode="md" reboot_window=30 idle_window=10080 show_all=false
   while [ $# -gt 0 ]; do
     case "$1" in
       --reboot-window) reboot_window="$2"; shift 2 ;;
@@ -373,8 +376,15 @@ HELP
   done
 
   # Collect sessions (include subagents if --all)
-  local -a session_files=() session_projects=() session_rows=()
-  _ccs_collect_sessions $($show_all && echo "--all") session_files session_projects session_rows
+  local -a session_files=() session_projects_raw=() session_rows=()
+  _ccs_collect_sessions $($show_all && echo "--all") session_files session_projects_raw session_rows
+
+  # Resolve absolute paths to enable strict matching in _ccs_detect_crash
+  local -a session_projects=()
+  local _idx
+  for ((_idx=0; _idx < ${#session_files[@]}; _idx++)); do
+    session_projects+=("$(_ccs_resolve_project_path "${session_projects_raw[$_idx]}" 2>/dev/null)")
+  done
 
   # Run detection
   local -A crash_map=()
@@ -388,7 +398,11 @@ HELP
   fi
 
   if [ ${#crash_map[@]} -eq 0 ]; then
-    echo "No crash-interrupted sessions detected."
+    if [ "$mode" = "json" ]; then
+      echo "[]"
+    else
+      echo "No crash-interrupted sessions detected."
+    fi
     return 0
   fi
 

@@ -17,16 +17,16 @@
 #   ccs-pick N       — show details for Nth session
 
 # ── Load modules ──
-source "${BASH_SOURCE[0]%/*}/ccs-core.sh"
-source "${BASH_SOURCE[0]%/*}/ccs-health.sh"
-source "${BASH_SOURCE[0]%/*}/ccs-viewer.sh"
-source "${BASH_SOURCE[0]%/*}/ccs-handoff.sh"
-source "${BASH_SOURCE[0]%/*}/ccs-overview.sh"
-source "${BASH_SOURCE[0]%/*}/ccs-feature.sh"
-source "${BASH_SOURCE[0]%/*}/ccs-ops.sh"
-source "${BASH_SOURCE[0]%/*}/ccs-dispatch.sh"
-source "${BASH_SOURCE[0]%/*}/ccs-review.sh"
-source "${BASH_SOURCE[0]%/*}/ccs-project.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/ccs-core.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/ccs-health.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/ccs-viewer.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/ccs-handoff.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/ccs-overview.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/ccs-feature.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/ccs-ops.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/ccs-dispatch.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/ccs-review.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/ccs-project.sh"
 
 # ── ccs-status (ccs) — unified session dashboard ──
 ccs-status() {
@@ -66,7 +66,7 @@ HELP
   local projects_dir="${CCS_PROJECTS_DIR:-$HOME/.claude/projects}"
 
   # ── Collect data (shared by both modes) ──
-  local open_files=()
+  local open_files=() _status_projects=()
   local script_dir
   script_dir="$_CCS_DASHBOARD_DIR"
   local sorted_rows=""
@@ -74,20 +74,24 @@ HELP
     $3 <= max_mins && $4 != "archived" { print $0 }
   ')
   while IFS='|' read -r -a cols; do
-    filepath="${cols[10]:-}"
-    [ -n "$filepath" ] && open_files+=("$filepath")
+    local filepath="${cols[10]:-}"
+    [ -n "$filepath" ] || continue
+    open_files+=("$filepath")
+    
+    local prov="${cols[0]:-}"
+    local proj="${cols[1]:-}"
+    if [ "$prov" = "C" ]; then
+      # Claude: use encoded dirname
+      local _dname=$(basename "$(dirname "$filepath")")
+      _status_projects+=("$(_ccs_resolve_project_path "$_dname" 2>/dev/null)")
+    else
+      # Gemini: project name IS the relative project path in ccs_collect.py
+      _status_projects+=("$(_ccs_resolve_project_path "$proj" 2>/dev/null)")
+    fi
   done <<< "$sorted_rows"
-
 
   # Crash detection
   declare -A crash_map
-  local -a _status_projects=()
-  local _sf
-  for _sf in "${open_files[@]}"; do
-    local _dname
-    _dname=$(basename "$(dirname "$_sf")")
-    _status_projects+=("$(_ccs_resolve_project_path "$_dname" 2>/dev/null)")
-  done
   _ccs_detect_crash crash_map open_files _status_projects 2>/dev/null
 
   # Build crash lookup (full sid)
