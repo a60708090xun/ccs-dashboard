@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [Semantic Versioning](https://semver.org/).
 
+## [0.3.2] — 2026-04-17
+
+### Fixed
+
+- **Gemini Crash Detection Accuracy** — Improved process detection to support node-wrapped instances (NVM) and resolved false positives via absolute project path matching. (GH#39, PR #48)
+- **Crash Window Synchronization** — Unified the 7-day (10080 min) detection window across status, crash, and active commands.
+- **Archive Consistency** — Ensured archived sessions are excluded from `ccs-sessions` and `ccs-active` by default.
+- **Source Loading** — Fixed "Not a directory" errors in `ccs-dashboard.sh` when sourced from the current directory.
+- **UI Clarity** — Added `(Claude)` / `(Gemini)` provider labels to the `ccs-crash --clean` interactive interface.
+
 ## [0.3.1] — 2026-04-16
 
 ### Added
