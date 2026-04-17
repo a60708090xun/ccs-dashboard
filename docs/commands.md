@@ -5,10 +5,10 @@
 ## ccs-status (ccs)
 
 一眼掌握所有 Provider (Claude, Gemini 等) 的 session 狀態，分四個區塊：
-1. **Active Sessions** — 近 1 天內有活動的未封存 session
+1. **Active Sessions** — 近 7 天內有活動的未封存 session
 2. **Crashed Sessions** — crash-interrupted session（由 `ccs-crash` 偵測邏輯判定）
 3. **Zombie Processes** — 被 suspend 的 Code CLI process (如 claude)
-4. **Stale Sessions** — 超過 1 天未動的未封存 session
+4. **Stale Sessions** — 超過 7 天未動的未封存 session
 
 ```bash
 ccs-status          # Terminal ANSI 輸出
@@ -39,7 +39,7 @@ ccs-pick --md --full 3:9  # 完整展開第 3 個 session 的第 9 個 prompt re
 
 ## ccs-active [days]
 
-只列出未封存（open）的 session，適合快速找到還在進行中的工作。
+只列出未封存（open）的 session，適合快速找到還在進行中的工作。預設顯示 7 天內活動。
 
 ## ccs-cleanup
 
@@ -50,6 +50,22 @@ ccs-pick --md --full 3:9  # 完整展開第 3 個 session 的第 9 個 prompt re
 ccs-cleanup           # 互動確認後清理
 ccs-cleanup --dry-run # 只列出，不殺
 ccs-cleanup --force   # 跳過確認直接清理
+```
+
+## ccs-archive <SID>
+
+手動將一個 session 標記為「已結束（封存）」。
+
+這會向 Claude 的 `.jsonl` 檔案追加結束標記 `{"type":"last-prompt"}`，或在 Gemini 的 `.json` 檔案中注入 `"archived": true` 屬性。
+
+適用情境：
+- Session 已在 Happy Coder UI 中關閉，但檔案系統仍顯示為 Active。
+- Session 因為當機或強制結束而沒有寫入正常的結束標記。
+- 想要手動清理 `ccs-status` 中的活躍列表。
+
+```bash
+ccs-archive 7fe51800      # 使用 SID 前綴 (8碼)
+ccs-archive 7fe51800-8d1f-43ce-9290-6c6916af370b # 使用完整 UUID
 ```
 
 ## ccs-details [session-id-prefix]

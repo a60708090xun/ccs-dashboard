@@ -106,6 +106,7 @@ ccs-dashboard 分兩層：
 |------|------|
 | `ccs` / `ccs-status` | 統一 dashboard：活躍 session + 殭屍 process + 過期 session |
 | `ccs-cleanup` | 找出並清理被 suspend 的殭屍 process |
+| `ccs-archive` | 手動標記 Session 為已完成（存檔） |
 | `ccs-resume-prompt` | 產生精簡 bootstrap prompt（< 2000 tokens），貼入新 session 即可接手 |
 | `ccs-feature` | 以 feature/issue 為單位的跨 session 進度追蹤 |
 | `ccs-recap` | 每日工作回顧 — 跨專案彙整 session/todo/git 活動 |

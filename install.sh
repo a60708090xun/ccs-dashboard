@@ -175,6 +175,7 @@ do_install() {
   echo "  ccs-sessions        — list sessions"
   echo "  ccs-active          — list open sessions"
   echo "  ccs-cleanup         — kill zombie processes"
+  echo "  ccs-archive         — manually mark session as finished"
   echo "  ccs-details         — interactive conversation browser"
   echo "  ccs-pick N          — show session details"
   echo "  ccs-html            — HTML dashboard"

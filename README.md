@@ -106,6 +106,7 @@ ccs-dashboard has two layers:
 |---------|-------------|
 | `ccs` / `ccs-status` | Unified dashboard: active sessions + zombies + stale sessions |
 | `ccs-cleanup` | Find and kill suspended zombie processes |
+| `ccs-archive` | Manually mark a session as finished (archived) |
 | `ccs-crash` | Detect crash-interrupted sessions + `--clean`/`--clean-all` cleanup |
 | `ccs-resume-prompt` | Generate bootstrap prompt (< 2000 tokens) for new session |
 | `ccs-feature` | Track progress by feature/issue across sessions |

@@ -487,7 +487,7 @@ HELP
 ccs-active() {
   if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
     cat <<'HELP'
-ccs-active [days]  — open (non-archived) sessions within N days (default 1)
+ccs-active [days]  — open (non-archived) sessions within N days (default 7)
 [personal tool, not official Code CLI]
 
 Colors:
@@ -502,7 +502,7 @@ Topic source: Happy Coder title if set, otherwise first user message.
 HELP
     return 0
   fi
-  local days="${1:-1}"
+  local days="${1:-7}"
   local mins=$((days * 1440))
   local prev_project=""
   local count=0

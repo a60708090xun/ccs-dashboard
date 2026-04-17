@@ -45,6 +45,7 @@ description: "MANDATORY for any ccs-* command execution. Never run ccs-* command
 | tag | tag | 引導使用者執行 `ccs-tag`（assign/exclude/list/clear） |
 | handoff [dir] | h [dir] | `ccs-handoff [project-dir]` — 產生交接筆記 |
 | cleanup | cl | `ccs-cleanup --dry-run` — 殭屍偵測 |
+| archive <id> | arc | `ccs-archive <id>` — 手動標記 session 為已完成 |
 | crash | cr | `ccs-crash --md` — crash-interrupted session 偵測 |
 | refresh | r | 重新執行上一個 view |
 | checkpoint | cp | `ccs-checkpoint --md` — 進度快照（Done/WIP/Blocked） |
@@ -74,6 +75,7 @@ description: "MANDATORY for any ccs-* command execution. Never run ccs-* command
 - 「files」「檔案操作」→ files
 - 「tag」「標記」「歸類」→ tag（引導 ccs-tag 操作）
 - 「交接」「handoff」→ handoff
+- 「封存」「archive」「結束」「完成」→ archive
 - 「清理」「cleanup」「殭屍」→ cleanup
 - 「crash」「中斷」「重開機」「crash-detect」→ crash
 - 「checkpoint」「進度快照」「standup」「站會」「會議」「更新」「update」「meeting」→ checkpoint

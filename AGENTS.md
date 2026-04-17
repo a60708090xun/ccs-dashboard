@@ -37,6 +37,8 @@ Phase 3 收尾: （worktree）→ 整理 → review → merge → 清理
 
 ### Release 步驟
 
+**CRITICAL: 即使 PR 已獲准，在執行以下步驟前必須再次徵詢使用者明確授權 (如：「執行發佈」)。禁止 AI 自行決定 Push 時機。**
+
 1. 更新 `CHANGELOG.md`（[Keep a Changelog](https://keepachangelog.com/) 格式）
 2. Commit：`chore: bump version to vX.Y.Z`
 3. Tag：`git tag vX.Y.Z`

@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [Semantic Versioning](https://semver.org/).
 
+## [0.3.3] — 2026-04-17
+
+### Added
+
+- **ccs-archive <SID>** — New command to manually mark a session as finished. Supports both Claude (.jsonl) and Gemini (.json) formats.
+- **Enhanced ccs-status threshold** — Increased active session visibility from 1 day to 7 days to match `ccs-active` behavior.
+- **Complete Documentation** — Added usage guides for `ccs-archive` and synced thresholds across all manual pages.
+
 ## [0.3.2] — 2026-04-17
 
 ### Fixed
