@@ -80,14 +80,14 @@ HELP
     
     local prov="${cols[0]:-}"
     local proj="${cols[1]:-}"
+    local resolved=""
     if [ "$prov" = "C" ]; then
-      # Claude: use encoded dirname
       local _dname=$(basename "$(dirname "$filepath")")
-      _status_projects+=("$(_ccs_resolve_project_path "$_dname" 2>/dev/null)")
+      resolved=$(_ccs_resolve_project_path "$_dname" 2>/dev/null)
     else
-      # Gemini: project name IS the relative project path in ccs_collect.py
-      _status_projects+=("$(_ccs_resolve_project_path "$proj" 2>/dev/null)")
+      resolved=$(_ccs_resolve_project_path "$proj" 2>/dev/null)
     fi
+    _status_projects+=("${resolved:-$proj}")
   done <<< "$sorted_rows"
 
   # Crash detection
