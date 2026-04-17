@@ -430,10 +430,18 @@ _ccs_todos_md() {
 
 # ── ccs-sessions [hours] — all sessions within N hours (default 24) ──
 ccs-sessions() {
-  if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
+  local show_all=false
+  if [ "${1:-}" = "--all" ] || [ "${1:-}" = "-a" ]; then
+    show_all=true; shift
+  fi
+
+  if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
     cat <<'HELP'
 ccs-sessions [hours]  — all sessions within N hours (default 24)
 [personal tool, not official Code CLI]
+
+Options:
+  --all, -a    Include archived sessions
 
 Colors:
   green        active (< 10 min)
@@ -456,8 +464,11 @@ HELP
   local script_dir
   script_dir="$_CCS_DASHBOARD_DIR"
   
-  python3 "$script_dir/internal/ccs_collect.py" --all | awk -F'|' -v max_mins="$mins" '
-    $3 <= max_mins { print $0 }
+  local collect_cmd="python3 \"$script_dir/internal/ccs_collect.py\""
+  $show_all && collect_cmd="${collect_cmd} --all"
+
+  eval "$collect_cmd" | awk -F'|' -v max_mins="$mins" -v show_all="$show_all" '
+    $3 <= max_mins && (show_all == "true" || $4 != "archived") { print $0 }
   ' | while IFS='|' read -r prov proj ago status color display_proj sid ago_str topic badge filepath; do
     if [ -n "$prev_project" ] && [ "$proj" != "$prev_project" ]; then
       echo
@@ -472,11 +483,11 @@ HELP
   done
 }
 
-# ── ccs-active [days] — open (non-archived) sessions within N days (default 7) ──
+# ── ccs-active [days] — open (non-archived) sessions within N days (default 1) ──
 ccs-active() {
   if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
     cat <<'HELP'
-ccs-active [days]  — open (non-archived) sessions within N days (default 7)
+ccs-active [days]  — open (non-archived) sessions within N days (default 1)
 [personal tool, not official Code CLI]
 
 Colors:
@@ -491,7 +502,7 @@ Topic source: Happy Coder title if set, otherwise first user message.
 HELP
     return 0
   fi
-  local days="${1:-7}"
+  local days="${1:-1}"
   local mins=$((days * 1440))
   local prev_project=""
   local count=0
@@ -509,23 +520,22 @@ HELP
     $3 <= max_mins && $4 != "archived" { print $0 }
   ')
 
-  while IFS='|' read -r _ _ _ _ _ _ _ _ _ _ filepath; do
-    [ -n "$filepath" ] && open_files+=("$filepath")
+  while IFS='|' read -r prov proj ago status color display_proj sid ago_str topic badge filepath; do
+    [ -z "$filepath" ] && continue
+    open_files+=("$filepath")
+    
+    # Resolve absolute path for crash detection
+    if [ "$prov" = "C" ]; then
+      local _dname=$(basename "$(dirname "$filepath")")
+      _active_projects+=("$(_ccs_resolve_project_path "$_dname" 2>/dev/null)")
+    else
+      # Gemini: project name IS the relative project path
+      _active_projects+=("$(_ccs_resolve_project_path "$proj" 2>/dev/null)")
+    fi
   done <<< "$sorted_rows"
 
-  # Pass 1.5: detect crash-interrupted sessions (only for Claude for now)
+  # Pass 1.5: detect crash-interrupted sessions
   declare -A crash_map
-  local -a _active_projects=()
-  local _af
-  for _af in "${open_files[@]}"; do
-    if [[ "$_af" == *.jsonl ]]; then
-      local _dir_name
-      _dir_name=$(basename "$(dirname "$_af")")
-      _active_projects+=("$(_ccs_resolve_project_path "$_dir_name" 2>/dev/null)")
-    else
-      _active_projects+=("")
-    fi
-  done
   _ccs_detect_crash crash_map open_files _active_projects 2>/dev/null
 
   # Build 8-char sid prefix → crash info lookup
@@ -544,8 +554,8 @@ HELP
     fi
     prev_project="$proj"
 
-    # Override color for crashed sessions (Claude only)
-    if [ "$prov" = "C" ] && [ -n "${crash_short[$sid]+x}" ]; then
+    # Override color for crashed sessions
+    if [ -n "${crash_short[$sid]+x}" ]; then
       local crash_info="${crash_short[$sid]}"
       local confidence="${crash_info%%:*}"
       if [ "$confidence" = "high" ]; then
@@ -695,7 +705,7 @@ _ccs_get_boot_epoch() {
 # crash_map[session_id] = "high:reboot" | "high:reboot-idle" | "high:non-reboot" | "high:non-reboot-idle" | "high:hung"
 _ccs_detect_crash() {
   local -n _crash_out=$1; shift
-  local reboot_window=30 idle_window=1440 hung_threshold=3600
+  local reboot_window=30 idle_window=10080 hung_threshold=3600
 
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -745,7 +755,8 @@ _ccs_detect_crash() {
     for p in $(pgrep -u "$(id -u)" -f "claude.*--output-format" 2>/dev/null) \
              $(pgrep -u "$(id -u)" -x "claude" 2>/dev/null) \
              $(pgrep -u "$(id -u)" -x "gemini" 2>/dev/null) \
-             $(pgrep -u "$(id -u)" -f "bin/gemini|index.mjs gemini|happy-coder" 2>/dev/null); do
+             $(pgrep -u "$(id -u)" -f "gemini" 2>/dev/null) \
+             $(pgrep -u "$(id -u)" -f "happy-coder" 2>/dev/null); do
       readlink "/proc/$p/cwd" 2>/dev/null
     done
   } | sort -u | sed 's/[\/._]/-/g; s/--*/-/g; s/^-//')
@@ -771,7 +782,14 @@ _ccs_detect_crash() {
     fi
     [ -n "$mtime" ] || continue
     sid=$(basename "$f" | sed -e 's/\.jsonl$//' -e 's/\.json$//')
-    echo "DEBUG: checking $sid, f=$f, mtime=$mtime, age=$((now-mtime))" >&2
+
+    # Skip archived sessions
+    if [[ "$f" == *.json ]]; then
+      if jq -e '.archived == true' "$f" &>/dev/null; then continue; fi
+    else
+      # Quick check for last-prompt in JSONL (usually at the very end)
+      if tail -n 1 "$f" 2>/dev/null | grep -q '"type":"last-prompt"'; then continue; fi
+    fi
 
     # Path 1: Reboot detection
     # Any pre-boot session without a running process was killed by reboot.
@@ -803,9 +821,10 @@ _ccs_detect_crash() {
       is_running_exact=true
     elif [ -n "${_cd_projects[$i]}" ]; then
       # Normalize project dir name to match normalized cwds
-      # Both sides: replace /._  with -, collapse multiple -, strip leading -
       local _proj_normalized
       _proj_normalized=$(echo "${_cd_projects[$i]}" | sed 's/[\/._]/-/g; s/--*/-/g; s/^-//')
+      
+      # Match normalized project path as a suffix of running CWDs
       [ -n "$_proj_normalized" ] && echo "$running_cwds_normalized" | grep -qE ".*$_proj_normalized$" &&
       is_running_cwd=true
     fi
