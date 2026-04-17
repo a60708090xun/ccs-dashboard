@@ -327,6 +327,39 @@ _ccs_crash_clean_all() {
   printf '\n\033[1mDone:\033[0m %d sessions archived.\n' "$archived"
 }
 
+# ── ccs-archive <SID> — manually mark a session as archived/finished ──
+ccs-archive() {
+  if [ -z "$1" ] || [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
+    cat <<'HELP'
+ccs-archive <SID>  — manually mark a session as archived/finished
+[personal tool, not official Code CLI]
+
+Appends the termination marker to a session file so it no longer
+appears in Active/Fresh lists. Supports both Claude and Gemini.
+
+Example:
+  ccs-archive 7fe51800
+HELP
+    return 0
+  fi
+
+  local sid="$1"
+  local f
+  f=$(_ccs_resolve_jsonl "$sid")
+  if [ -z "$f" ]; then
+    printf "\033[31mError:\033[0m Session not found: %s\n" "$sid"
+    return 1
+  fi
+
+  printf "Archiving %s (%s)...\n" "$sid" "$(_ccs_get_provider "$f")"
+  if _ccs_archive_session "$f"; then
+    printf "\033[32mSuccess.\033[0m Session marked as archived.\n"
+  else
+    printf "\033[31mFailed\033[0m to archive session.\n"
+    return 1
+  fi
+}
+
 # ── ccs-crash — detect sessions interrupted by crash or unexpected reboot ──
 ccs-crash() {
   local mode="md" reboot_window=30 idle_window=10080 show_all=false
