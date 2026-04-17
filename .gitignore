@@ -4,3 +4,11 @@ tmp/
 *.bak
 *~
 .worktrees/
+
+# Agent internal documents (AGENTS.md rules)
+internal/
+
+# Debug artifacts
+*.log
+collector_all.txt
+duck.json
