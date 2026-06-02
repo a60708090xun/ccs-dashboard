@@ -21,34 +21,66 @@ _ccs_overview_session_data() {
     jq_deadline_filter='select(.type == "user" and (.message.content | type == "string") and ((.isMeta // false) == false)) | .message.content'
   fi
 
-  # --- Last Exchange (last non-meta user-assistant pair) ---
-  # _ccs_get_pair expects a 1-based index into ALL user prompts (including meta).
-  # We need to find the raw index of the last non-meta, non-system user prompt.
-  # Strategy: enumerate all user prompts with their raw 1-based index,
-  # filter out meta/system, take the last one's raw index.
+  # --- Last Exchange (last non-meta user prompt + following assistant) ---
   local user_text="" asst_text=""
-  local last_raw_idx
-  last_raw_idx=$(jq -c "$jq_user_filter" "$jsonl" 2>/dev/null \
-    | jq -sc '
-      [to_entries[] | {
-        raw_idx: (.key + 1),
-        is_meta: (.value.isMeta // false),
-        content: .value.content
-      }]
-      | [.[] | select(
-          .is_meta == false
-          and (.content | type == "string")
-          and (.content | test("^\\s*/exit|^\\s*/quit|^<local-command|^<command-name|^<system-") | not)
-          and (.content | test("^\\s*$") | not)
-        )]
-      | last | .raw_idx // 0
-    ')
-
-  if [ -n "$last_raw_idx" ] && [ "$last_raw_idx" -gt 0 ]; then
-    local pair_json
-    pair_json=$(_ccs_get_pair "$jsonl" "$last_raw_idx")
-    user_text=$(echo "$pair_json" | head -1 | jq -r '.text // ""' 2>/dev/null | head -1 | cut -c1-120)
-    asst_text=$(echo "$pair_json" | tail -1 | jq -r '.text // ""' 2>/dev/null | head -2 | cut -c1-200)
+  if [ "$provider" = "gemini" ]; then
+    # Gemini path: unchanged (out of scope for issue #50).
+    local last_raw_idx
+    last_raw_idx=$(jq -c "$jq_user_filter" "$jsonl" 2>/dev/null \
+      | jq -sc '
+        [to_entries[] | {
+          raw_idx: (.key + 1),
+          is_meta: (.value.isMeta // false),
+          content: .value.content
+        }]
+        | [.[] | select(
+            .is_meta == false
+            and (.content | type == "string")
+            and (.content | test("^\\s*/exit|^\\s*/quit|^<local-command|^<command-name|^<system-") | not)
+            and (.content | test("^\\s*$") | not)
+          )]
+        | last | .raw_idx // 0
+      ')
+    if [ -n "$last_raw_idx" ] && [ "$last_raw_idx" -gt 0 ]; then
+      local pair_json
+      pair_json=$(_ccs_get_pair "$jsonl" "$last_raw_idx")
+      user_text=$(echo "$pair_json" | head -1 | jq -r '.text // ""' 2>/dev/null | head -1 | cut -c1-120)
+      asst_text=$(echo "$pair_json" | tail -1 | jq -r '.text // ""' 2>/dev/null | head -2 | cut -c1-200)
+    fi
+  else
+    # Claude path: self-contained, array-aware (issue #50). New Claude Code
+    # transcripts store user content as content-block arrays; extract the
+    # last non-meta prompt with real text plus the assistant text that follows.
+    local le_json
+    # Two-stage: per-line normalize first so a truncated/garbled final line
+    # (common in crash-interrupted sessions) drops out instead of aborting
+    # the whole slurp and blanking the last message.
+    le_json=$(jq -c '.' "$jsonl" 2>/dev/null | jq -sc '
+      def utext: (.message.content
+        | if type == "array" then [.[]? | select(.type == "text") | .text] | join("\n")
+          else (. // "") end);
+      . as $all
+      | ([ to_entries[]
+           | select(.value.type == "user")
+           | {pos: .key, is_meta: (.value.isMeta // false), text: (.value | utext)} ]
+         | map(select(
+             .is_meta == false
+             and (.text | test("^\\s*/exit|^\\s*/quit|^<local-command|^<command-name|^<system-") | not)
+             and (.text | test("^\\s*$") | not)))
+         | last) as $u
+      | if $u == null then {user: "", assistant: ""}
+        else {
+          user: $u.text,
+          assistant: ([ $all[($u.pos + 1):][]
+                        | select(.type == "assistant")
+                        | (.message.content
+                           | if type == "array" then [.[]? | select(.type == "text") | .text] | join("\n")
+                             else (. // "") end) ]
+                      | map(select(length > 0)) | first // "")
+        }
+        end' 2>/dev/null)
+    user_text=$(echo "$le_json" | jq -r '.user // ""' 2>/dev/null | head -1 | cut -c1-120)
+    asst_text=$(echo "$le_json" | jq -r '.assistant // ""' 2>/dev/null | head -2 | cut -c1-200)
   fi
 
   # --- Todos (last TodoWrite) ---
