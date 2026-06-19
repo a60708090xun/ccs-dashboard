@@ -704,6 +704,94 @@ _ccs_get_boot_epoch() {
   return 1
 }
 
+# ── Helper: last-activity epoch for a session file ──
+# Claude JSONL: file mtime. Gemini/exported JSON: prefer the in-file timestamp
+# (lastUpdated / last array element), fall back to file mtime.
+_ccs_session_mtime() {
+  local f="$1" mtime last_ts
+  if [[ "$f" == *.json ]]; then
+    last_ts=$(jq -r 'if type == "array" then .[-1].timestamp else .lastUpdated end // empty' "$f" 2>/dev/null)
+    if [ -n "$last_ts" ]; then
+      mtime=$(date -d "$last_ts" +%s 2>/dev/null || stat -c "%Y" "$f" 2>/dev/null)
+    else
+      mtime=$(stat -c "%Y" "$f" 2>/dev/null)
+    fi
+  else
+    mtime=$(stat -c "%Y" "$f" 2>/dev/null)
+  fi
+  echo "$mtime"
+}
+
+# ── Helper: classify session liveness by process budget (pure, no pgrep) ──
+# Decides, per (provider,cwd) group, which sessions are backed by a live entry
+# process and which are orphaned. Pure: reads records from stdin + a count file,
+# writes verdicts to stdout. No process queries -> fully unit-testable.
+#
+# Usage: _ccs_liveness_classify <countfile>
+#   stdin:  one record per line, TAB-separated:
+#             sid <TAB> group_key <TAB> mtime_epoch <TAB> is_exact(0|1)
+#           group_key is opaque (caller uses provider + normalized cwd).
+#           is_exact=1 means the sid has a --resume/--session process (alive).
+#   countfile (arg1): per-group live entry-process counts, TAB-separated:
+#             group_key <TAB> proc_count
+#   stdout: one line per input sid:  sid <TAB> alive|dead
+#
+# Allocation per group:
+#   1. exact-sid sessions are always alive and each consumes one process slot
+#   2. remaining slots = max(0, proc_count - exact_count)
+#   3. remaining slots go to the most-recent (mtime desc) non-exact sessions
+#   4. leftover non-exact sessions are dead (no backing process)
+# Over-counting processes only keeps more sessions alive (conservative); the
+# count source (pgrep -x) never misses a real local entry process, so a
+# genuinely live idle session is not killed.
+_ccs_liveness_classify() {
+  local countfile="$1"
+  awk -F'\t' -v countfile="$countfile" '
+    BEGIN {
+      while ((getline line < countfile) > 0) {
+        n = split(line, a, "\t")
+        if (n >= 2) cnt[a[1]] = a[2] + 0
+      }
+    }
+    {
+      grp = $2
+      idx[grp]++
+      i = idx[grp]
+      gsid[grp, i] = $1
+      gmt[grp, i]  = $3 + 0
+      gex[grp, i]  = $4 + 0
+      if ($4 + 0 == 1) excount[grp]++
+    }
+    END {
+      for (grp in idx) {
+        n = idx[grp]
+        rem = (cnt[grp] + 0) - (excount[grp] + 0)
+        if (rem < 0) rem = 0
+        ne = 0
+        for (i = 1; i <= n; i++) {
+          if (gex[grp, i] == 1) {
+            print gsid[grp, i] "\talive"
+          } else {
+            neidx[++ne] = i
+          }
+        }
+        # insertion sort non-exact indices by mtime descending
+        for (i = 2; i <= ne; i++) {
+          key = neidx[i]; j = i - 1
+          while (j >= 1 && gmt[grp, neidx[j]] < gmt[grp, key]) {
+            neidx[j + 1] = neidx[j]; j--
+          }
+          neidx[j + 1] = key
+        }
+        for (k = 1; k <= ne; k++) {
+          print gsid[grp, neidx[k]] "\t" (k <= rem ? "alive" : "dead")
+        }
+        delete neidx
+      }
+    }
+  '
+}
+
 # ── Helper: detect crash-interrupted sessions ──
 # Usage: declare -A crash_map; _ccs_detect_crash crash_map [--reboot-window N] [--idle-window N] [--hung-threshold N] [files_array] [projects_array]
 # crash_map[session_id] = "high:reboot" | "high:reboot-idle" | "high:non-reboot" | "high:non-reboot-idle" | "high:hung"
@@ -751,39 +839,77 @@ _ccs_detect_crash() {
   # Method 1: session IDs from --resume or --session args
   local running_sids=""
   running_sids=$(ps -eo args 2>/dev/null | grep -oP '(?<=--resume )[0-9a-f-]{36}|(?<=--session )[0-9a-f-]{36}' | sort -u)
-  # Method 2: normalized cwds of all claude or gemini processes
-  # Claude Code encodes paths by replacing /._  with -, so we normalize both sides
-  # to alphanumeric segments joined by - for comparison.
-  local running_cwds_normalized=""
-  running_cwds_normalized=$({
-    for p in $(pgrep -u "$(id -u)" -f "claude.*--output-format" 2>/dev/null) \
-             $(pgrep -u "$(id -u)" -x "claude" 2>/dev/null) \
-             $(pgrep -u "$(id -u)" -x "gemini" 2>/dev/null) \
-             $(pgrep -u "$(id -u)" -f "gemini" 2>/dev/null) \
-             $(pgrep -u "$(id -u)" -f "happy-coder" 2>/dev/null); do
-      readlink "/proc/$p/cwd" 2>/dev/null
+  # Method 2: per-(provider,cwd) live entry-process counts.
+  # A single session spawns many helper processes (launcher bash, Bash-tool
+  # children), so only the comm=claude / comm=gemini entry process is a reliable
+  # 1:1 proxy for a live session. Count them per normalized cwd; the count-aware
+  # allocator (_ccs_liveness_classify) then decides which same-cwd sessions are
+  # backed by a process and which are orphaned (e.g. left behind by /clear or an
+  # external kill). Normalize the cwd the same way project dirs are normalized so
+  # the keys match record keys built from _cd_projects.
+  # Assumption: a process's cwd normalizes to the same key as its session's
+  # project dir. readlink resolves symlinks, so a session launched through a
+  # symlinked path may not match and would be treated as orphaned (over-counting
+  # can't rescue a key *mismatch*) — acceptable: such launches are rare and the
+  # prior loose suffix match had the same readlink basis.
+  local _uid; _uid=$(id -u)
+  local running_cwd_counts=""
+  running_cwd_counts=$({
+    local p cwd norm
+    for p in $(pgrep -u "$_uid" -x claude 2>/dev/null); do
+      cwd=$(readlink "/proc/$p/cwd" 2>/dev/null) || continue
+      norm=$(printf '%s' "$cwd" | sed 's/[\/._]/-/g; s/--*/-/g; s/^-//')
+      [ -n "$norm" ] && printf 'C:%s\n' "$norm"
     done
-  } | sort -u | sed 's/[\/._]/-/g; s/--*/-/g; s/^-//')
+    for p in $(pgrep -u "$_uid" -x gemini 2>/dev/null); do
+      cwd=$(readlink "/proc/$p/cwd" 2>/dev/null) || continue
+      norm=$(printf '%s' "$cwd" | sed 's/[\/._]/-/g; s/--*/-/g; s/^-//')
+      [ -n "$norm" ] && printf 'G:%s\n' "$norm"
+    done
+  } | sort | uniq -c | awk '{print $2 "\t" $1}')
 
   local count=${#_cd_files[@]}
   local i
+
+  # ── Pre-pass: count-aware process-liveness allocation ──
+  # Emit a record per non-archived candidate and let _ccs_liveness_classify decide
+  # which same-cwd sessions are backed by a live entry process. Sessions that lose
+  # the per-cwd budget are orphans (no process) -> eligible for crash flagging
+  # below. Replaces the old binary "any process in cwd -> all alive" check, which
+  # masked dead sessions sharing a cwd with a live one (e.g. /clear leftovers).
+  # All candidates compete (regardless of age) so the budget reflects reality;
+  # the main loop still gates flagging by idle window / recency.
+  declare -A _dead_by_liveness=()
+  local _lv_sid _lv_verdict
+  while IFS=$'\t' read -r _lv_sid _lv_verdict; do
+    [ "$_lv_verdict" = "dead" ] && _dead_by_liveness["$_lv_sid"]=1
+  done < <(
+    local j jf jsid jmt jprov jnorm jexact
+    for ((j = 0; j < count; j++)); do
+      jf="${_cd_files[$j]}"
+      [ -f "$jf" ] || continue
+      if [[ "$jf" == *.json ]]; then
+        jq -e '.archived == true' "$jf" &>/dev/null && continue
+      else
+        tail -n 1 "$jf" 2>/dev/null | grep -q '"type":"last-prompt"' && continue
+      fi
+      jmt=$(_ccs_session_mtime "$jf")
+      [ -n "$jmt" ] || continue
+      jsid=$(basename "$jf" | sed -e 's/\.jsonl$//' -e 's/\.json$//')
+      if [[ "$jf" == *.json ]]; then jprov="G"; else jprov="C"; fi
+      jnorm=$(printf '%s' "${_cd_projects[$j]}" | sed 's/[\/._]/-/g; s/--*/-/g; s/^-//')
+      jexact=0
+      echo "$running_sids" | grep -qw "$jsid" && jexact=1
+      printf '%s\t%s:%s\t%s\t%s\n' "$jsid" "$jprov" "$jnorm" "$jmt" "$jexact"
+    done | _ccs_liveness_classify <(printf '%s\n' "$running_cwd_counts")
+  )
+
   for ((i = 0; i < count; i++)); do
     local f="${_cd_files[$i]}"
     [ -f "$f" ] || continue
 
     local mtime sid
-    if [[ "$f" == *.json ]]; then
-       # Claude format: [..., {"timestamp": "..."}]
-       # Gemini format: {"lastUpdated": "...", "messages": [...]}
-       local last_ts=$(jq -r 'if type == "array" then .[-1].timestamp else .lastUpdated end // empty' "$f" 2>/dev/null)
-       if [ -n "$last_ts" ]; then
-         mtime=$(date -d "$last_ts" +%s 2>/dev/null || stat -c "%Y" "$f" 2>/dev/null)
-       else
-         mtime=$(stat -c "%Y" "$f" 2>/dev/null)
-       fi
-    else
-       mtime=$(stat -c "%Y" "$f" 2>/dev/null)
-    fi
+    mtime=$(_ccs_session_mtime "$f")
     [ -n "$mtime" ] || continue
     sid=$(basename "$f" | sed -e 's/\.jsonl$//' -e 's/\.json$//')
 
@@ -817,21 +943,15 @@ _ccs_detect_crash() {
     [ "$mtime" -ge "$idle_window_start" ] || continue
     [ "$boot_epoch" -eq 0 ] || [ "$mtime" -ge "$reboot_upper" ] || continue
 
-    # Check if process is still running
-    # Method 1: exact session ID match (--resume sessions) — precise
-    # Method 2: cwd match (Happy-launched sessions without --resume) — approximate
-    local is_running_exact=false is_running_cwd=false
-    if echo "$running_sids" | grep -qw "$sid"; then
-      is_running_exact=true
-    elif [ -n "${_cd_projects[$i]}" ]; then
-      # Normalize project dir name to match normalized cwds
-      local _proj_normalized
-      _proj_normalized=$(echo "${_cd_projects[$i]}" | sed 's/[\/._]/-/g; s/--*/-/g; s/^-//')
-      
-      # Match normalized project path as a suffix of running CWDs
-      [ -n "$_proj_normalized" ] && echo "$running_cwds_normalized" | grep -qE ".*$_proj_normalized$" &&
-      is_running_cwd=true
-    fi
+    # Is this session backed by a live entry process?
+    # Method 1: exact session ID match (--resume) — precise, needed for hung detection.
+    # Method 2: count-aware cwd allocation (_ccs_liveness_classify pre-pass) — the
+    #   session held a per-cwd process slot among its peers (exact matches pinned
+    #   first, then most-recent mtime). Orphans that lost the budget are recorded
+    #   in _dead_by_liveness.
+    local is_running_exact=false is_alive=true
+    echo "$running_sids" | grep -qw "$sid" && is_running_exact=true
+    [ -n "${_dead_by_liveness[$sid]+x}" ] && is_alive=false
 
     # Skip if modified very recently — likely still active (covers fresh non-resume sessions)
     local age=$(( now - mtime ))
@@ -840,15 +960,15 @@ _ccs_detect_crash() {
     fi
 
     # Hung detection: only for exact process match (--resume).
-    # cwd match is approximate — can't tell which session a process belongs to,
-    # so skip crash detection entirely for cwd-matched sessions.
+    # A live --resume process whose session has been silent past the threshold is
+    # hung; count-aware cwd liveness can't attribute a hang to a specific session.
     if "$is_running_exact" && [ "$age" -ge "$hung_threshold" ]; then
       _crash_out["$sid"]="high:hung"
       continue
     fi
 
-    # Process running (exact or cwd) — not crashed
-    ("$is_running_exact" || "$is_running_cwd") && continue
+    # Backed by a live process (exact match or within cwd budget) — not crashed
+    "$is_alive" && continue
 
     # Check for interrupt signals in last assistant message
     # Mid-execution crash: assistant message started but contains no text content
