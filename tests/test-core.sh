@@ -254,4 +254,52 @@ JSON
 result=$(_ccs_get_pair "$G_DUCK" 1 | tail -1)
 assert_contains "G_DUCK assistant text" "$result" "Think first"
 assert_contains "G_DUCK assistant tool" "$result" "$ ls -la"
+
+echo ""
+echo "=== _ccs_is_archived: /exit detection across randomized farewells ==="
+
+# _ccs_is_archived returns an exit code; map it to archived/open for assert_eq.
+assert_archived() { # $1 desc  $2 file  $3 expected(archived|open)
+  local got
+  if _ccs_is_archived "$2"; then got=archived; else got=open; fi
+  assert_eq "$1" "$3" "$got"
+}
+
+# A clean /exit ends in 3 user events; the stdout farewell is randomized by the
+# CLI (Goodbye!, See ya!, Bye!, Catch you later!, ...), so detection must key on
+# the /exit command, not the farewell word (regression: was Goodbye!/ya! only).
+_mk_exit() { # $1 file  $2 farewell
+  cat > "$1" <<JSONL
+{"type":"assistant","message":{"content":[{"type":"text","text":"done"}]},"timestamp":"2026-06-19T09:00:00Z"}
+{"type":"user","message":{"content":"<local-command-caveat>Caveat</local-command-caveat>"},"timestamp":"2026-06-19T09:00:01Z"}
+{"type":"user","message":{"content":"<command-name>/exit</command-name> <command-message>exit</command-message>"},"timestamp":"2026-06-19T09:00:02Z"}
+{"type":"user","message":{"content":"<local-command-stdout>$2</local-command-stdout>"},"timestamp":"2026-06-19T09:00:03Z"}
+JSONL
+}
+
+for fw in "Goodbye!" "See ya!" "Bye!" "Catch you later!"; do
+  EF="$TEST_DIR/exit-${fw// /_}.jsonl"
+  _mk_exit "$EF" "$fw"
+  assert_archived "exit farewell '$fw' -> archived" "$EF" "archived"
+done
+
+# Negative: abrupt end (assistant + telemetry, no /exit) -> open
+ABRUPT="$TEST_DIR/abrupt.jsonl"
+cat > "$ABRUPT" <<'JSONL'
+{"type":"assistant","message":{"content":[{"type":"text","text":"working"}]},"timestamp":"2026-06-19T09:00:00Z"}
+{"type":"system","subtype":"stop_hook_summary","timestamp":"2026-06-19T09:00:01Z"}
+{"type":"system","subtype":"turn_duration","timestamp":"2026-06-19T09:00:02Z"}
+JSONL
+assert_archived "abrupt end (no /exit) -> open" "$ABRUPT" "open"
+
+# Negative: /exit then resumed (assistant after) -> open
+RESUMED="$TEST_DIR/resumed-after-exit.jsonl"
+cat > "$RESUMED" <<'JSONL'
+{"type":"user","message":{"content":"<command-name>/exit</command-name> <command-message>exit</command-message>"},"timestamp":"2026-06-19T09:00:00Z"}
+{"type":"user","message":{"content":"<local-command-stdout>Bye!</local-command-stdout>"},"timestamp":"2026-06-19T09:00:01Z"}
+{"type":"user","message":{"content":"actually keep going"},"timestamp":"2026-06-19T09:05:00Z"}
+{"type":"assistant","message":{"content":[{"type":"text","text":"resuming"}]},"timestamp":"2026-06-19T09:05:01Z"}
+JSONL
+assert_archived "resumed after /exit -> open" "$RESUMED" "open"
+
 test_summary

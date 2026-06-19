@@ -53,13 +53,17 @@ _ccs_is_archived() {
   fi
   # Check 1: /exit pattern (handles missing last-prompt after resume→/exit)
   # The /exit sequence writes 3 user events at the very end: caveat, command, stdout.
-  # Key signal: last line is a user event containing "Goodbye!" or "See ya!" (exit stdout).
-  # No assistant event should follow a real /exit.
+  # The stdout farewell is RANDOMIZED by the CLI (Goodbye!, See ya!, Bye!, Catch
+  # you later!, ...), so key on the /exit command in the tail, not the farewell
+  # word. Signal: last line is the user stdout event AND the /exit command sits in
+  # the last 3 lines. No assistant event follows a real /exit (a resume would
+  # append one, pushing the last line off the stdout and the command out of tail).
   local _last_type _last_content
   _last_type=$(tail -1 "$f" 2>/dev/null | python3 -c "import sys,json; d=json.loads(next(sys.stdin)); print(d.get('type',''))" 2>/dev/null)
   if [ "$_last_type" = "user" ]; then
     _last_content=$(tail -1 "$f" 2>/dev/null | python3 -c "import sys,json; d=json.loads(next(sys.stdin)); c=d.get('message',{}).get('content',''); print(c[:200] if isinstance(c,str) else str(c)[:200])" 2>/dev/null)
-    if [[ "$_last_content" == *"local-command-stdout"*"ya!"* ]] || [[ "$_last_content" == *"local-command-stdout"*"Goodbye!"* ]]; then
+    if [[ "$_last_content" == *"local-command-stdout"* ]] \
+       && tail -3 "$f" 2>/dev/null | grep -qF '<command-name>/exit</command-name>'; then
       return 0
     fi
   fi
