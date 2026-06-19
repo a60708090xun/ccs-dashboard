@@ -224,12 +224,14 @@ ccs-crash --idle-window N      # Path 2 window（分鐘，預設 1440）
 
 ### Running process 偵測
 
-判斷 session 是否仍在執行使用兩種方法：
+判斷 session 是否仍有 live process，採用 **per-cwd 數量配額**（count-aware）：
 
-1. **精確匹配**：`ps` 抓 `--resume <session-id>` 或 `--session <session-id>`（適用 `claude --resume` 或 `gemini --session` 啟動的 session）
-2. **cwd 匹配**：比對 Code CLI process (如 claude) 的工作目錄與 session 的 project 路徑（適用 Happy 啟動或 terminal 直接開的 session）。路徑使用正規化比對（`/._` 統一為 `-`）解決 Code CLI 工具路徑編碼歧義。
+1. **精確匹配**：`ps` 抓 `--resume <session-id>` 或 `--session <session-id>`（適用 `claude --resume` 或 `gemini --session` 啟動的 session）。精確匹配的 session 一律視為 alive，並佔用一個 process slot。
+2. **數量配額**：以 `pgrep -x claude` / `pgrep -x gemini`（精確 comm）計算每個 cwd 的 entry process 數——一個 session 會衍生多個輔助 process（launcher bash、Bash 工具子程序），唯有 `comm=claude`/`gemini` 的 entry process 才是 1:1 對應 session 的可靠指標。每個 cwd 扣掉精確匹配後的剩餘 slot，依 mtime 由新到舊配給同 cwd 其餘 session；配不到 slot 的 session 視為孤兒（無對應 process，例如被 `/clear` 或外部中斷遺留），落入 Path 2 判定。
 
-Hung detection 僅對精確匹配的 session 生效，cwd 匹配因無法確定 process 對應哪個 session，不做 hung 判斷。
+路徑使用正規化比對（`/._` 統一為 `-`）解決 Code CLI 工具路徑編碼歧義。配置邏輯抽為純函式 `_ccs_liveness_classify`；process 數高估只會多保留 alive，不會誤殺仍有 process 的 idle session。
+
+Hung detection 僅對精確匹配的 session 生效；數量配額無法確定某個 process 屬於哪個 session，不做 hung 判斷。
 
 ### 清理功能
 
