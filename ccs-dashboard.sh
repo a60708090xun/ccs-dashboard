@@ -487,7 +487,7 @@ HELP
 
     local total_prompts
     local provider=$(_ccs_get_provider "$jsonl")
-    local jq_filter='select(.type == "user" and (.message.content | type == "string"))'
+    local jq_filter='select(.type == "user" and (.message.content | (type == "string" or type == "array")))'
     total_prompts=$( (
       if [ "$provider" = "gemini" ]; then
         jq -c ".[]" "$jsonl" 2>/dev/null
