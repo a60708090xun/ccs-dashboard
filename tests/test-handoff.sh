@@ -8,6 +8,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 source tests/fixture-helper.sh
+source ccs-core.sh
 source ccs-handoff.sh
 
 echo "=== ccs-handoff flag handling ==="
