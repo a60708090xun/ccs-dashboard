@@ -164,4 +164,24 @@ assert_eq "weekly: has range" "2026-03-24" "$(echo "$weekly_json" | jq -r '.rang
 assert_eq "weekly: session count" "1" "$(echo "$weekly_json" | jq '.aggregate_stats.total_sessions')"
 assert_eq "weekly: has sessions array" "true" "$(echo "$weekly_json" | jq 'has("sessions")')"
 
+echo "=== _ccs_session_stats: array-content Claude session ==="
+
+E="$TEST_DIR/array-stats.jsonl"
+cat > "$E" <<'JSONL'
+{"type":"user","message":{"content":[{"type":"text","text":"implement auth"}]},"timestamp":"2026-06-01T10:00:00Z"}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/auth.py"}},{"type":"text","text":"Reading auth module."}]},"timestamp":"2026-06-01T10:05:00Z"}
+{"type":"user","message":{"content":[{"type":"text","text":"looks good"}]},"timestamp":"2026-06-01T10:10:00Z"}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Done."}]},"timestamp":"2026-06-01T10:15:00Z"}
+JSONL
+
+stats_e=$(_ccs_session_stats "$E")
+assert_eq "E: array rounds" "2" "$(echo "$stats_e" | jq -r '.rounds')"
+assert_eq "E: array char_count > 0" "true" "$(echo "$stats_e" | jq '.char_count > 0')"
+
+echo "=== _ccs_review_json: array-content conversation ==="
+
+review_e=$(_ccs_review_json "$E")
+assert_eq "E: conv length" "2" "$(echo "$review_e" | jq '.conversation | length')"
+assert_eq "E: first user text" "implement auth" "$(echo "$review_e" | jq -r '.conversation[0].user')"
+
 test_summary

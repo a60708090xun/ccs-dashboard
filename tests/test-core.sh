@@ -302,4 +302,41 @@ cat > "$RESUMED" <<'JSONL'
 JSONL
 assert_archived "resumed after /exit -> open" "$RESUMED" "open"
 
+echo "=== _ccs_build_pairs_index: Claude array-content ==="
+
+CLAUDE_ARR="$TEST_DIR/claude-array.jsonl"
+cat > "$CLAUDE_ARR" <<'JSONL'
+{"type":"user","message":{"content":[{"type":"text","text":"help me fix this"}]},"timestamp":"2026-06-01T10:00:00Z"}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/a.py"}},{"type":"text","text":"I see the issue."}]},"timestamp":"2026-06-01T10:01:00Z"}
+{"type":"user","message":{"content":[{"type":"text","text":"looks good, proceed"}]},"timestamp":"2026-06-01T10:05:00Z"}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Done."}]},"timestamp":"2026-06-01T10:10:00Z"}
+JSONL
+
+arr_index=$(_ccs_build_pairs_index "$CLAUDE_ARR")
+assert_eq "CLAUDE_ARR: pair count" "2" "$(echo "$arr_index" | wc -l | tr -d ' ')"
+assert_contains "CLAUDE_ARR: preview 1" "$arr_index" "help me fix this"
+assert_contains "CLAUDE_ARR: preview 2" "$arr_index" "looks good, proceed"
+
+echo "=== _ccs_get_pair: Claude array-content ==="
+
+arr_pair1=$(_ccs_get_pair "$CLAUDE_ARR" 1)
+assert_eq "CLAUDE_ARR: pair1 user text" \
+  "help me fix this" \
+  "$(echo "$arr_pair1" | jq -r 'select(.role == "user") | .text')"
+assert_contains "CLAUDE_ARR: pair1 asst text" \
+  "$(echo "$arr_pair1" | jq -r 'select(.role == "assistant") | .text')" \
+  "I see the issue."
+
+echo "=== _ccs_topic_from_jsonl: Claude array-content ==="
+
+assert_eq "CLAUDE_ARR: topic from array" \
+  "help me fix this " \
+  "$(_ccs_topic_from_jsonl "$CLAUDE_ARR")"
+
+echo "=== _ccs_conversation_md: Claude array-content ==="
+
+conv_md=$(_ccs_conversation_md "$CLAUDE_ARR" 5)
+assert_contains "CLAUDE_ARR: conv has user" "$conv_md" "help me fix this"
+assert_contains "CLAUDE_ARR: conv has asst" "$conv_md" "I see the issue"
+
 test_summary
