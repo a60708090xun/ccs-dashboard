@@ -23,6 +23,19 @@ SKIP_LIVE=(
 #   test-ops.sh
 #   test-status.sh
 
+for t in test_*.py; do
+  [ -f "$t" ] || continue
+  echo ""
+  echo "══ $t ══"
+  total=$((total + 1))
+  if python3 "$t" -v 2>&1; then
+    passed=$((passed + 1))
+  else
+    failed=$((failed + 1))
+    failed_tests+=("$t")
+  fi
+done
+
 for t in test-*.sh; do
   # Check skip list
   skip=false

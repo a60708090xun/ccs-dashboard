@@ -79,7 +79,7 @@ _ccs_session_row() {
   local f="$1"
   local script_dir
   script_dir="$_CCS_DASHBOARD_DIR"
-  python3 "$script_dir/internal/ccs_collect.py" --file "$f" 2>/dev/null
+  python3 "$script_dir/ccs_collect.py" --file "$f" 2>/dev/null
 }
 
 # ── Helper: resolve topic from JSONL (Happy title or first user msg) ──
@@ -468,7 +468,7 @@ HELP
   local script_dir
   script_dir="$_CCS_DASHBOARD_DIR"
   
-  local collect_cmd="python3 \"$script_dir/internal/ccs_collect.py\""
+  local collect_cmd="python3 \"$script_dir/ccs_collect.py\""
   $show_all && collect_cmd="${collect_cmd} --all"
 
   eval "$collect_cmd" | awk -F'|' -v max_mins="$mins" -v show_all="$show_all" '
@@ -520,7 +520,7 @@ HELP
   local open_files=()
   local sorted_rows=""
   
-  sorted_rows=$(python3 "$script_dir/internal/ccs_collect.py" | awk -F'|' -v max_mins="$mins" '
+  sorted_rows=$(python3 "$script_dir/ccs_collect.py" | awk -F'|' -v max_mins="$mins" '
     $3 <= max_mins && $4 != "archived" { print $0 }
   ')
 
@@ -1318,7 +1318,7 @@ _ccs_collect_sessions() {
     _out_files+=("$filepath")
     _out_projects+=("$encoded_dir")
     _out_rows+=("$(printf '%s\t%s\t%d\t%s\t%s\t%s\t%s' "$prov" "$proj" "$ago" "$status" "$color" "$display" "$badge")")
-  done < <(python3 "$script_dir/internal/ccs_collect.py" $show_all)
+  done < <(python3 "$script_dir/ccs_collect.py" $show_all)
 }
 
 # Helper: format "N ago" from minutes
