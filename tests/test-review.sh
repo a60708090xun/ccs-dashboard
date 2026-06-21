@@ -176,7 +176,7 @@ JSONL
 
 stats_e=$(_ccs_session_stats "$E")
 assert_eq "E: array rounds" "2" "$(echo "$stats_e" | jq -r '.rounds')"
-assert_eq "E: array char_count > 0" "true" "$(echo "$stats_e" | jq '.char_count > 0')"
+assert_eq "E: char_count" "49" "$(echo "$stats_e" | jq '.char_count')"
 
 echo "=== _ccs_review_json: array-content conversation ==="
 
