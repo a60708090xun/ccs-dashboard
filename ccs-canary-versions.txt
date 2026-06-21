@@ -1,0 +1,7 @@
+# claude CLI versions verified with ccs-dashboard.
+# When a new version is confirmed working, add it here.
+2.1.177
+2.1.178
+2.1.179
+2.1.183
+2.1.185
