@@ -34,8 +34,9 @@ def check_claude_archived(filepath):
                 last_line = json.loads(lines[-1])
                 if last_line.get('type') == 'user':
                     content = last_line.get('message', {}).get('content', '')
-                    if isinstance(content, str) and ('local-command-stdout' in content) and ('ya!' in content or 'Goodbye!' in content):
-                        return True
+                    if isinstance(content, str) and 'local-command-stdout' in content:
+                        if any('<command-name>/exit</command-name>' in l for l in lines[-3:]):
+                            return True
             except json.JSONDecodeError:
                 pass
 
