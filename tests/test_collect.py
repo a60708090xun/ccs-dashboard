@@ -7,7 +7,10 @@ import tempfile
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from ccs_collect import check_claude_archived, get_claude_version, process_claude_file
+from ccs_collect import (
+    check_claude_archived, get_claude_version, process_claude_file,
+    load_verified_versions, check_version_canary,
+)
 
 
 def _write_jsonl(path, lines):
@@ -154,6 +157,50 @@ class TestProcessClaudeFileVersion(unittest.TestCase):
         result = process_claude_file(p)
         self.assertIsNotNone(result)
         self.assertEqual(result['version'], '')
+
+
+class TestVersionCanary(unittest.TestCase):
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+
+    def test_check_version_canary_unverified(self):
+        sessions = [
+            {'provider': 'C', 'version': '2.1.195'},
+            {'provider': 'C', 'version': '2.1.185'},
+        ]
+        result = check_version_canary(sessions, {'2.1.185'})
+        self.assertEqual(result, ['2.1.195'])
+
+    def test_check_version_canary_all_verified(self):
+        sessions = [{'provider': 'C', 'version': '2.1.185'}]
+        self.assertEqual(check_version_canary(sessions, {'2.1.185'}), [])
+
+    def test_check_version_canary_ignores_gemini(self):
+        sessions = [{'provider': 'G', 'version': '1.0.0'}]
+        self.assertEqual(check_version_canary(sessions, set()), [])
+
+    def test_check_version_canary_ignores_empty_version(self):
+        sessions = [{'provider': 'C', 'version': ''}]
+        self.assertEqual(check_version_canary(sessions, set()), [])
+
+    def test_check_version_canary_deduplicates(self):
+        sessions = [
+            {'provider': 'C', 'version': '2.1.195'},
+            {'provider': 'C', 'version': '2.1.195'},
+        ]
+        result = check_version_canary(sessions, set())
+        self.assertEqual(result, ['2.1.195'])
+
+    def test_load_verified_versions_parses_file(self):
+        vf = os.path.join(self.tmp, 'versions.txt')
+        with open(vf, 'w') as f:
+            f.write('# comment\n2.1.185\n2.1.177\n\n')
+        self.assertEqual(load_verified_versions(vf), {'2.1.185', '2.1.177'})
+
+    def test_load_verified_versions_missing_file(self):
+        vf = os.path.join(self.tmp, 'nonexistent.txt')
+        self.assertEqual(load_verified_versions(vf), set())
 
 
 if __name__ == '__main__':

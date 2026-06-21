@@ -295,6 +295,33 @@ def collect_gemini_sessions(show_all):
                 if s: sessions.append(s)
     return sessions
 
+def load_verified_versions(versions_file=None):
+    """Load known-good claude CLI versions from ccs-canary-versions.txt."""
+    if versions_file is None:
+        versions_file = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), 'ccs-canary-versions.txt'
+        )
+    versions = set()
+    try:
+        with open(versions_file, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#'):
+                    versions.add(line)
+    except FileNotFoundError:
+        pass
+    return versions
+
+
+def check_version_canary(sessions, verified_versions):
+    """Return sorted list of unverified claude CLI versions found in sessions."""
+    seen = set()
+    for s in sessions:
+        if s.get('provider') == 'C' and s.get('version'):
+            seen.add(s['version'])
+    return sorted(v for v in seen if v not in verified_versions)
+
+
 def main():
     show_all = '--all' in sys.argv or '-a' in sys.argv
     file_arg = None
@@ -316,7 +343,12 @@ def main():
         sessions.extend(collect_gemini_sessions(show_all))
     
     sessions.sort(key=lambda x: (x['project'], x['ago_mins']))
-    
+
+    if not file_arg:
+        verified = load_verified_versions()
+        for v in check_version_canary(sessions, verified):
+            print(f"⚠️  claude {v} 尚未驗證，偵測可能失準", file=sys.stderr)
+
     for s in sessions:
         # 11 columns pipe-separated format:
         # prov | proj | ago | status | color | display_proj | sid | ago_str | topic | badge | filepath
