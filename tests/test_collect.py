@@ -7,7 +7,7 @@ import tempfile
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from ccs_collect import check_claude_archived
+from ccs_collect import check_claude_archived, get_claude_version, process_claude_file
 
 
 def _write_jsonl(path, lines):
@@ -82,6 +82,78 @@ class TestCheckClaudeArchived(unittest.TestCase):
         p = self._path('empty')
         open(p, 'w').close()
         self.assertFalse(check_claude_archived(p))
+
+
+class TestGetClaudeVersion(unittest.TestCase):
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+
+    def _path(self, name):
+        return os.path.join(self.tmp, name + '.jsonl')
+
+    def test_version_on_first_event(self):
+        p = self._path('has_version')
+        _write_jsonl(p, [
+            {"type": "user", "message": {"content": "hello"}, "version": "2.1.185"},
+        ])
+        self.assertEqual(get_claude_version(p), "2.1.185")
+
+    def test_version_on_later_event(self):
+        p = self._path('version_later')
+        _write_jsonl(p, [
+            {"type": "system", "subtype": "init"},
+            {"type": "user", "message": {"content": "hello"}, "version": "2.1.177"},
+        ])
+        self.assertEqual(get_claude_version(p), "2.1.177")
+
+    def test_no_version_field(self):
+        p = self._path('no_version')
+        _write_jsonl(p, [{"type": "user", "message": {"content": "hello"}}])
+        self.assertIsNone(get_claude_version(p))
+
+    def test_empty_file(self):
+        p = self._path('empty')
+        open(p, 'w').close()
+        self.assertIsNone(get_claude_version(p))
+
+    def test_only_first_20_lines_scanned(self):
+        p = self._path('version_deep')
+        lines = [{"type": "user", "message": {"content": f"msg{i}"}} for i in range(21)]
+        lines[20]["version"] = "2.1.999"  # line 21 (0-indexed), beyond scan window
+        _write_jsonl(p, lines)
+        self.assertIsNone(get_claude_version(p))
+
+
+class TestProcessClaudeFileVersion(unittest.TestCase):
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.proj_dir = os.path.join(self.tmp, 'myproject')
+        os.makedirs(self.proj_dir)
+
+    def _path(self, name):
+        return os.path.join(self.proj_dir, name + '.jsonl')
+
+    def test_version_included_in_result(self):
+        p = self._path('sess1')
+        _write_jsonl(p, [
+            {"type": "user", "message": {"content": "hi"}, "version": "2.1.185",
+             "timestamp": "2026-01-01T00:00:00Z"},
+        ])
+        result = process_claude_file(p)
+        self.assertIsNotNone(result)
+        self.assertEqual(result['version'], '2.1.185')
+
+    def test_missing_version_is_empty_string(self):
+        p = self._path('sess2')
+        _write_jsonl(p, [
+            {"type": "user", "message": {"content": "hi"},
+             "timestamp": "2026-01-01T00:00:00Z"},
+        ])
+        result = process_claude_file(p)
+        self.assertIsNotNone(result)
+        self.assertEqual(result['version'], '')
 
 
 if __name__ == '__main__':
