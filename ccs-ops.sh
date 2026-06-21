@@ -610,8 +610,9 @@ _ccs_recap_collect() {
       if [ "$provider" = "gemini" ]; then
         preview=$(jq -r '.messages[] | select(.type == "user" or .role == "user") | .content | if type == "array" then [.[]? | select(.text) | .text] | join(" ") else . end | gsub("\n"; " ") | .[:80]' "$jsonl" 2>/dev/null | tail -1)
       else
-        preview=$(jq -r 'select(.type == "user" and .isMeta != true) |
-          .message.content | if type == "string" then . else "" end |
+        preview=$(jq -r '
+          select(.type == "user" and .isMeta != true) |
+          (.message.content | '"${_CCS_JQ_EXTRACT_TEXT}"') |
           gsub("\n"; " ") | .[:80]' "$jsonl" 2>/dev/null | tail -1)
       fi
 
@@ -737,7 +738,7 @@ _ccs_recap_collect() {
       if [ "$provider" = "gemini" ]; then
         jq_dl_filter='.messages[] | select((.type == "user" or .role == "user") and .isMeta != true) | .content | if type == "array" then [.[]? | select(.text) | .text] | join(" ") else . end'
       else
-        jq_dl_filter='select(.type == "user" and .isMeta != true) | .message.content | if type == "string" then . else "" end'
+        jq_dl_filter='select(.type == "user" and .isMeta != true) | (.message.content | '"${_CCS_JQ_EXTRACT_TEXT}"')'
       fi
 
       dl_text=$(jq -r "$jq_dl_filter" "$jsonl" 2>/dev/null |
@@ -1244,7 +1245,7 @@ _ccs_checkpoint_collect() {
         if [ "$provider" = "gemini" ]; then
           jq_msg_filter='.messages[] | select((.type == "user" or .role == "user") and .isMeta != true) | .content | if type == "array" then [.[]? | select(.text) | .text] | join(" ") else . end'
         else
-          jq_msg_filter='select(.type == "user" and (.message.content | type == "string") and ((.isMeta // false) == false)) | .message.content'
+          jq_msg_filter='select(.type == "user" and ((.isMeta // false) == false)) | (.message.content | '"${_CCS_JQ_EXTRACT_TEXT}"')'
         fi
 
         if jq -r "$jq_msg_filter" "$jsonl" 2>/dev/null \

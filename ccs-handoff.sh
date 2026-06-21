@@ -331,7 +331,7 @@ HELP
   if [ "$provider" = "gemini" ]; then
     jq_filter='(if type == "array" then . else .messages // [] end)[]? | select(.type == "user" or .role == "user") | [((.isMeta // false) | tostring), ((.content // .message.content) | if type == "array" then [.[]? | select(.text) | .text] | join(" ") else . end | .[:80] | gsub("\n"; " "))] | @tsv'
   else
-    jq_filter='select(.type == "user" and (.message.content | type == "string")) | [(.isMeta // false | tostring), (.message.content | .[:80] | gsub("\n"; " "))] | @tsv'
+    jq_filter='select(.type == "user") | [(.isMeta // false | tostring), ((.message.content | '"${_CCS_JQ_EXTRACT_TEXT}"') | .[:80] | gsub("\n"; " "))] | @tsv'
   fi
 
   while IFS=$'\t' read -r is_meta content; do

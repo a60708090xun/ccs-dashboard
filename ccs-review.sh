@@ -102,7 +102,7 @@ _ccs_session_stats() {
       ] | add // 0
     ' "$jsonl" 2>/dev/null)
   else
-    rounds=$(jq -s '[.[] | select(.type == "user" and (.message.content | type == "string") and .isMeta != true and (.message.content | test("^<local-command|^<command-name|^<system-|^\\s*/exit|^\\s*/quit|^\\s*$") | not))] | length' "$jsonl" 2>/dev/null)
+    rounds=$(jq -s '[.[] | select(.type == "user" and .isMeta != true) | select((.message.content | '"${_CCS_JQ_EXTRACT_TEXT}"') | test("^<local-command|^<command-name|^<system-|^\\s*/exit|^\\s*/quit|^\\s*$") | not)] | length' "$jsonl" 2>/dev/null)
     first_ts=$(jq -r 'select(.timestamp) | .timestamp' "$jsonl" 2>/dev/null | head -1)
     last_ts=$(jq -r 'select(.timestamp) | .timestamp' "$jsonl" 2>/dev/null | tail -1)
 
@@ -116,8 +116,8 @@ _ccs_session_stats() {
 
     char_count=$(jq -s '
       [.[] |
-        if .type == "user" and (.message.content | type == "string") then
-          (.message.content | length)
+        if .type == "user" then
+          (.message.content | '"${_CCS_JQ_EXTRACT_TEXT}"' | length)
         elif .type == "assistant" then
           ([.message.content[]? | select(.type == "text") | .text | length] | add // 0)
         else 0 end
@@ -249,8 +249,8 @@ _ccs_review_json() {
         ')
       else
         tools_text=$(jq -c '
-          if .type == "user" and (.message.content | type == "string") then
-            {role: "user", text: .message.content}
+          if .type == "user" then
+            {role: "user", text: (.message.content | '"${_CCS_JQ_EXTRACT_TEXT}"')}
           elif .type == "assistant" then
             (.message.content | if type == "array" then
               [.[] | select(.type == "tool_use") |
