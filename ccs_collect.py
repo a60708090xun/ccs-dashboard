@@ -54,6 +54,23 @@ def check_claude_archived(filepath):
         pass
     return False
 
+def get_claude_version(filepath):
+    """Return the claude CLI version from the first 20 JSONL events, or None."""
+    try:
+        with open(filepath, 'r', encoding='utf-8') as f:
+            for i, line in enumerate(f):
+                if i >= 20:
+                    break
+                try:
+                    v = json.loads(line).get('version')
+                    if v:
+                        return str(v)
+                except json.JSONDecodeError:
+                    continue
+    except Exception:
+        pass
+    return None
+
 def get_claude_topic(filepath):
     topic = "-"
     try:
@@ -115,12 +132,13 @@ def process_claude_file(filepath):
     status, color = get_status_and_color(ago_mins, is_archived)
     ago_str = get_ago_str(ago_mins)
     topic = get_claude_topic(filepath)
-    
+    version = get_claude_version(filepath)
+
     return {
         'provider': 'C', 'filepath': filepath, 'project': project,
         'ago_mins': ago_mins, 'status': status, 'color': color,
         'display_project': project, 'sid': sid, 'ago_str': ago_str,
-        'topic': topic, 'badge': ''
+        'topic': topic, 'badge': '', 'version': version or ''
     }
 
 def collect_claude_sessions(show_all):
