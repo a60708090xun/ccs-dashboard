@@ -12,3 +12,4 @@ internal/
 *.log
 collector_all.txt
 duck.json
+__pycache__/
