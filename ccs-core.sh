@@ -125,11 +125,11 @@ _ccs_topic_from_jsonl() {
       ' "$f" 2>/dev/null | head -1 | tr '\n' ' ' | cut -c1-120)
     else
       topic=$(jq -r '
-        select(.type == "user" and (.message.content | type == "string")
-          and ((.isMeta // false) == false)
-          and (.message.content | test("^<local-command|^<command-name|^<system-|^\\s*/exit|^\\s*/quit") | not)
-          and (.message.content | test("^\\s*$") | not))
-        | .message.content | gsub("<[^>]+>"; "") | gsub("^\\s+|\\s+$"; "")
+        select(.type == "user" and ((.isMeta // false) == false))
+        | (.message.content | '"${_CCS_JQ_EXTRACT_TEXT}"') as $txt
+        | select($txt | test("^<local-command|^<command-name|^<system-|^\\s*/exit|^\\s*/quit") | not)
+        | select($txt | test("^\\s*$") | not)
+        | $txt | gsub("<[^>]+>"; "") | gsub("^\\s+|\\s+$"; "")
       ' "$f" 2>/dev/null | head -1 | tr '\n' ' ' | cut -c1-120)
     fi
   fi
@@ -198,13 +198,16 @@ _ccs_build_pairs_index() {
       | select($txt | test("^<local-command|^<command-name|^<system-|^\\s*/exit|^\\s*/quit") | not)
       | select($txt | test("^\\s*$") | not)'
   else
-    jq_user_filter='select(.value.type == "user" and (.value.message.content | type == "string"))
+    jq_user_filter='select(.value.type == "user")
       | select(.value.isMeta != true)
-      | select(.value.message.content | test("^<local-command|^<command-name|^<system-|^\\s*/exit|^\\s*/quit") | not)
-      | select(.value.message.content | test("^\\s*$") | not)'
+      | (.value.message.content | '"${_CCS_JQ_EXTRACT_TEXT}"') as $txt
+      | select($txt | test("^<local-command|^<command-name|^<system-|^\\s*/exit|^\\s*/quit") | not)
+      | select($txt | test("^\\s*$") | not)'
   fi
 
-  jq -r "
+  local jq_flags="-r"
+  [ "$provider" = "claude" ] && jq_flags="-rs"
+  jq $jq_flags "
     (if type == \"array\" then . else .messages // [] end)
     | to_entries as \$all
     | [ \$all[] | select(.value.type == \"user\" or .value.role == \"user\") ] as \$all_users
@@ -270,8 +273,8 @@ _ccs_get_pair() {
     ' "$jsonl" 2>/dev/null
   else
     jq -c '
-      if .type == "user" and (.message.content | type == "string") then
-        {role: "user", text: .message.content}
+      if .type == "user" then
+        {role: "user", text: (.message.content | '"${_CCS_JQ_EXTRACT_TEXT}"')}
       elif .type == "assistant" then
         (.message.content | if type == "array" then
           [.[] | select(.type == "text") | .text] | join("\n")
@@ -340,7 +343,7 @@ _ccs_conversation_md() {
   if [ "$provider" = "gemini" ]; then
     jq_filter='(if type == "array" then . else .messages // [] end)[]? | select(.type == "user" or .role == "user") | [((.isMeta // false) | tostring), ((.content // .message.content) | if type == "array" then [.[]? | select(.text) | .text] | join(" ") else . end | .[:80] | gsub("\n"; " "))] | @tsv'
   else
-    jq_filter='select(.type == "user" and (.message.content | type == "string")) | [(.isMeta // false | tostring), (.message.content | .[:80] | gsub("\n"; " "))] | @tsv'
+    jq_filter='select(.type == "user") | [(.isMeta // false | tostring), ((.message.content | '"${_CCS_JQ_EXTRACT_TEXT}"') | .[:80] | gsub("\n"; " "))] | @tsv'
   fi
 
   while IFS=$'\t' read -r is_meta content; do
