@@ -81,7 +81,7 @@ _ccs_crash_md() {
     _csid=$(basename "$_cf" | sed -e 's/\.jsonl$//' -e 's/\.json$//')
     [ -n "${_map[$_csid]+x}" ] || continue
     local _age=$(( (_now_epoch - $(stat -c %Y "$_cf")) / 60 ))
-    [ "$_age" -ge 4320 ] && (( _stale++ ))
+    [ "$_age" -ge $_CCS_CRASH_EXPIRY_MINS ] && (( _stale++ ))
   done
 
   echo "---"

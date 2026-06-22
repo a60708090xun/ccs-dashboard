@@ -110,7 +110,7 @@ HELP
     mod=$(stat -c "%Y" "$f")
     ago=$(( (now - mod) / 60 ))
     full_sid=$(basename "$f" | sed -e "s/\.jsonl$//" -e "s/\.json$//")
-    if [ -n "${crash_full[$full_sid]+x}" ] && [ "$ago" -lt 4320 ]; then
+    if [ -n "${crash_full[$full_sid]+x}" ] && [ "$ago" -lt $_CCS_CRASH_EXPIRY_MINS ]; then
       crashed_files+=("$f")
     elif [ -n "${crash_full[$full_sid]+x}" ] || [ "$ago" -ge 10080 ]; then
       stale_files+=("$f")
@@ -212,7 +212,7 @@ HELP
   if [ ${#stale_files[@]} -eq 0 ]; then
     printf "  \033[32m(none)\033[0m\n"
   else
-    printf "  \033[90m%d open session(s) untouched > 7 days\033[0m → \033[33mccs-sessions 168\033[0m to inspect\n" "${#stale_files[@]}"
+    printf "  \033[90m%d open session(s) inactive (stale or crash-expired)\033[0m → \033[33mccs-sessions 168\033[0m to inspect\n" "${#stale_files[@]}"
   fi
 }
 
@@ -391,7 +391,7 @@ _ccs_status_md() {
   if [ ${#stale_files[@]} -eq 0 ]; then
     echo "_(none)_ ✓"
   else
-    echo "> **${#stale_files[@]}** open session(s) untouched > 7 days → \`ccs-sessions 168\` to inspect"
+    echo "> **${#stale_files[@]}** open session(s) inactive (stale or crash-expired) → \`ccs-sessions 168\` to inspect"
   fi
 }
 alias ccs='ccs-status'

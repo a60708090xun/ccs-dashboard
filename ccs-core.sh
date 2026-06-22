@@ -5,6 +5,7 @@
 # Computed at source time — used to strip $HOME prefix from JSONL directory names.
 _CCS_HOME_ENCODED=$(echo "$HOME" | sed 's/\//-/g')
 _CCS_DASHBOARD_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
+_CCS_CRASH_EXPIRY_MINS=4320
 
 # jq expression: extract text from a message content value.
 # Pipe the content field to this: .message.content | <_CCS_JQ_EXTRACT_TEXT>

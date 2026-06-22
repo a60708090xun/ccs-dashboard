@@ -177,6 +177,6 @@ assert_contains \
 assert_contains \
   "Stale section has count" \
   "$status_out" \
-  "open session(s) untouched"
+  "open session(s) inactive"
 
 test_summary

@@ -984,7 +984,7 @@ HELP
     _cf=$(printf '%s\n' "${session_files[@]}" | grep "$_ck" | head -1)
     if [ -n "$_cf" ]; then
       _cage=$(( (_now_epoch - $(stat -c %Y "$_cf")) / 60 ))
-      [ "$_cage" -ge 4320 ] && unset 'crash_map[$_ck]'
+      [ "$_cage" -ge $_CCS_CRASH_EXPIRY_MINS ] && unset 'crash_map[$_ck]'
     fi
   done
 
