@@ -76,16 +76,13 @@ assert_contains "fallback warning emitted" "$err" "falling back to headless"
 # backend tracking reflects the fallback
 assert_eq "LAST_BACKEND reflects fallback" "headless" "$_CCS_DISPATCH_LAST_BACKEND"
 # job still completes via headless
+out_file="$SCRIPT_DIR/tmp/test-dispatch-backend-out3"
 CCS_DISPATCH_BACKEND=agentpager PATH="$mock_dir3:$PATH" \
-  ccs-dispatch --sync --project "$proj3" "fallback test 2" >/dev/null 2>&1
-dd="$(_ccs_dispatch_dir)"
-if [ -f "$dd/jobs.jsonl" ]; then
-  latest_jid=$(tac "$dd/jobs.jsonl" | grep -oP '"job_id":"[^"]+"' | head -1 | cut -d'"' -f4)
-  if [ -n "$latest_jid" ]; then
-    st=$(_ccs_dispatch_jsonl_latest "$latest_jid" | jq -r '.status')
-    assert_eq "fell-back job completed" "completed" "$st"
-  fi
-fi
-rm -rf "$mock_dir3" "$proj3" "$tmplog"*
+  ccs-dispatch --sync --project "$proj3" "fallback test 2" > "$out_file" 2>/dev/null
+jid=$(grep -oP 'd-\d{8}-\d{6}-[a-f0-9]{4}' "$out_file" | head -1)
+st=$(_ccs_dispatch_jsonl_latest "$jid" | jq -r '.status')
+assert_eq "fell-back job completed" "completed" "$st"
+assert_eq "LAST_BACKEND reflects fallback" "headless" "$_CCS_DISPATCH_LAST_BACKEND"
+rm -rf "$mock_dir3" "$proj3" "$tmplog"* "$out_file"
 
 test_summary
