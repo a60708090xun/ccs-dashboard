@@ -86,6 +86,24 @@ class TestCheckClaudeArchived(unittest.TestCase):
         open(p, 'w').close()
         self.assertFalse(check_claude_archived(p))
 
+    def test_exit_returns_exit_string(self):
+        p = self._path('exit_typed')
+        _write_jsonl(p, [ASSISTANT_DONE, CAVEAT, EXIT_CMD, _exit_stdout('Bye!')])
+        self.assertEqual(check_claude_archived(p), "exit")
+
+    def test_last_prompt_returns_prompt_string(self):
+        p = self._path('last_prompt_typed')
+        _write_jsonl(p, [
+            ASSISTANT_DONE,
+            {"type": "last-prompt", "timestamp": "2026-06-22T10:00:01Z"},
+        ])
+        self.assertEqual(check_claude_archived(p), "prompt")
+
+    def test_not_archived_returns_false(self):
+        p = self._path('not_archived_typed')
+        _write_jsonl(p, [ASSISTANT_DONE])
+        self.assertIs(check_claude_archived(p), False)
+
 
 class TestGetClaudeVersion(unittest.TestCase):
 

@@ -5,8 +5,10 @@ import sys
 import time
 
 def get_status_and_color(ago_mins, is_archived):
-    if is_archived:
-        return "archived", "\033[90m\033[9m" # gray + strikethrough
+    if is_archived == "exit" or is_archived is True:
+        return "archived", "\033[90m\033[9m"  # gray + strikethrough
+    if is_archived == "prompt":
+        return "prompt-archived", "\033[90m\033[9m"  # same visual, different status
     elif ago_mins < 10:
         return "active", "\033[32m" # green
     elif ago_mins < 60:
@@ -36,7 +38,7 @@ def check_claude_archived(filepath):
                     content = last_line.get('message', {}).get('content', '')
                     if isinstance(content, str) and 'local-command-stdout' in content:
                         if any('<command-name>/exit</command-name>' in l for l in lines[-3:]):
-                            return True
+                            return "exit"
             except json.JSONDecodeError:
                 pass
 
@@ -49,7 +51,7 @@ def check_claude_archived(filepath):
                 if '"type":"assistant"' in line:
                     has_assistant_after = True
             if has_last_prompt and not has_assistant_after:
-                return True
+                return "prompt"
     except Exception:
         pass
     return False
