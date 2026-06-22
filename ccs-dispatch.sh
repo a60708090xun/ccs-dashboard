@@ -12,6 +12,33 @@ CCS_DISPATCH_SUMMARY_LINES="${CCS_DISPATCH_SUMMARY_LINES:-30}"
 CCS_DISPATCH_SUMMARY_MAX_CHARS="${CCS_DISPATCH_SUMMARY_MAX_CHARS:-200}"
 CCS_DISPATCH_MAX_CONCURRENT_WARN="${CCS_DISPATCH_MAX_CONCURRENT_WARN:-3}"
 
+# ── Backend selection ──
+# Returns 0 if the agent-pager backend is usable, 1 otherwise.
+# Stage 1: daemon active + spool dir exists. Stage 2 will additionally
+# require the merged local channel.
+_ccs_dispatch_agentpager_available() {
+  command -v systemctl >/dev/null 2>&1 || return 1
+  systemctl --user is-active --quiet agent-pager.service 2>/dev/null || return 1
+  [ -d "${AGENT_PAGER_DIR:-$HOME/.agent-pager}" ] || return 1
+  return 0
+}
+
+# Echoes the backend to use: "headless" or "agentpager".
+# CCS_DISPATCH_BACKEND: auto (default) | agentpager | headless.
+_ccs_dispatch_resolve_backend() {
+  local choice="${CCS_DISPATCH_BACKEND:-auto}"
+  case "$choice" in
+    headless|agentpager) printf '%s\n' "$choice" ;;
+    auto)
+      if _ccs_dispatch_agentpager_available; then
+        printf 'agentpager\n'
+      else
+        printf 'headless\n'
+      fi ;;
+    *) printf 'headless\n' ;;
+  esac
+}
+
 # ── Data directory ──
 _ccs_dispatch_dir() {
   local dir
