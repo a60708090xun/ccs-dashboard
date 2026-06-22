@@ -5,6 +5,9 @@ SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 source "$SCRIPT_DIR/tests/fixture-helper.sh"
 source "$SCRIPT_DIR/ccs-dashboard.sh"
 
+# Initialize backend tracking variable
+_CCS_DISPATCH_LAST_BACKEND=""
+
 echo "=== resolve_backend: env override ==="
 out=$(CCS_DISPATCH_BACKEND=headless _ccs_dispatch_resolve_backend)
 assert_eq "explicit headless" "headless" "$out"
@@ -55,5 +58,34 @@ assert_eq "headless dispatch completed" "completed" "$st"
 # function-level: headless helper exists and is what dispatcher calls
 assert_eq "spawn_headless defined" "function" "$(type -t _ccs_dispatch_spawn_headless)"
 rm -rf "$mock_dir2" "$proj"
+
+echo "=== agentpager backend stub falls back to headless ==="
+mock_dir3="$SCRIPT_DIR/tmp/test-dispatch-backend-bin3"
+proj3="$SCRIPT_DIR/tmp/test-dispatch-backend-proj3"
+mkdir -p "$mock_dir3" "$proj3"
+printf '#!/bin/bash\necho "mock result: $*"\n' > "$mock_dir3/claude"
+chmod +x "$mock_dir3/claude"
+# force agentpager; stub fails -> dispatcher falls back to headless
+# Capture stderr/stdout to temp file to avoid subshell (which loses variable assignments)
+tmplog="$SCRIPT_DIR/tmp/test-dispatch-backend-log3"
+CCS_DISPATCH_BACKEND=agentpager PATH="$mock_dir3:$PATH" \
+  ccs-dispatch --sync --project "$proj3" "fallback test" \
+  >"$tmplog.out" 2>"$tmplog.err"
+err=$(cat "$tmplog.err")
+assert_contains "fallback warning emitted" "$err" "falling back to headless"
+# backend tracking reflects the fallback
+assert_eq "LAST_BACKEND reflects fallback" "headless" "$_CCS_DISPATCH_LAST_BACKEND"
+# job still completes via headless
+CCS_DISPATCH_BACKEND=agentpager PATH="$mock_dir3:$PATH" \
+  ccs-dispatch --sync --project "$proj3" "fallback test 2" >/dev/null 2>&1
+dd="$(_ccs_dispatch_dir)"
+if [ -f "$dd/jobs.jsonl" ]; then
+  latest_jid=$(tac "$dd/jobs.jsonl" | grep -oP '"job_id":"[^"]+"' | head -1 | cut -d'"' -f4)
+  if [ -n "$latest_jid" ]; then
+    st=$(_ccs_dispatch_jsonl_latest "$latest_jid" | jq -r '.status')
+    assert_eq "fell-back job completed" "completed" "$st"
+  fi
+fi
+rm -rf "$mock_dir3" "$proj3" "$tmplog"*
 
 test_summary

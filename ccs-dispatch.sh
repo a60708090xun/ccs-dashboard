@@ -163,6 +163,16 @@ _ccs_dispatch_finish() {
   rm -f "$prompt_f"
 }
 
+# agent-pager backend — STAGE 1 STUB.
+# Stage 2 will write a local-channel inbound launch and map the worker
+# lifecycle back into jobs.jsonl. Until then this always fails so the
+# dispatcher falls back to headless.
+_ccs_dispatch_spawn_agentpager() {
+  echo "ccs-dispatch: agent-pager backend not yet implemented (stage 2)," \
+       "falling back to headless" >&2
+  return 2
+}
+
 _ccs_dispatch_spawn_headless() {
   local job_id="$1" project_dir="$2" prompt="$3"
   local timeout_secs="$4" mode="$5"
