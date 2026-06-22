@@ -4,7 +4,7 @@
 
 Mission control for your Code CLI Sessions (Claude, Gemini, etc.) — track, review, and hand off across repos.
 
-Code CLI tools (like Claude or Gemini) store conversations as session files, but provide limited built-in tools to review or manage them. ccs-dashboard parses these files so you can see what's going on across all your sessions — either by asking the agent directly or from the command line.
+Code CLI tools store conversations as session files but give you little built-in tooling to review or manage them. ccs-dashboard parses those files so you can see what's happening across every session — by asking the agent in natural language, or straight from the command line.
 
 ## Background
 
@@ -12,23 +12,31 @@ If you use Code CLI Sessions heavily — multiple providers, multiple repos, mul
 
 - **Sessions are invisible.** No built-in way to list, search, or compare sessions. Each terminal is its own silo. Close the tab and the context is gone.
 - **Multi-repo chaos.** Working on a backend fix, a frontend feature, and a docs update simultaneously? Good luck remembering which session was doing what, in which repo.
-- **Zombie processes pile up.** Suspended claude processes (from terminal multiplexers, crashed tabs, or `Ctrl+Z`) silently eat 190-500 MB each. No warning, no cleanup.
+- **Zombie processes pile up.** Suspended `claude` processes (from terminal multiplexers, crashed tabs, or `Ctrl+Z`) silently eat 190-500 MB each. No warning, no cleanup.
 - **Context doesn't transfer.** Starting a new session means re-explaining everything. The old session's knowledge — files touched, decisions made, remaining todos — is trapped in a JSON/JSONL file nobody reads.
 - **No cross-session view.** A single feature might span 5 sessions across 3 days. There's no way to see the full picture without manually digging through logs.
 
-## Before / After
+## Quick start
 
-**Before:** You're left staring at raw JSON/JSONL files.
-
-```
-$ ls ~/.claude/projects/
--home-alice-backend-api/    -home-alice-frontend/    -home-alice-docs/
-$ ls ~/.claude/projects/-home-alice-backend-api/
-3a8f1c42-...jsonl  7b2e9d15-...jsonl  a1c4f8e2-...jsonl
-# Now what? Open each 50MB JSON/JSONL in vim?
+```bash
+git clone https://github.com/a60708090xun/ccs-dashboard.git ~/tools/ccs-dashboard
+cd ~/tools/ccs-dashboard
+./install.sh              # Check deps, add source line to ~/.bashrc, create skill symlink
 ```
 
-**After:** Just ask Claude. The included [custom skill](https://docs.anthropic.com/en/docs/claude-code/skills) gives you an interactive orchestrator — no commands to memorize.
+`./install.sh --check` reports status; `./install.sh --uninstall` removes it.
+
+Or wire it up manually:
+
+```bash
+# Add to .bashrc:
+source ~/tools/ccs-dashboard/ccs-dashboard.sh
+
+# Skill symlink (optional):
+ln -s ~/tools/ccs-dashboard/skills/ccs-orchestrator ~/.claude/skills/ccs-orchestrator
+```
+
+Then just ask Claude:
 
 ```
 You: What am I working on?
@@ -39,68 +47,22 @@ Claude: (runs /ccs-orchestrator)
 
 📁 backend-api (2)
 🟢 1. Fix auth middleware regression    a1c4f8e2  3m ago
-🔵 2. Add rate limiting endpoint       7b2e9d15  5h ago
-
-📁 frontend (1)
-🟡 3. Dashboard redesign v2            9f3b7a21  45m ago
+🔵 2. Add rate limiting endpoint        7b2e9d15  5h ago
 
 ### 📋 Pending Todos (3)
-☐ Add rate limit headers to response          (backend-api)
-☐ Write integration tests                     (backend-api)
-☐ Update sidebar component                    (frontend)
-
-### 🧟 Zombie Processes (2)
-PID 28341  Tl  490 MB  2d ago
-PID 31022  Tl  312 MB  1d ago
-
-<options>
-- d 1 — Expand session #1 recent conversations
-- f gh65 — View rate limiting feature progress
-- rc — Daily work recap
-- cl — Clean up zombie processes
-</options>
+☐ Add rate limit headers to response    (backend-api)
+☐ Write integration tests               (backend-api)
 ```
 
-The skill handles routing, context, and follow-up options automatically. You can also drill down:
+The bundled [skill](https://docs.anthropic.com/en/docs/claude-code/skills) gives you an interactive orchestrator with context-aware follow-up options — no commands to memorize. See [docs/commands.md](docs/commands.md) for a full walkthrough.
 
-```
-You: Show me what's left on the rate limiting feature
-
-Claude: (runs ccs-feature gh65)
-
-### 🟡 GH#65 Add rate limiting [backend-api]
-    Todos: 2/5 | Sessions: 3 | Last: 45m ago
-
-    Recent commits:
-    a3f1c82  feat: add token bucket rate limiter
-    9b2e7d1  feat: add Redis-backed rate limit store
-
-    Remaining todos:
-    ☐ Add rate limit headers to response
-    ☐ Write integration tests
-    ☐ Update API docs
-```
-
-Every feature is also available as a shell command for scripting or quick lookups:
-
-```
-$ ccs-status --md                     # Session dashboard
-$ ccs-resume-prompt --stdout          # Bootstrap prompt for new session
-$ ccs-feature gh65                    # Cross-session feature tracking
-$ ccs-recap                           # Daily work review
-```
-
-## How it works
+## Usage
 
 ccs-dashboard has two layers:
 
-**1. Claude Code Skill** (`/ccs-orchestrator`) — the primary interface. Ask in natural language, get an interactive orchestrator with context-aware options. No commands to remember.
+**1. Claude Code skill** (`/ccs-orchestrator`) — the primary interface. Ask in natural language ("work status", "what am I working on") and get an interactive orchestrator with context-aware options. Read-only: it observes and presents, it does not control other sessions.
 
-- Trigger: `/ccs-orchestrator`, or natural language like "work status", "what am I working on"
-- Read-only — observes and presents information, does not control other sessions
-- Features: Command Palette, natural language routing, context-aware follow-up options
-
-**2. CLI commands** — shell functions you can call directly from terminal. Useful for scripting, piping, or quick one-off lookups.
+**2. CLI commands** — shell functions you can call directly from the terminal, for scripting, piping, or quick one-off lookups.
 
 | Command | What it does |
 |---------|-------------|
@@ -108,78 +70,24 @@ ccs-dashboard has two layers:
 | `ccs-cleanup` | Find and kill suspended zombie processes |
 | `ccs-archive` | Manually mark a session as finished (archived) |
 | `ccs-crash` | Detect crash-interrupted sessions + `--clean`/`--clean-all` cleanup |
-| `ccs-resume-prompt` | Generate bootstrap prompt (< 2000 tokens) for new session |
+| `ccs-resume-prompt` | Generate bootstrap prompt (< 2000 tokens) for a new session |
 | `ccs-feature` | Track progress by feature/issue across sessions |
 | `ccs-recap` | Daily work review across all projects |
 | `ccs-details` | Interactive conversation browser (tig-like TUI) |
 | `ccs-overview` | Cross-session overview: sessions + todos + git status |
 | `ccs-checkpoint` | Lightweight progress snapshot: Done / In Progress / Blocked |
 | `ccs-handoff` | Generate handoff notes with conversation summary, git, file ops |
-| `ccs-health` | Session health detection — detect attention degradation signals |
+| `ccs-health` | Session health detection — surface attention-degradation signals |
 | `ccs-dispatch` | Dispatch a task to a new Claude Code session (async or sync) |
 | `ccs-jobs` | View dispatch job history and results |
 | `ccs-review` | Session review report — stats, conversation, LLM summary (md/html/pdf) |
 | `ccs-project` | Per-project insight report — cost, features, rhythm, code changes (md/html) |
 
-All commands support both **Terminal ANSI** and **Markdown** (`--md`) output modes.
-
-### ccs-health
-
-Session health detection — detect attention degradation signals.
-
-```bash
-ccs-health                    # Scan all active sessions
-ccs-health --md               # Markdown output
-ccs-health --json             # JSON output
-ccs-health <session-prefix>   # Specific session
-```
-
-Three indicators:
-- Duplicate tool calls (same file Read/Grep'd multiple times)
-- Session duration
-- Prompt-response round count
-
-Severity levels: 🟢 green / 🟡 yellow / 🔴 red
-
-Thresholds are configurable via environment variables (see `ccs-health.sh`).
-
-See **[docs/commands.md](docs/commands.md)** for detailed usage, flags, and examples.
-
-## Install
-
-```bash
-git clone https://github.com/a60708090xun/ccs-dashboard.git ~/tools/ccs-dashboard
-cd ~/tools/ccs-dashboard
-./install.sh            # Check deps + add source line to ~/.bashrc + create skill symlink
-./install.sh --check    # Check dependencies and installation status
-./install.sh --uninstall  # Remove
-```
-
-Or manually:
-
-```bash
-# Add to .bashrc:
-source ~/tools/ccs-dashboard/ccs-dashboard.sh
-
-# Skill symlink (optional):
-ln -s ~/tools/ccs-dashboard/skills/ccs-orchestrator ~/.claude/skills/ccs-orchestrator
-```
-
-## Status indicators
-
-```
-Terminal          Markdown    State       Meaning
-Green             🟢          active      < 10 min since last activity
-Yellow            🟡          recent      < 1 hour
-Blue              🔵          idle        < 1 day (open but idle)
-Gray              💤          stale       > 1 day (zombie candidate)
-Red 💀            💀          crashed     crash-interrupted (reboot/hung/dead process)
-Strikethrough     -           archived    has last-prompt marker
-```
+All commands support both **Terminal ANSI** and **Markdown** (`--md`) output. See [docs/commands.md](docs/commands.md) for detailed flags, examples, the typical workflow, and status indicators.
 
 ## Requirements
 
-**Platform:** Linux environment (remote server via SSH, local Linux, or WSL). Native Windows and macOS are not supported.
+**Platform:** Linux (remote server via SSH, local Linux, or WSL). Native Windows and macOS are not supported.
 
 | Required | Purpose |
 |----------|---------|
@@ -194,25 +102,11 @@ Strikethrough     -           archived    has last-prompt marker
 
 Data source: session logs under `~/.claude/projects/` (Claude) and `~/.gemini/` (Gemini).
 
-## File structure
+## Documentation
 
-```
-ccs-core.sh       # Shared helpers + basic commands (sessions/active/cleanup)
-ccs-dashboard.sh   # Entry point — sources all modules + ccs-status, ccs-pick
-ccs-viewer.sh      # ccs-html, ccs-details
-ccs-handoff.sh     # ccs-handoff, ccs-resume-prompt
-ccs-overview.sh    # ccs-overview + render helpers
-ccs-feature.sh     # Feature clustering + ccs-feature, ccs-tag
-ccs-ops.sh         # ccs-crash, ccs-recap, ccs-checkpoint
-ccs-health.sh      # Session health scoring
-ccs-dispatch.sh    # ccs-dispatch, ccs-jobs
-ccs-review.sh      # ccs-review — session review report
-ccs-project.sh     # ccs-project — per-project insight report
-install.sh         # Installer (deps check + bashrc + skill symlink)
-templates/         # Jinja2 HTML templates for ccs-review, ccs-project
-skills/            # Claude Code skill — primary interface
-docs/              # CLI command reference + archived design docs
-```
+- [docs/commands.md](docs/commands.md) — full CLI reference: flags, examples, typical workflow, status indicators
+- [docs/architecture.md](docs/architecture.md) — module and file layout
+- [docs/adr/](docs/adr/) — architecture decision records
 
 ## License
 

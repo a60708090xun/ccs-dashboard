@@ -16,15 +16,12 @@ Phase 3 收尾時，確認以下檔案的對應欄位已同步。
 
 修改 session 狀態分類時：
 
-- `README.md` — Status indicators section
-- `docs/README.zh-TW.md` — 狀態圖示 section
-- `docs/commands.md` — ccs-status 說明
+- `docs/commands.md` — 狀態圖示 section + ccs-status 說明
 
 ## 模組檔案
 
 新增或移除 `.sh` 模組時：
 
-- `README.md` — File structure section
-- `docs/README.zh-TW.md` — 檔案結構 section
+- `docs/architecture.md` — 檔案結構 section
 - `install.sh` — modules array (line ~101)
 - `ccs-dashboard.sh` — source 順序
