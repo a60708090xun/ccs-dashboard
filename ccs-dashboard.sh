@@ -70,7 +70,7 @@ HELP
   local script_dir
   script_dir="$_CCS_DASHBOARD_DIR"
   local sorted_rows=""
-  sorted_rows=$(python3 "$script_dir/internal/ccs_collect.py" | awk -F'|' -v max_mins="$((7 * 1440))" '
+  sorted_rows=$(python3 "$script_dir/ccs_collect.py" | awk -F'|' -v max_mins="$((7 * 1440))" '
     $3 <= max_mins && $4 != "archived" { print $0 }
   ')
   while IFS='|' read -r -a cols; do
@@ -110,12 +110,12 @@ HELP
     mod=$(stat -c "%Y" "$f")
     ago=$(( (now - mod) / 60 ))
     full_sid=$(basename "$f" | sed -e "s/\.jsonl$//" -e "s/\.json$//")
-    if [ -n "${crash_full[$full_sid]+x}" ] && [ "$ago" -lt 10080 ]; then
+    if [ -n "${crash_full[$full_sid]+x}" ] && [ "$ago" -lt 4320 ]; then
       crashed_files+=("$f")
-    elif [ "$ago" -lt 10080 ]; then
-      fresh_files+=("$f")
-    else
+    elif [ -n "${crash_full[$full_sid]+x}" ] || [ "$ago" -ge 10080 ]; then
       stale_files+=("$f")
+    else
+      fresh_files+=("$f")
     fi
   done
 
