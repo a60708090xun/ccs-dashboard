@@ -2,6 +2,96 @@
 
 回到 [README](../README.md)
 
+## 典型工作流程
+
+最常見的用法是直接問 Claude，skill 會啟動互動式指揮台 — 不用記指令。
+
+**使用前：** 只能翻 JSONL 原始檔。
+
+```
+$ ls ~/.claude/projects/
+-home-alice-backend-api/    -home-alice-frontend/    -home-alice-docs/
+$ ls ~/.claude/projects/-home-alice-backend-api/
+3a8f1c42-...jsonl  7b2e9d15-...jsonl  a1c4f8e2-...jsonl
+# 然後呢？用 vim 開 50MB 的 JSONL？
+```
+
+**使用後：** 直接問 Claude，內建的 [custom skill](https://docs.anthropic.com/en/docs/claude-code/skills) 會啟動互動式指揮台。
+
+```
+You: 我現在在做什麼？
+
+Claude: (runs /ccs-orchestrator)
+
+### ⚡ Active Sessions (4)
+
+📁 backend-api (2)
+🟢 1. Fix auth middleware regression    a1c4f8e2  3m ago
+🔵 2. Add rate limiting endpoint       7b2e9d15  5h ago
+
+📁 frontend (1)
+🟡 3. Dashboard redesign v2            9f3b7a21  45m ago
+
+### 📋 Pending Todos (3)
+☐ Add rate limit headers to response          (backend-api)
+☐ Write integration tests                     (backend-api)
+☐ Update sidebar component                    (frontend)
+
+### 🧟 Zombie Processes (2)
+PID 28341  Tl  490 MB  2d ago
+PID 31022  Tl  312 MB  1d ago
+
+<options>
+- d 1 — 展開 session #1 最近對話
+- f gh65 — 查看 rate limiting feature 進度
+- rc — 今日工作回顧
+- cl — 清理殭屍 process
+</options>
+```
+
+Skill 會自動處理路由、context、follow-up options。也可以進一步追問：
+
+```
+You: rate limiting feature 還剩什麼？
+
+Claude: (runs ccs-feature gh65)
+
+### 🟡 GH#65 Add rate limiting [backend-api]
+    Todos: 2/5 | Sessions: 3 | Last: 45m ago
+
+    Recent commits:
+    a3f1c82  feat: add token bucket rate limiter
+    9b2e7d1  feat: add Redis-backed rate limit store
+
+    Remaining todos:
+    ☐ Add rate limit headers to response
+    ☐ Write integration tests
+    ☐ Update API docs
+```
+
+每個功能也可以直接用 shell 指令：
+
+```
+$ ccs-status --md                     # Session dashboard
+$ ccs-resume-prompt --stdout          # 產生接手 prompt
+$ ccs-feature gh65                    # 跨 session feature 追蹤
+$ ccs-recap                           # 每日工作回顧
+```
+
+## 狀態圖示
+
+`ccs-status` 等指令用以下色碼 / emoji 標示 session 狀態：
+
+```
+Terminal          Markdown    狀態        說明
+綠色              🟢          active      < 10 分鐘
+黃色              🟡          recent      < 1 小時
+藍色              🔵          idle        < 1 天（開著但閒置）
+灰色              💤          stale       > 1 天（殭屍候選）
+紅色 💀           💀          crashed     crash 中斷（重開機/hung/dead process）
+灰色刪除線         -          archived    有 last-prompt 標記
+```
+
 ## ccs-status (ccs)
 
 一眼掌握所有 Provider (Claude, Gemini 等) 的 session 狀態，分四個區塊：
