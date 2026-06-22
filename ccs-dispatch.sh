@@ -163,7 +163,7 @@ _ccs_dispatch_finish() {
   rm -f "$prompt_f"
 }
 
-_ccs_dispatch_spawn() {
+_ccs_dispatch_spawn_headless() {
   local job_id="$1" project_dir="$2" prompt="$3"
   local timeout_secs="$4" mode="$5"
   local dispatch_dir script_dir
@@ -204,6 +204,25 @@ _ccs_dispatch_spawn() {
     echo $! > "$dispatch_dir/pids/${job_id}.pid"
     disown
   fi
+}
+
+# Dispatcher: pick backend, route, fall back to headless on agent-pager failure.
+# Optional $6 = pre-resolved backend (avoids double-resolve from ccs-dispatch).
+_ccs_dispatch_spawn() {
+  local job_id="$1" project_dir="$2" prompt="$3"
+  local timeout_secs="$4" mode="$5"
+  local backend="${6:-$(_ccs_dispatch_resolve_backend)}"
+
+  _CCS_DISPATCH_LAST_BACKEND="$backend"
+  if [ "$backend" = "agentpager" ]; then
+    if _ccs_dispatch_spawn_agentpager \
+         "$job_id" "$project_dir" "$prompt" "$timeout_secs" "$mode"; then
+      return 0
+    fi
+    _CCS_DISPATCH_LAST_BACKEND="headless"  # agent-pager failed -> fell back
+  fi
+  _ccs_dispatch_spawn_headless \
+    "$job_id" "$project_dir" "$prompt" "$timeout_secs" "$mode"
 }
 
 _ccs_dispatch_lazy_cleanup() {
