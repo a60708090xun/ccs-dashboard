@@ -13,31 +13,31 @@ echo "=== _ccs_resurrect_prompt_archived ==="
 
 # ── Test 1: prompt-archived with live process → resurrected ──
 _ccs_running_cwd_counts() { printf 'C:path-to-project\t1\n'; }
-ROW1='C|/path/to/project|45|prompt-archived|\033[90m\033[9m|project|abc12345|45m ago|topic||/fake/abc12345.jsonl'
+ROW1='C|/path/to/project|45|prompt-archived|\033[90m\033[9m|project|abc12345|45m ago|topic||/fake/path-to-project/abc12345.jsonl'
 st1=$(printf '%s\n' "$ROW1" | _ccs_resurrect_prompt_archived | awk -F'|' '{print $4}')
 case "$st1" in
-  active|recent|idle|stale|dormant) pass "prompt-archived with live process → $st1" ;;
+  active|recent|idle|stale) pass "prompt-archived with live process → $st1" ;;
   *) fail "prompt-archived with live process resurrected" "active|idle|..." "$st1" ;;
 esac
 
 # ── Test 2: exit-archived passes through unchanged ──
 _ccs_running_cwd_counts() { printf 'C:path-to-project\t1\n'; }
-ROW2='C|/path/to/project|45|archived|\033[90m\033[9m|project|abc12346|45m ago|topic||/fake/abc12346.jsonl'
+ROW2='C|/path/to/project|45|archived|\033[90m\033[9m|project|abc12346|45m ago|topic||/fake/path-to-project/abc12346.jsonl'
 st2=$(printf '%s\n' "$ROW2" | _ccs_resurrect_prompt_archived | awk -F'|' '{print $4}')
 [ "$st2" = "archived" ] && pass "exit-archived stays archived" \
                          || fail "exit-archived stays archived" "archived" "$st2"
 
 # ── Test 3: prompt-archived without live process stays prompt-archived ──
 _ccs_running_cwd_counts() { printf ''; }
-ROW3='C|/path/to/project|45|prompt-archived|\033[90m\033[9m|project|abc12347|45m ago|topic||/fake/abc12347.jsonl'
+ROW3='C|/path/to/project|45|prompt-archived|\033[90m\033[9m|project|abc12347|45m ago|topic||/fake/path-to-project/abc12347.jsonl'
 st3=$(printf '%s\n' "$ROW3" | _ccs_resurrect_prompt_archived | awk -F'|' '{print $4}')
 [ "$st3" = "prompt-archived" ] && pass "prompt-archived without process stays prompt-archived" \
                                 || fail "prompt-archived without process stays prompt-archived" "prompt-archived" "$st3"
 
 # ── Test 4: older prompt-archived loses slot to newer non-archived ──
 _ccs_running_cwd_counts() { printf 'C:path-to-project\t1\n'; }
-NEWER='C|/path/to/project|5|idle|\033[36m|project|newer001|5m ago|topic||/fake/newer001.jsonl'
-OLDER='C|/path/to/project|120|prompt-archived|\033[90m\033[9m|project|older001|2h ago|topic||/fake/older001.jsonl'
+NEWER='C|/path/to/project|5|idle|\033[36m|project|newer001|5m ago|topic||/fake/path-to-project/newer001.jsonl'
+OLDER='C|/path/to/project|120|prompt-archived|\033[90m\033[9m|project|older001|2h ago|topic||/fake/path-to-project/older001.jsonl'
 out4=$(printf '%s\n%s\n' "$NEWER" "$OLDER" | _ccs_resurrect_prompt_archived)
 newer_st=$(printf '%s\n' "$out4" | awk -F'|' '$7=="newer001"{print $4}')
 older_st=$(printf '%s\n' "$out4" | awk -F'|' '$7=="older001"{print $4}')
@@ -67,7 +67,8 @@ raw=$(CCS_PROJECTS_DIR="$TMPDIR_E2E/projects" \
   || fail "e2e: ccs_collect.py emits prompt-archived" "prompt-archived" "$raw"
 
 _ccs_running_cwd_counts() {
-  local norm; norm=$(printf '%s' "/tmp/ccs-e2e" | sed 's/[\/._]/-/g; s/--*/-/g; s/^-//')
+  # Key is derived from the encoded dir name: basename "$(dirname "$_fp")" = -tmp-ccs-e2e → tmp-ccs-e2e
+  local norm; norm=$(printf '%s' "-tmp-ccs-e2e" | sed 's/[\/._]/-/g; s/--*/-/g; s/^-//')
   printf 'C:%s\t1\n' "$norm"
 }
 
@@ -76,7 +77,7 @@ resurrected=$(CCS_PROJECTS_DIR="$TMPDIR_E2E/projects" \
   | _ccs_resurrect_prompt_archived \
   | awk -F'|' '{print $4}')
 case "$resurrected" in
-  active|recent|idle|stale|dormant) pass "e2e: session resurrected to '$resurrected'" ;;
+  active|recent|idle|stale) pass "e2e: session resurrected to '$resurrected'" ;;
   *) fail "e2e: session resurrected" "active|idle|..." "$resurrected" ;;
 esac
 

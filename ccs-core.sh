@@ -848,12 +848,13 @@ _ccs_resurrect_prompt_archived() {
   declare -A _prom=()
   local _lv=""
   for _r in "${_rows[@]}"; do
-    local _prov _proj _ago _status _sid
-    IFS='|' read -r _prov _proj _ago _status _ _ _sid _ _ _ _ <<< "$_r"
+    local _prov _proj _ago _status _sid _fp
+    IFS='|' read -r _prov _proj _ago _status _ _ _sid _ _ _ _fp <<< "$_r"
     [ "$_status" = "archived" ] && continue
     [ -z "$_sid" ] && continue
     local _mt=$(( now - _ago * 60 ))
-    local _norm; _norm=$(printf '%s' "$_proj" | sed 's/[\/._]/-/g; s/--*/-/g; s/^-//')
+    local _encoded_dir; _encoded_dir=$(basename "$(dirname "$_fp")")
+    local _norm; _norm=$(printf '%s' "$_encoded_dir" | sed 's/[\/._]/-/g; s/--*/-/g; s/^-//')
     local _ex=0
     echo "$_sids" | grep -qw "$_sid" 2>/dev/null && _ex=1
     _lv+="${_sid}"$'\t'"${_prov}:${_norm}"$'\t'"${_mt}"$'\t'"${_ex}"$'\n'
@@ -871,11 +872,10 @@ _ccs_resurrect_prompt_archived() {
     local _prov _proj _ago _status _color _dproj _sid _ago_str _topic _badge _fp
     IFS='|' read -r _prov _proj _ago _status _color _dproj _sid _ago_str _topic _badge _fp <<< "$_r"
     if [ "$_status" = "prompt-archived" ] && [ -n "${_alive[$_sid]+x}" ]; then
-      if   (( _ago <    5 )); then _status="active";  _color=$'\033[32m'
-      elif (( _ago <   15 )); then _status="recent";  _color=$'\033[33m'
-      elif (( _ago <   60 )); then _status="idle";    _color=$'\033[36m'
-      elif (( _ago < 1440 )); then _status="stale";   _color=$'\033[34m'
-      else                         _status="dormant"; _color=$'\033[35m'
+      if   (( _ago <   10 )); then _status="active"; _color=$'\033[32m'
+      elif (( _ago <   60 )); then _status="recent"; _color=$'\033[33m'
+      elif (( _ago < 1440 )); then _status="idle";   _color=$'\033[34m'
+      else                         _status="stale";  _color=$'\033[90m'
       fi
     fi
     printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
