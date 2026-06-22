@@ -85,4 +85,25 @@ assert_eq "fell-back job completed" "completed" "$st"
 assert_eq "LAST_BACKEND reflects fallback" "headless" "$_CCS_DISPATCH_LAST_BACKEND"
 rm -rf "$mock_dir3" "$proj3" "$tmplog"* "$out_file"
 
+echo "=== jobs record + display backend ==="
+mock_dir4="$SCRIPT_DIR/tmp/test-dispatch-backend-bin4"
+proj4="$SCRIPT_DIR/tmp/test-dispatch-backend-proj4"
+mkdir -p "$mock_dir4" "$proj4"
+printf '#!/bin/bash\necho "mock result: $*"\n' > "$mock_dir4/claude"
+chmod +x "$mock_dir4/claude"
+jid=$(CCS_DISPATCH_BACKEND=headless PATH="$mock_dir4:$PATH" \
+  ccs-dispatch --sync --project "$proj4" "backend field test" 2>/dev/null \
+  | grep -oP 'd-\d{8}-\d{6}-[a-f0-9]{4}' | head -1)
+dd="$(_ccs_dispatch_dir)"
+# merged record carries backend (initial record) + status (finish record)
+merged=$(grep "\"job_id\":\"$jid\"" "$dd/jobs.jsonl" \
+  | jq -s 'reduce .[] as $r ({}; . + $r)')
+assert_eq "jsonl backend recorded" "headless" "$(echo "$merged" | jq -r '.backend')"
+assert_eq "jsonl status preserved" "completed" "$(echo "$merged" | jq -r '.status')"
+# .md shows backend
+assert_contains ".md shows backend" "$(cat "$dd/results/${jid}.md")" "Backend:"
+# list shows backend column
+assert_contains "ccs-jobs list shows backend" "$(ccs-jobs 2>/dev/null)" "headless"
+rm -rf "$mock_dir4" "$proj4"
+
 test_summary

@@ -61,14 +61,15 @@ _ccs_dispatch_jsonl_append() {
   echo "$1" >> "$dispatch_dir/jobs.jsonl"
 }
 
-# Read latest record for a job_id (append-latest-wins)
+# Read merged record for a job_id (reduce-merge: all fields, later wins)
 _ccs_dispatch_jsonl_latest() {
   local job_id="$1"
   local dispatch_dir
   dispatch_dir="$(_ccs_dispatch_dir)"
   local f="$dispatch_dir/jobs.jsonl"
   [ -f "$f" ] || return 1
-  grep "\"job_id\":\"${job_id}\"" "$f" | tail -1
+  grep "\"job_id\":\"${job_id}\"" "$f" \
+    | jq -s 'reduce .[] as $r ({}; . + $r)'
 }
 
 _ccs_dispatch_finish() {
@@ -98,6 +99,8 @@ _ccs_dispatch_finish() {
   local project created_at
   project=$(echo "$initial" | jq -r '.project // "unknown"')
   created_at=$(echo "$initial" | jq -r '.created_at // "unknown"')
+  local backend
+  backend=$(echo "$initial" | jq -r '.backend // "headless"')
   local finished_at
   finished_at=$(date -Iseconds)
 
@@ -120,6 +123,7 @@ _ccs_dispatch_finish() {
     echo "- **Task:** $task"
     echo "- **Status:** $status"
     echo "- **Exit code:** $exit_code"
+    echo "- **Backend:** $backend"
     echo "- **Created:** $created_at"
     echo "- **Finished:** $finished_at"
     [ -n "$duration_s" ] && echo "- **Duration:** $duration_s"
@@ -339,6 +343,8 @@ HELP
     prompt="$(_ccs_dispatch_context "$project")Task: $task"
   fi
 
+  local backend
+  backend=$(_ccs_dispatch_resolve_backend)
   local job_id
   job_id=$(_ccs_dispatch_job_id)
   _ccs_dispatch_jsonl_append "$(jq -nc \
@@ -347,12 +353,21 @@ HELP
     --arg t "$task" \
     --argjson ctx "$context" \
     --arg m "$mode" \
+    --arg be "$backend" \
     --arg ca "$(date -Iseconds)" \
-    '{job_id:$jid, project:$proj, task:$t, context_injected:$ctx, mode:$m, status:"running", created_at:$ca}'
+    '{job_id:$jid, project:$proj, task:$t, context_injected:$ctx, mode:$m, backend:$be, status:"running", created_at:$ca}'
   )"
 
   local spawn_rc=0
-  _ccs_dispatch_spawn "$job_id" "$project" "$prompt" "$timeout_secs" "$mode" || spawn_rc=$?
+  _ccs_dispatch_spawn "$job_id" "$project" "$prompt" \
+    "$timeout_secs" "$mode" "$backend" || spawn_rc=$?
+
+  if [ "${_CCS_DISPATCH_LAST_BACKEND:-$backend}" != "$backend" ]; then
+    _ccs_dispatch_jsonl_append "$(jq -nc \
+      --arg jid "$job_id" \
+      --arg be "$_CCS_DISPATCH_LAST_BACKEND" \
+      '{job_id:$jid, backend:$be, fallback:true}')"
+  fi
 
   if [ "$mode" = "sync" ]; then
     local dispatch_dir
@@ -447,7 +462,9 @@ _ccs_jobs_show_list() {
   local tlen="$CCS_DISPATCH_TASK_DISPLAY_LEN"
 
   local deduped
-  deduped=$(jq -s 'group_by(.job_id) | map(last) | sort_by(.created_at) | reverse' "$jobs_file")
+  deduped=$(jq -s \
+    'group_by(.job_id) | map(reduce .[] as $r ({}; . + $r))
+     | sort_by(.created_at) | reverse' "$jobs_file")
 
   if [ "$show_all" = "false" ]; then
     deduped=$(echo "$deduped" | jq ".[0:$limit]")
@@ -459,7 +476,7 @@ _ccs_jobs_show_list() {
   echo "========================"
 
   echo "$deduped" | jq -r --argjson tl "$tlen" '
-    .[] | "\(.job_id)  \(.status | .[0:9] | . + " " * (9 - length))  \(.task | .[0:$tl])"
+    .[] | "\(.job_id)  \((.backend // "?") | .[0:10] | . + " " * (10 - length))  \(.status | .[0:9] | . + " " * (9 - length))  \(.task | .[0:$tl])"
   '
 }
 
