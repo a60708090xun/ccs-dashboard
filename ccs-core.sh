@@ -801,6 +801,89 @@ _ccs_liveness_classify() {
   '
 }
 
+# ── Helper: compute per-(provider,cwd) live entry-process counts ──
+# Output: GROUP_KEY TAB COUNT, one line per unique running process cwd.
+# GROUP_KEY format: C:<norm> for claude, G:<norm> for gemini.
+# norm = path with [/._] replaced by -, deduplicated.
+_ccs_running_cwd_counts() {
+  local _uid; _uid=$(id -u)
+  {
+    local p cwd norm
+    for p in $(pgrep -u "$_uid" -x claude 2>/dev/null); do
+      cwd=$(readlink "/proc/$p/cwd" 2>/dev/null) || continue
+      norm=$(printf '%s' "$cwd" | sed 's/[\/._]/-/g; s/--*/-/g; s/^-//')
+      [ -n "$norm" ] && printf 'C:%s\n' "$norm"
+    done
+    for p in $(pgrep -u "$_uid" -x gemini 2>/dev/null); do
+      cwd=$(readlink "/proc/$p/cwd" 2>/dev/null) || continue
+      norm=$(printf '%s' "$cwd" | sed 's/[\/._]/-/g; s/--*/-/g; s/^-//')
+      [ -n "$norm" ] && printf 'G:%s\n' "$norm"
+    done
+  } | sort | uniq -c | awk '{print $2 "\t" $1}'
+}
+
+# ── Pipe filter: resurrect prompt-archived sessions backed by live processes ──
+# Reads 11-column pipe-separated rows from ccs_collect.py.
+# Columns: prov|proj|ago|status|color|display_proj|sid|ago_str|topic|badge|filepath
+#
+# Sessions with status="prompt-archived" (Check 2, trailing last-prompt, not /exit)
+# compete for live process slots via _ccs_liveness_classify alongside normal sessions.
+# Winners are upgraded to their age-appropriate non-archived status.
+# Sessions with status="archived" (Check 1, /exit) pass through unchanged.
+_ccs_resurrect_prompt_archived() {
+  local now; now=$(date +%s)
+
+  local -a _rows=()
+  local _r
+  while IFS= read -r _r; do _rows+=("$_r"); done
+  [ ${#_rows[@]} -eq 0 ] && return 0
+
+  local _counts; _counts=$(_ccs_running_cwd_counts)
+
+  local _sids=""
+  _sids=$(ps -eo args 2>/dev/null \
+    | grep -oP '(?<=--resume )[0-9a-f-]{36}|(?<=--session )[0-9a-f-]{36}' \
+    | sort -u || true)
+
+  declare -A _prom=()
+  local _lv=""
+  for _r in "${_rows[@]}"; do
+    local _prov _proj _ago _status _sid
+    IFS='|' read -r _prov _proj _ago _status _ _ _sid _ _ _ _ <<< "$_r"
+    [ "$_status" = "archived" ] && continue
+    [ -z "$_sid" ] && continue
+    local _mt=$(( now - _ago * 60 ))
+    local _norm; _norm=$(printf '%s' "$_proj" | sed 's/[\/._]/-/g; s/--*/-/g; s/^-//')
+    local _ex=0
+    echo "$_sids" | grep -qw "$_sid" 2>/dev/null && _ex=1
+    _lv+="${_sid}"$'\t'"${_prov}:${_norm}"$'\t'"${_mt}"$'\t'"${_ex}"$'\n'
+    [ "$_status" = "prompt-archived" ] && _prom["$_sid"]=1
+  done
+
+  declare -A _alive=()
+  if [ -n "$_lv" ]; then
+    while IFS=$'\t' read -r _s _v; do
+      [ -n "${_prom[$_s]+x}" ] && [ "$_v" = "alive" ] && _alive["$_s"]=1
+    done < <(printf '%s' "$_lv" | _ccs_liveness_classify <(printf '%s\n' "$_counts"))
+  fi
+
+  for _r in "${_rows[@]}"; do
+    local _prov _proj _ago _status _color _dproj _sid _ago_str _topic _badge _fp
+    IFS='|' read -r _prov _proj _ago _status _color _dproj _sid _ago_str _topic _badge _fp <<< "$_r"
+    if [ "$_status" = "prompt-archived" ] && [ -n "${_alive[$_sid]+x}" ]; then
+      if   (( _ago <    5 )); then _status="active";  _color=$'\033[32m'
+      elif (( _ago <   15 )); then _status="recent";  _color=$'\033[33m'
+      elif (( _ago <   60 )); then _status="idle";    _color=$'\033[36m'
+      elif (( _ago < 1440 )); then _status="stale";   _color=$'\033[34m'
+      else                         _status="dormant"; _color=$'\033[35m'
+      fi
+    fi
+    printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
+      "$_prov" "$_proj" "$_ago" "$_status" "$_color" "$_dproj" \
+      "$_sid" "$_ago_str" "$_topic" "$_badge" "$_fp"
+  done
+}
+
 # ── Helper: detect crash-interrupted sessions ──
 # Usage: declare -A crash_map; _ccs_detect_crash crash_map [--reboot-window N] [--idle-window N] [--hung-threshold N] [files_array] [projects_array]
 # crash_map[session_id] = "high:reboot" | "high:reboot-idle" | "high:non-reboot" | "high:non-reboot-idle" | "high:hung"
@@ -861,21 +944,8 @@ _ccs_detect_crash() {
   # symlinked path may not match and would be treated as orphaned (over-counting
   # can't rescue a key *mismatch*) — acceptable: such launches are rare and the
   # prior loose suffix match had the same readlink basis.
-  local _uid; _uid=$(id -u)
-  local running_cwd_counts=""
-  running_cwd_counts=$({
-    local p cwd norm
-    for p in $(pgrep -u "$_uid" -x claude 2>/dev/null); do
-      cwd=$(readlink "/proc/$p/cwd" 2>/dev/null) || continue
-      norm=$(printf '%s' "$cwd" | sed 's/[\/._]/-/g; s/--*/-/g; s/^-//')
-      [ -n "$norm" ] && printf 'C:%s\n' "$norm"
-    done
-    for p in $(pgrep -u "$_uid" -x gemini 2>/dev/null); do
-      cwd=$(readlink "/proc/$p/cwd" 2>/dev/null) || continue
-      norm=$(printf '%s' "$cwd" | sed 's/[\/._]/-/g; s/--*/-/g; s/^-//')
-      [ -n "$norm" ] && printf 'G:%s\n' "$norm"
-    done
-  } | sort | uniq -c | awk '{print $2 "\t" $1}')
+  local running_cwd_counts
+  running_cwd_counts=$(_ccs_running_cwd_counts)
 
   local count=${#_cd_files[@]}
   local i
