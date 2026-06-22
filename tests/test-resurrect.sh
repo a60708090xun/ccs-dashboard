@@ -47,5 +47,41 @@ older_st=$(printf '%s\n' "$out4" | awk -F'|' '$7=="older001"{print $4}')
                                     || fail "older prompt-archived without slot stays prompt-archived" "prompt-archived" "$older_st"
 
 echo ""
+echo "=== e2e: ccs_collect.py → resurrection → non-archived status ==="
+
+TMPDIR_E2E=$(mktemp -d /pool2/chenhsun/tools/ccs-dashboard-fix-issue57/build/e2e-XXXXXX)
+SID_E2E="aaaabbbb-cccc-dddd-eeee-ffffffffffff"
+JDIR_E2E="$TMPDIR_E2E/projects/-tmp-ccs-e2e"
+mkdir -p "$JDIR_E2E"
+JFILE_E2E="$JDIR_E2E/${SID_E2E}.jsonl"
+cat > "$JFILE_E2E" <<'JSONL'
+{"type":"user","message":{"content":"hello"}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"hi"}]}}
+{"type":"last-prompt","timestamp":"2026-06-22T00:00:00Z"}
+JSONL
+
+raw=$(CCS_PROJECTS_DIR="$TMPDIR_E2E/projects" \
+  python3 "$SCRIPT_DIR/ccs_collect.py" --file "$JFILE_E2E" | awk -F'|' '{print $4}')
+[ "$raw" = "prompt-archived" ] \
+  && pass "e2e: ccs_collect.py emits prompt-archived" \
+  || fail "e2e: ccs_collect.py emits prompt-archived" "prompt-archived" "$raw"
+
+_ccs_running_cwd_counts() {
+  local norm; norm=$(printf '%s' "/tmp/ccs-e2e" | sed 's/[\/._]/-/g; s/--*/-/g; s/^-//')
+  printf 'C:%s\t1\n' "$norm"
+}
+
+resurrected=$(CCS_PROJECTS_DIR="$TMPDIR_E2E/projects" \
+  python3 "$SCRIPT_DIR/ccs_collect.py" --file "$JFILE_E2E" \
+  | _ccs_resurrect_prompt_archived \
+  | awk -F'|' '{print $4}')
+case "$resurrected" in
+  active|recent|idle|stale|dormant) pass "e2e: session resurrected to '$resurrected'" ;;
+  *) fail "e2e: session resurrected" "active|idle|..." "$resurrected" ;;
+esac
+
+rm -rf "$TMPDIR_E2E"
+
+echo ""
 echo "Results: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ] || exit 1

@@ -480,8 +480,8 @@ HELP
   local collect_cmd="python3 \"$script_dir/ccs_collect.py\""
   $show_all && collect_cmd="${collect_cmd} --all"
 
-  eval "$collect_cmd" | awk -F'|' -v max_mins="$mins" -v show_all="$show_all" '
-    $3 <= max_mins && (show_all == "true" || $4 != "archived") { print $0 }
+  eval "$collect_cmd" | _ccs_resurrect_prompt_archived | awk -F'|' -v max_mins="$mins" -v show_all="$show_all" '
+    $3 <= max_mins && (show_all == "true" || ($4 != "archived" && $4 != "prompt-archived")) { print $0 }
   ' | while IFS='|' read -r prov proj ago status color display_proj sid ago_str topic badge filepath; do
     if [ -n "$prev_project" ] && [ "$proj" != "$prev_project" ]; then
       echo
@@ -529,8 +529,8 @@ HELP
   local open_files=()
   local sorted_rows=""
   
-  sorted_rows=$(python3 "$script_dir/ccs_collect.py" | awk -F'|' -v max_mins="$mins" '
-    $3 <= max_mins && $4 != "archived" { print $0 }
+  sorted_rows=$(python3 "$script_dir/ccs_collect.py" | _ccs_resurrect_prompt_archived | awk -F'|' -v max_mins="$mins" '
+    $3 <= max_mins && $4 != "archived" && $4 != "prompt-archived" { print $0 }
   ')
 
   while IFS='|' read -r prov proj ago status color display_proj sid ago_str topic badge filepath; do
@@ -1397,7 +1397,7 @@ _ccs_collect_sessions() {
     _out_files+=("$filepath")
     _out_projects+=("$encoded_dir")
     _out_rows+=("$(printf '%s\t%s\t%d\t%s\t%s\t%s\t%s' "$prov" "$proj" "$ago" "$status" "$color" "$display" "$badge")")
-  done < <(python3 "$script_dir/ccs_collect.py" $show_all)
+  done < <(python3 "$script_dir/ccs_collect.py" $show_all | _ccs_resurrect_prompt_archived)
 }
 
 # Helper: format "N ago" from minutes
