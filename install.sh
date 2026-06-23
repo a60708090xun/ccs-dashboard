@@ -120,7 +120,7 @@ do_install() {
   echo
 
   # Check files exist
-  local modules=(ccs-core.sh ccs-health.sh ccs-viewer.sh ccs-handoff.sh ccs-overview.sh ccs-feature.sh ccs-ops.sh ccs-dispatch.sh ccs-review.sh ccs-project.sh ccs-dashboard.sh)
+  local modules=(ccs-core.sh ccs-health.sh ccs-failure-triage.sh ccs-viewer.sh ccs-handoff.sh ccs-overview.sh ccs-feature.sh ccs-ops.sh ccs-dispatch.sh ccs-review.sh ccs-project.sh ccs-dashboard.sh)
   local all_found=true
   for mod in "${modules[@]}"; do
     if [ ! -f "${SCRIPT_DIR}/${mod}" ]; then

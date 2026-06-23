@@ -3,14 +3,15 @@
 # Source this file from .bashrc:  source ~/tools/ccs-dashboard/ccs-dashboard.sh
 #
 # This is the main entry point that sources all modules:
-#   ccs-core.sh      — session parsing, shared helpers, basic commands
-#   ccs-health.sh    — session health scoring
-#   ccs-viewer.sh    — ccs-html, ccs-details
-#   ccs-handoff.sh   — ccs-handoff, ccs-resume-prompt
-#   ccs-overview.sh  — ccs-overview
-#   ccs-feature.sh   — ccs-feature, ccs-tag
-#   ccs-ops.sh       — ccs-crash, ccs-recap, ccs-checkpoint
-#   ccs-dispatch.sh  — ccs-dispatch, ccs-jobs
+#   ccs-core.sh           — session parsing, shared helpers, basic commands
+#   ccs-health.sh         — session health scoring
+#   ccs-failure-triage.sh — model-failure quick triage
+#   ccs-viewer.sh         — ccs-html, ccs-details
+#   ccs-handoff.sh        — ccs-handoff, ccs-resume-prompt
+#   ccs-overview.sh       — ccs-overview
+#   ccs-feature.sh        — ccs-feature, ccs-tag
+#   ccs-ops.sh            — ccs-crash, ccs-recap, ccs-checkpoint
+#   ccs-dispatch.sh       — ccs-dispatch, ccs-jobs
 #
 # Commands defined in this file:
 #   ccs-status (ccs) — unified session dashboard
@@ -19,6 +20,7 @@
 # ── Load modules ──
 source "$(dirname "${BASH_SOURCE[0]}")/ccs-core.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/ccs-health.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/ccs-failure-triage.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/ccs-viewer.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/ccs-handoff.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/ccs-overview.sh"
