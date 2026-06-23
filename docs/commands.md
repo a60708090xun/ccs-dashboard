@@ -554,3 +554,28 @@ ccs-project --no-insights             # 跳過 LLM 洞察
 **依賴（選用）：**
 - `jinja2`：`--format html`（`pip3 install jinja2`）
 - `weasyprint`：`--format pdf`（`pip3 install weasyprint`）
+
+## ccs-failure-triage
+
+對 session 進行 model confabulation-family 失效信號診斷。
+自動執行 5 項鑑識檢查，偵測 Sub-pattern A/B/C/D 失效類型，
+並將報告寫入 `<project>/tmp/`。
+
+```bash
+# 診斷最近一個 session
+ccs-failure-triage
+
+# 指定 session（prefix 即可）
+ccs-failure-triage <session-id>
+
+# 使用標籤模式（加上說明標記，方便後續追蹤）
+ccs-failure-triage <session-id> --label "腦補假成功"
+
+# 顯示用法說明
+ccs-failure-triage --help
+
+# 顯示 SOP（標準作業程序）
+ccs-failure-triage --sop
+```
+
+詳細說明見 `docs/failure-triage.md`。

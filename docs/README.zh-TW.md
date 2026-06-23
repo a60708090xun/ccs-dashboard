@@ -82,6 +82,7 @@ ccs-dashboard 分兩層：
 | `ccs-jobs` | 查看 dispatch 任務歷史與結果 |
 | `ccs-review` | Session 回顧報告 — 統計、對話、LLM 摘要（md/html/pdf） |
 | `ccs-project` | 專案層級洞察報告 — 成本、進度、節奏、程式碼變動（md/html） |
+| `ccs-failure-triage` | 對 session 進行 model confabulation-family 失效信號分類診斷 |
 
 所有指令支援 **Terminal ANSI** 和 **Markdown**（`--md`）兩種輸出模式。詳細參數、範例、典型工作流程與狀態圖示見 [commands.md](commands.md)。
 

@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- `ccs-failure-triage`: triage a session for model confabulation-family failure signals (Sub-pattern A/B/C/D). Includes 5 automated forensic checks and writes a report to `<project>/tmp/`. See `docs/failure-triage.md`.
+
 ## [0.3.3] — 2026-04-17
 
 ### Added
