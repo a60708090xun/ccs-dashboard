@@ -1,6 +1,6 @@
 ---
 name: ccs-orchestrator
-description: "MANDATORY for any ccs-* command execution. Never run ccs-* commands via Bash directly — always invoke this skill instead. Triggers on: ccs-status, ccs-overview, ccs-crash, ccs-checkpoint, ccs-recap, ccs-feature, ccs-handoff, ccs-pick, ccs-health, ccs-dispatch, ccs-jobs, ccs-review, ccs-project. Also triggers on: 'checkpoint', 'overview', 'recap', 'sessions', 'crash', 'health', 'handoff', 'dispatch', 'review', 'session review', 'project report', 'project insights', '回顧', '報告', 'weekly report', '週報', '專案報告', '專案洞察', '跑一下checkpoint', '目前狀態', '工作總覽', 'what am I working on', 'show my sessions', 'セッションの状態'. This skill handles output rendering (via _ccs_to_file + Read) so results display correctly in session view."
+description: "MANDATORY for any ccs-* command execution. Never run ccs-* commands via Bash directly — always invoke this skill instead. Triggers on: ccs-status, ccs-overview, ccs-crash, ccs-checkpoint, ccs-recap, ccs-feature, ccs-handoff, ccs-pick, ccs-health, ccs-dispatch, ccs-jobs, ccs-review, ccs-project, ccs-failure-triage. Also triggers on: 'checkpoint', 'overview', 'recap', 'sessions', 'crash', 'health', 'handoff', 'dispatch', 'review', 'session review', 'project report', 'project insights', '回顧', '報告', 'weekly report', '週報', '專案報告', '專案洞察', '跑一下checkpoint', '目前狀態', '工作總覽', 'what am I working on', 'show my sessions', 'セッションの状態', 'ccs-failure-triage', 'confabulation', 'model failure triage', 'confabulation triage', '對話對不起來', '假成功', 'model 怪怪的', '被注入', '腦補', 'session triage'. This skill handles output rendering (via _ccs_to_file + Read) so results display correctly in session view."
 ---
 
 # Code CLI Sessions (CCS) Orchestrator
@@ -51,6 +51,7 @@ description: "MANDATORY for any ccs-* command execution. Never run ccs-* command
 | checkpoint | cp | `ccs-checkpoint --md` — 進度快照（Done/WIP/Blocked） |
 | recap | rc | `ccs-recap --json` + AI analysis — daily work recap |
 | health | h | `ccs-health --md` — 顯示 session health report |
+| failure-triage [sid] | ft | `ccs-failure-triage [sid]` — triage session for model confabulation-family failure signals |
 | dispatch [dir] "task" | dp | `ccs-dispatch --project <dir> "task"` — 派工到新 session |
 | jobs | j | `ccs-jobs` — dispatch 任務歷史 |
 | job <id> | | `ccs-jobs <id>` — 單筆結果 |

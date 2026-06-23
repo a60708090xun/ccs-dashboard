@@ -82,6 +82,7 @@ ccs-dashboard has two layers:
 | `ccs-jobs` | View dispatch job history and results |
 | `ccs-review` | Session review report — stats, conversation, LLM summary (md/html/pdf) |
 | `ccs-project` | Per-project insight report — cost, features, rhythm, code changes (md/html) |
+| `ccs-failure-triage` | Triage a session for model confabulation-family failure signals |
 
 All commands support both **Terminal ANSI** and **Markdown** (`--md`) output. See [docs/commands.md](docs/commands.md) for detailed flags, examples, the typical workflow, and status indicators.
 
