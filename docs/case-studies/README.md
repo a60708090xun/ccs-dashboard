@@ -9,6 +9,7 @@ preserving forensic methodology and detection signatures.
 | Date | Model | Sub-pattern | Severity | File |
 |------|-------|-------------|----------|------|
 | 2026-04-14 | Gemini 3.1 Pro | Over-confidence / YOLO coverage gap | Medium | [gemini-yolo-overconfidence.md](gemini-yolo-overconfidence.md) |
+| 2026-06-20 | Claude Opus 4.8 | B+C+A — fabricated injection claim → imagined security drill | Medium-High | [2026-06-20-opus-fabricated-injection-claim.md](2026-06-20-opus-fabricated-injection-claim.md) |
 | 2026-06-23 | Claude Opus 4.8 | B+C — fabricated output + externalized blame | High | [2026-06-23-opus-fabricated-output.md](2026-06-23-opus-fabricated-output.md) |
 | 2026-06-23 | Claude Opus 4.8 | A — imagined user question | Low | [2026-06-23-opus-imagined-question.md](2026-06-23-opus-imagined-question.md) |
 | 2026-06-23 | Claude Opus 4.8 | A+B+C+D — paranoid injection loop | High | [2026-06-23-opus-paranoid-loop.md](2026-06-23-opus-paranoid-loop.md) |
