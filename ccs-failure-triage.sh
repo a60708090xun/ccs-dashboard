@@ -545,7 +545,7 @@ Usage:
 
   # Label (no cd needed; project resolved from transcript metadata)
   ccs-failure-triage <hint>:<6-hex-short>
-  # e.g. myproject:4623ae, argus:873960
+  # e.g. myproject:abc123, otherproj:def456
 
 Bare session-id mode:
   Resolves the transcript at:

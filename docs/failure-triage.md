@@ -425,6 +425,6 @@ If the case has reproduction value, document it in `docs/case-studies/`:
 
 ## References
 
-- Auto-triage script: `scripts/model-failure-triage.sh`
+- Auto-triage command: `ccs-failure-triage` (source: `ccs-failure-triage.sh`)
 - Case studies: `docs/case-studies/`
 - Public known issue: <https://github.com/anthropics/claude-code/issues/63884>

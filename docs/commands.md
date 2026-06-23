@@ -562,19 +562,14 @@ ccs-project --no-insights             # 跳過 LLM 洞察
 並將報告寫入 `<project>/tmp/`。
 
 ```bash
-# 診斷最近一個 session
-ccs-failure-triage
-
-# 指定 session（prefix 即可）
+# Bare session-id mode (cd to project root first)
 ccs-failure-triage <session-id>
 
-# 使用標籤模式（加上說明標記，方便後續追蹤）
-ccs-failure-triage <session-id> --label "腦補假成功"
+# Label mode (no cd needed; project resolved from transcript cwd)
+ccs-failure-triage myproject:abc123
 
-# 顯示用法說明
+# Help and SOP
 ccs-failure-triage --help
-
-# 顯示 SOP（標準作業程序）
 ccs-failure-triage --sop
 ```
 
