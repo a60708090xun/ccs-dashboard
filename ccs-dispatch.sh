@@ -280,6 +280,27 @@ _ccs_dispatch_context() {
   echo "$ctx"
 }
 
+# Returns a verification rule prepended to every dispatch prompt.
+# Guards against Opus 4.8 tool-output confabulation (fabricated success narratives).
+# See docs/case-studies/2026-06-23-opus-fabricated-output.md for root-cause analysis.
+_ccs_dispatch_verification_rule() {
+  cat <<'VRULE'
+VERIFICATION RULE (applies to this entire session, non-negotiable):
+After every tool call that creates or modifies an external resource —
+gh issue create, gh pr create, git commit, git push, Write, Edit — you MUST:
+1. Quote the exact tool_result line that confirms success before marking
+   the step done.
+2. Do NOT report a commit hash, PR URL, issue URL, or "file written"
+   unless that exact string appears verbatim in a preceding tool_result.
+3. If tool_result shows an error, exit code != 0, or only a bare URL
+   (with no additional confirmation text), report the failure immediately.
+   Never substitute a fabricated success narrative.
+Completion pressure does not override this rule.
+A reported failure is always preferable to a fabricated success.
+---
+VRULE
+}
+
 ccs-dispatch() {
   if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
     cat <<'HELP'
@@ -338,9 +359,13 @@ HELP
     echo "Warning: $running jobs running" >&2
   fi
 
-  local prompt="$task"
+  local _vrule
+  _vrule="$(_ccs_dispatch_verification_rule)"
+  local prompt
   if $context; then
-    prompt="$(_ccs_dispatch_context "$project")Task: $task"
+    prompt="$(_ccs_dispatch_context "$project")${_vrule}Task: $task"
+  else
+    prompt="${_vrule}Task: $task"
   fi
 
   local backend
