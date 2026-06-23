@@ -218,10 +218,57 @@ The script produces 5 checks:
 
 ```
 Check 3 hit + Check 4 hit + Check 2 has no matching prompt   → Sub-pattern A likely
-Check 5 hit                                                  → Sub-pattern B confirmed
+Check 5 hit                                                  → Sub-pattern B — verify first
 Check 4 hit + assistant mentions "tool poisoning / injection" → Sub-pattern C
 Check 3 + Check 4 both hit at end of turn                   → Sub-pattern D
 ```
+
+### False positive calibration
+
+Not every Check 5 hit is fabrication. Before escalating to Phase 2, apply these
+calibration rules:
+
+**Check 5 / Sub-pattern B — SDA orchestrator sessions**
+
+An SDA orchestrator naturally mentions commit hashes in prose summaries after `gh pr merge`
+or `git log` tool calls. The tool call returns a PR URL or merge confirmation — **not the
+hash** — so the hash only appears in the orchestrator's prose summary, which is written
+from prior context. Check 5 flags it as "not in tool_result", but the hash is real.
+
+Confirm before escalating:
+
+```bash
+git -C <repo> cat-file -t <flagged-hash>
+# commit  → hash is real, this is a false positive
+# missing object  → fabricated, proceed to Phase 2
+```
+
+**Check 5 / Sub-pattern B — small PR numbers (#1–#9)**
+
+The PR number regex matches step numbers, task labels, and check counters in prose
+("Task #3", "Check #5", etc.). A PR reference is more likely a false positive when:
+
+- The number is ≤ 9 and no other PR context appears in the turn
+- The repo has far more than 9 PRs open/closed
+
+Confirm with `gh pr view <N> --repo <owner/repo>` — if the PR does not exist, the
+number was a regex false positive.
+
+**Check 3 — multi-text-segment turns in SDA sessions**
+
+An SDA orchestrator routinely emits multiple text segments per turn (task dispatch,
+progress note, reviewer summary). Multi-segment turns are structural in SDA and are
+**not** a confabulation signal on their own. Only escalate Check 3 hits when they also
+co-occur with Check 4 (phrasing red flags) or when the final segment is reflective prose
+with no preceding user prompt.
+
+**General rule:**
+
+A Check 5 or Check 3 hit from a **Sonnet-class** model in an SDA session should be
+treated as probable false positive unless `git cat-file` or `gh pr view` confirms the
+artifact does not exist. Sonnet-class confabulation rates in SDA sessions are
+structurally much lower than Opus 4.8 long-turn rates; the baseline for each model
+generation differs significantly.
 
 ---
 
