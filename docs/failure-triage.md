@@ -270,6 +270,27 @@ artifact does not exist. Sonnet-class confabulation rates in SDA sessions are
 structurally much lower than Opus 4.8 long-turn rates; the baseline for each model
 generation differs significantly.
 
+**Investigating confabulation triggers confabulation detectors**
+
+A session whose purpose is to *diagnose* or *discuss* a prior confabulation will
+naturally contain the same vocabulary (injection, poisoning, fabricated hash, tampered
+channel) that the detectors look for. Check 4 and Check 5 false positives are therefore
+expected when:
+
+- The session opened with a prompt like "上個 session 歪掉了，狀況是？" (investigate
+  prior session) or "上個 session 分析到一半歪掉了" and the model read a file
+  written by that prior session
+- The session's tool_use includes reading `tmp/*-retrospective.md`,
+  `tmp/*-incident-report.md`, or any other artifact produced by a suspected confabulation
+  session
+
+In these cases, Check 4 phrasing hits are the model *quoting or analysing* the prior
+session's confabulation narrative, not producing its own. Confirm by checking whether
+the hit phrases appear in `assistant.text` after a Read/Bash that loaded the prior
+session's retrospective file. If so, treat as false positive and escalate only if the
+current session introduces new fabricated artifacts not present in the prior session's
+documents.
+
 ---
 
 ## Phase 2: Manual review of suspicious turns (5–15 min)
