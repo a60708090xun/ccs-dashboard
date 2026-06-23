@@ -192,7 +192,7 @@ _ccs_archive_session() {
   if [ "$(_ccs_get_provider "$f")" = "gemini" ]; then
     # Use jq to inject an "archived": true flag into the top-level object
     local tmpf
-    tmpf=$(mktemp)
+    tmpf=$(mktemp "$(dirname "$f")/ccs-archive.XXXXXX")
     if jq '. + {"archived": true}' "$f" > "$tmpf" 2>/dev/null; then
       cat "$tmpf" > "$f"
     fi
