@@ -167,6 +167,22 @@ _ccs_dispatch_finish() {
   rm -f "$prompt_f"
 }
 
+# Consume a framed agent-pager local-channel stream and emit each frame's
+# BODY to stdout (one per frame, newline-joined). Label is ignored — ccs
+# surfaces body only. Reads $1 (file path) or stdin.
+# Frame layout (agent-pager notify-send.sh local sink):
+#   <RS>MSG<US><LABEL><RS>\n<BODY>\n<RS>END<RS>\n   (RS=0x1E, US=0x1F)
+_ccs_consume_framed_stream() {
+  local src="${1:-/dev/stdin}"
+  awk -v RS=$'\x1e' -v us=$'\x1f' '
+    BEGIN { in_msg=0; expect_body=0; n=0 }
+    $0 ~ "^MSG" us        { in_msg=1; expect_body=1; next }
+    in_msg && expect_body { body=$0; sub(/^\n/,"",body); sub(/\n$/,"",body); expect_body=0; next }
+    in_msg && $0 ~ "^END" { bodies[n++]=body; in_msg=0 }
+    END { for (i=0;i<n;i++) { if (i) printf "\n"; printf "%s", bodies[i] } printf "\n" }
+  ' "$src"
+}
+
 # agent-pager backend — STAGE 1 STUB.
 # Stage 2 will write a local-channel inbound launch and map the worker
 # lifecycle back into jobs.jsonl. Until then this always fails so the
