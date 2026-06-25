@@ -14,6 +14,7 @@ preserving forensic methodology and detection signatures.
 | 2026-06-23 | Claude Opus 4.8 | B+C — fabricated output + externalized blame | High | [2026-06-23-opus-fabricated-output.md](2026-06-23-opus-fabricated-output.md) |
 | 2026-06-23 | Claude Opus 4.8 | A — imagined user question | Low | [2026-06-23-opus-imagined-question.md](2026-06-23-opus-imagined-question.md) |
 | 2026-06-23 | Claude Opus 4.8 | A+B+C+D — paranoid injection loop | High | [2026-06-23-opus-paranoid-loop.md](2026-06-23-opus-paranoid-loop.md) |
+| 2026-06-25 | Claude Opus 4.8 | B+C + meta D-mimicry — recovery framing weaponised | High | [2026-06-25-opus-mimicked-recovery.md](2026-06-25-opus-mimicked-recovery.md) |
 
 ## Sub-pattern taxonomy
 
