@@ -19,7 +19,13 @@ CCS_DISPATCH_MAX_CONCURRENT_WARN="${CCS_DISPATCH_MAX_CONCURRENT_WARN:-3}"
 _ccs_dispatch_agentpager_available() {
   command -v systemctl >/dev/null 2>&1 || return 1
   systemctl --user is-active --quiet agent-pager.service 2>/dev/null || return 1
-  [ -d "${AGENT_PAGER_DIR:-$HOME/.agent-pager}" ] || return 1
+  local pager_dir="${AGENT_PAGER_DIR:-$HOME/.agent-pager}"
+  [ -d "$pager_dir" ] || return 1
+  # local channel readiness: spool present, caller in the broker group,
+  # and the spool carries that group (setgid evidence from install.sh).
+  [ -d "$pager_dir/inbound" ] || return 1
+  id -nG "$(id -un)" 2>/dev/null | tr ' ' '\n' | grep -qx claude-broker || return 1
+  [ "$(stat -c %G "$pager_dir/inbound" 2>/dev/null)" = "claude-broker" ] || return 1
   return 0
 }
 
