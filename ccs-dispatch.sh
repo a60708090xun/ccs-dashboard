@@ -183,6 +183,24 @@ _ccs_consume_framed_stream() {
   ' "$src"
 }
 
+# Map an absolute project_dir to the lead-side proj key that ccs writes
+# into the inbound .md. ccs keeps its OWN map (key = abspath, same format
+# as the lead whitelist) via CCS_DISPATCH_PROJ_MAP so it never reads the
+# lead's projects file. Echoes the key; rc 1 if no map / no match.
+_ccs_dispatch_resolve_proj_from_dir() {
+  local dir="${1%/}" line key val
+  local map_file="${CCS_DISPATCH_PROJ_MAP:-$HOME/.config/ccs-dashboard/proj-map}"
+  [ -f "$map_file" ] || return 1
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in ''|'#'*) continue ;; esac
+    key="${line%%=*}"; val="${line#*=}"
+    key="${key#"${key%%[![:space:]]*}"}"; key="${key%"${key##*[![:space:]]}"}"
+    val="${val#"${val%%[![:space:]]*}"}"; val="${val%"${val##*[![:space:]]}"}"
+    [ "${val%/}" = "$dir" ] && { printf '%s\n' "$key"; return 0; }
+  done < "$map_file"
+  return 1
+}
+
 # agent-pager backend — STAGE 1 STUB.
 # Stage 2 will write a local-channel inbound launch and map the worker
 # lifecycle back into jobs.jsonl. Until then this always fails so the
