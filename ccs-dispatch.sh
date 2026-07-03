@@ -873,6 +873,10 @@ _ccs_jobs_sync_status() {
       # is the liveness signal (the monitor can die independently of the worker).
       if _ccs_dispatch_agentpager_session_alive "agent-pager-$key"; then
         [ "$jid" = "$newest_ap_jid" ] && continue   # live worker, still running
+        # An older running record is stale (a newer worker owns the session). If
+        # it actually finalized (md present) leave it — same deference to the
+        # monitor as the session-gone branch below; otherwise reconcile.
+        [ -f "$dispatch_dir/results/${jid}.md" ] && continue
         _ccs_dispatch_jsonl_append "$(jq -nc \
           --arg jid "$jid" --arg fa "$(date -Iseconds)" \
           '{job_id:$jid, status:"completed", finished_at:$fa,
