@@ -80,6 +80,19 @@ assert_eq "older running agentpager -> completed (superseded)" "completed" \
 assert_contains "older carries a superseded note" \
   "$(_ccs_dispatch_jsonl_latest "d-old" | jq -r '.note // ""')" "superseded"
 
+echo "=== sync tiebreak: stale older agentpager with md present is left untouched ==="
+reset_jobs
+jrec '{"job_id":"d-oldmd","project":"p","backend":"agentpager","status":"running","created_at":"2026-07-03T09:00:00+08:00"}'
+jrec '{"job_id":"d-newmd","project":"p","backend":"agentpager","status":"running","created_at":"2026-07-03T11:00:00+08:00"}'
+printf '# md\n' > "$DD/results/d-oldmd.md"   # older already finalized md (partial finalize)
+_ccs_dispatch_agentpager_session_alive() { return 0; }
+_ccs_jobs_sync_status
+# md present -> defer to the monitor, do not append a misleading superseded record
+assert_eq "older-with-md is not overwritten to completed" "running" \
+  "$(_ccs_dispatch_jsonl_latest "d-oldmd" | jq -r '.status')"
+assert_eq "newest still running" "running" \
+  "$(_ccs_dispatch_jsonl_latest "d-newmd" | jq -r '.status')"
+
 echo "=== sync: headless branch unchanged (control) ==="
 reset_jobs
 jrec '{"job_id":"d-hl","project":"p","backend":"headless","status":"running","created_at":"2026-07-03T10:00:00+08:00"}'
