@@ -117,4 +117,22 @@ nos="$(ccs-jobs 2>/dev/null)"
 assert_contains "no stream yet -> no output yet footer" "$nos" "local worker: no output yet"
 unset AGENT_PAGER_DIR
 
+echo "=== single view: handoff-ready job shows chain hint ==="
+reset_jobs
+jrec '{"job_id":"d-hr","project":"ccs-dashboard","backend":"agentpager","status":"running","created_at":"2026-07-03T10:00:00+08:00"}'
+jrec '{"job_id":"d-hr","status":"handoff-ready","handoff":true,"finished_at":"2026-07-03T10:05:00+08:00"}'
+printf '# Dispatch Result: d-hr\n- **Status:** handoff-ready\n' > "$DD/results/d-hr.md"
+hr_out="$(ccs-jobs d-hr 2>/dev/null)"
+assert_contains "hint points to the .handoff file" "$hr_out" "results/d-hr.handoff"
+assert_contains "hint gives a chain command with the project" "$hr_out" \
+  'ccs-dispatch --project ccs-dashboard'
+assert_contains "hint marks auto-chaining as v2" "$hr_out" "auto-chaining is v2"
+
+echo "=== single view: non-handoff-ready job shows no hint ==="
+reset_jobs
+jrec '{"job_id":"d-cp","project":"p","backend":"headless","status":"completed","created_at":"2026-07-03T10:00:00+08:00","finished_at":"2026-07-03T10:05:00+08:00"}'
+printf '# Dispatch Result: d-cp\n- **Status:** completed\n' > "$DD/results/d-cp.md"
+cp_out="$(ccs-jobs d-cp 2>/dev/null)"
+assert_not_contains "completed job -> no chain hint" "$cp_out" "auto-chaining is v2"
+
 test_summary
