@@ -931,6 +931,17 @@ _ccs_jobs_show_list() {
   echo "$deduped" | jq -r --argjson tl "$tlen" '
     .[] | "\(.job_id)  \((.backend // "?") | .[0:10] | . + " " * (10 - length))  \(.status | .[0:13] | . + " " * (13 - length))  \(.task | .[0:$tl])"
   '
+
+  # Q2=A: last-activity footer for the newest running agentpager worker (the one
+  # that owns the live tmux session). deduped is sorted created_at desc, so the
+  # first running+agentpager entry is the newest.
+  local running_ap
+  running_ap=$(echo "$deduped" | jq -r \
+    'map(select(.status=="running" and .backend=="agentpager")) | .[0].job_id // empty')
+  if [ -n "$running_ap" ]; then
+    _ccs_jobs_agentpager_footer "local-$(id -un)" \
+      "${AGENT_PAGER_DIR:-$HOME/.agent-pager}"
+  fi
 }
 
 _ccs_jobs_show_single() {
@@ -962,6 +973,24 @@ _ccs_jobs_show_single() {
       return 1
     fi
   fi
+}
+
+# Echo a one-line last-activity footer for the running agentpager worker so a
+# stalled worker is visible on the board for a manual /stop (design D2/Q2=A).
+# Single-worker MVP: at most one running agentpager worker, so one line suffices.
+_ccs_jobs_agentpager_footer() {
+  local key="$1" pager_dir="$2"
+  local stream="$pager_dir/channels/$key/out.stream"
+  if [ ! -f "$stream" ]; then
+    printf '⏱ local worker: no output yet\n'
+    return 0
+  fi
+  local mtime now idle_min iso
+  mtime=$(stat -c %Y "$stream" 2>/dev/null) || return 0
+  now=$(date +%s)
+  idle_min=$(( (now - mtime) / 60 ))
+  iso=$(date -Iseconds -d "@$mtime" 2>/dev/null)
+  printf '⏱ local worker: last activity %s (%s)\n' "$iso" "$(_ccs_ago_str "$idle_min")"
 }
 
 # Generate suggested_actions for a session

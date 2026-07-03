@@ -88,4 +88,33 @@ _ccs_jobs_sync_status
 assert_eq "headless dead pid + no md -> failed" "failed" \
   "$(_ccs_dispatch_jsonl_latest "d-hl" | jq -r '.status')"
 
+echo "=== list footer: running agentpager worker shows last-activity ==="
+reset_jobs
+export AGENT_PAGER_DIR="$SCRIPT_DIR/tmp/test-jobs-ap-pager"
+rm -rf "$AGENT_PAGER_DIR"
+mkdir -p "$AGENT_PAGER_DIR/channels/local-$(id -un)"
+printf 'frame' > "$AGENT_PAGER_DIR/channels/local-$(id -un)/out.stream"
+touch_minutes_ago "$AGENT_PAGER_DIR/channels/local-$(id -un)/out.stream" 3
+jrec '{"job_id":"d-foot","project":"p","backend":"agentpager","status":"running","created_at":"2026-07-03T10:00:00+08:00"}'
+echo $$ > "$DD/pids/d-foot.pid"    # live pid so sync keeps it running (agentpager uses session)
+_ccs_dispatch_agentpager_session_alive() { return 0; }
+foot_out="$(ccs-jobs 2>/dev/null)"
+assert_contains "footer names the local worker" "$foot_out" "local worker: last activity"
+assert_contains "footer shows a 3m-ago idle" "$foot_out" "3m ago"
+
+echo "=== list footer: no running agentpager worker -> no footer ==="
+reset_jobs
+jrec '{"job_id":"d-done","project":"p","backend":"agentpager","status":"handoff-ready","created_at":"2026-07-03T10:00:00+08:00","finished_at":"2026-07-03T10:05:00+08:00"}'
+nofoot="$(ccs-jobs 2>/dev/null)"
+assert_not_contains "no running worker -> no footer" "$nofoot" "local worker:"
+
+echo "=== list footer: running worker but stream absent -> no output yet ==="
+reset_jobs
+rm -rf "$AGENT_PAGER_DIR"; mkdir -p "$AGENT_PAGER_DIR/inbound"
+jrec '{"job_id":"d-nostrm","project":"p","backend":"agentpager","status":"running","created_at":"2026-07-03T10:00:00+08:00"}'
+_ccs_dispatch_agentpager_session_alive() { return 0; }
+nos="$(ccs-jobs 2>/dev/null)"
+assert_contains "no stream yet -> no output yet footer" "$nos" "local worker: no output yet"
+unset AGENT_PAGER_DIR
+
 test_summary
