@@ -127,7 +127,10 @@ dd="$(_ccs_dispatch_dir)"
 jid3="d-test-$(head -c2 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 _ccs_dispatch_jsonl_append "$(jq -nc --arg jid "$jid3" --arg ca "$(date -Iseconds)" \
   '{job_id:$jid,project:"p",backend:"agentpager",created_at:$ca,status:"running"}')"
-echo $$ > "$dd/pids/${jid3}.pid"   # live pid so sync_status keeps it running
+# agentpager liveness = the worker's tmux session (not the monitor pid), so keep
+# the session alive; sync_status then leaves the job running and the single view
+# renders last-activity.
+_ccs_dispatch_agentpager_session_alive() { return 0; }
 apdir="$SCRIPT_DIR/tmp/test-spawn-ap-jobs"
 mkdir -p "$apdir/channels/local-$(id -un)"
 printf 'frame' > "$apdir/channels/local-$(id -un)/out.stream"
