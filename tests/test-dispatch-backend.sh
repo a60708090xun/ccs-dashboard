@@ -16,7 +16,7 @@ assert_eq "explicit agentpager" "agentpager" "$out"
 out=$(CCS_DISPATCH_BACKEND=bogus _ccs_dispatch_resolve_backend)
 assert_eq "invalid -> headless" "headless" "$out"
 
-echo "=== resolve_backend: auto detection ==="
+echo "=== resolve_backend: auto detection (daemon/spool gates) ==="
 mock_dir="$SCRIPT_DIR/tmp/test-dispatch-backend-bin"
 mkdir -p "$mock_dir"
 # daemon inactive (systemctl exit 3) -> headless
@@ -25,21 +25,80 @@ chmod +x "$mock_dir/systemctl"
 out=$(CCS_DISPATCH_BACKEND=auto PATH="$mock_dir:$PATH" _ccs_dispatch_resolve_backend)
 assert_eq "auto + daemon inactive -> headless" "headless" "$out"
 
-# daemon active + spool dir exists -> agentpager
+# daemon active from here on
 printf '#!/bin/bash\nexit 0\n' > "$mock_dir/systemctl"
 chmod +x "$mock_dir/systemctl"
-spool="$SCRIPT_DIR/tmp/test-dispatch-backend-spool"
-mkdir -p "$spool"
-out=$(CCS_DISPATCH_BACKEND=auto AGENT_PAGER_DIR="$spool" PATH="$mock_dir:$PATH" \
-  _ccs_dispatch_resolve_backend)
-assert_eq "auto + active + spool -> agentpager" "agentpager" "$out"
 
-# daemon active but spool missing -> headless
+# daemon active but spool dir missing -> headless
 out=$(CCS_DISPATCH_BACKEND=auto AGENT_PAGER_DIR="$SCRIPT_DIR/tmp/nonexistent-spool" \
   PATH="$mock_dir:$PATH" _ccs_dispatch_resolve_backend)
 assert_eq "auto + active + no spool -> headless" "headless" "$out"
 
-rm -rf "$mock_dir" "$spool"
+echo "=== resolve_backend: Hybrid Detection — same-uid (personal) ==="
+# same-uid: spool owned by the current user + inbound/ present -> agentpager,
+# skipping the claude-broker group + setgid checks (design Decision A).
+# stat/id are the REAL ones here; the test-created spool is owned by the caller.
+spool="$SCRIPT_DIR/tmp/test-dispatch-backend-spool"
+mkdir -p "$spool/inbound"
+out=$(CCS_DISPATCH_BACKEND=auto AGENT_PAGER_DIR="$spool" PATH="$mock_dir:$PATH" \
+  _ccs_dispatch_resolve_backend)
+assert_eq "same-uid + active + inbound -> agentpager" "agentpager" "$out"
+
+# same-uid but inbound/ missing -> headless (local channel not initialized)
+spool_ni="$SCRIPT_DIR/tmp/test-dispatch-backend-spool-noinbound"
+mkdir -p "$spool_ni"
+out=$(CCS_DISPATCH_BACKEND=auto AGENT_PAGER_DIR="$spool_ni" PATH="$mock_dir:$PATH" \
+  _ccs_dispatch_resolve_backend)
+assert_eq "same-uid + active + no inbound -> headless" "headless" "$out"
+
+rm -rf "$mock_dir" "$spool" "$spool_ni"
+
+echo "=== resolve_backend: Hybrid Detection — cross-uid (shared seat) ==="
+# Cross-uid path: spool owned by a DIFFERENT user. stat/id are mocked so the
+# ownership + broker-group + setgid strict checks run without needing root.
+xbin="$SCRIPT_DIR/tmp/test-dispatch-backend-xbin"
+mkdir -p "$xbin"
+printf '#!/bin/bash\nexit 0\n' > "$xbin/systemctl"
+cat > "$xbin/stat" <<'EOF'
+#!/bin/bash
+# mock: stat -c %u <path>  /  stat -c %G <path>
+case "$2" in
+  %u) echo "${MOCK_STAT_U:-0}" ;;
+  %G) echo "${MOCK_STAT_G:-nogroup}" ;;
+  *)  exit 1 ;;
+esac
+EOF
+cat > "$xbin/id" <<'EOF'
+#!/bin/bash
+case "$1" in
+  -u)  echo "${MOCK_ID_U:-1000}" ;;
+  -un) echo "${MOCK_ID_UN:-tester}" ;;
+  -nG) echo "${MOCK_ID_GROUPS:-tester}" ;;
+esac
+EOF
+chmod +x "$xbin"/*
+xspool="$SCRIPT_DIR/tmp/test-dispatch-backend-xspool"
+mkdir -p "$xspool/inbound"
+
+# cross-uid (owner 4242 != caller 1000) + caller NOT in claude-broker -> headless
+out=$(CCS_DISPATCH_BACKEND=auto AGENT_PAGER_DIR="$xspool" \
+  MOCK_STAT_U=4242 MOCK_ID_U=1000 MOCK_ID_UN=tester MOCK_ID_GROUPS="tester users" \
+  MOCK_STAT_G=nogroup PATH="$xbin:$PATH" _ccs_dispatch_resolve_backend)
+assert_eq "cross-uid + not in broker -> headless" "headless" "$out"
+
+# cross-uid + in claude-broker + inbound setgid to claude-broker -> agentpager
+out=$(CCS_DISPATCH_BACKEND=auto AGENT_PAGER_DIR="$xspool" \
+  MOCK_STAT_U=4242 MOCK_ID_U=1000 MOCK_ID_UN=tester MOCK_ID_GROUPS="tester claude-broker" \
+  MOCK_STAT_G=claude-broker PATH="$xbin:$PATH" _ccs_dispatch_resolve_backend)
+assert_eq "cross-uid + broker group + setgid -> agentpager" "agentpager" "$out"
+
+# cross-uid + in claude-broker but inbound NOT setgid claude-broker -> headless
+out=$(CCS_DISPATCH_BACKEND=auto AGENT_PAGER_DIR="$xspool" \
+  MOCK_STAT_U=4242 MOCK_ID_U=1000 MOCK_ID_UN=tester MOCK_ID_GROUPS="tester claude-broker" \
+  MOCK_STAT_G=othergroup PATH="$xbin:$PATH" _ccs_dispatch_resolve_backend)
+assert_eq "cross-uid + broker group + no setgid -> headless" "headless" "$out"
+
+rm -rf "$xbin" "$xspool"
 
 echo "=== dispatcher routes to headless (behavior unchanged) ==="
 mock_dir2="$SCRIPT_DIR/tmp/test-dispatch-backend-bin2"
