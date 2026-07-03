@@ -14,16 +14,25 @@ CCS_DISPATCH_MAX_CONCURRENT_WARN="${CCS_DISPATCH_MAX_CONCURRENT_WARN:-3}"
 
 # ── Backend selection ──
 # Returns 0 if the agent-pager backend is usable, 1 otherwise.
-# Stage 1: daemon active + spool dir exists. Stage 2 will additionally
-# require the merged local channel.
+# Requires the daemon active and the local-channel spool present, then
+# applies Hybrid Detection (design Decision A):
+#   same-uid  — spool owned by the caller (personal workflow): the caller
+#               already has full access, so skip the claude-broker group
+#               and setgid checks; daemon + inbound/ is enough.
+#   cross-uid — spool owned by another user (shared seat): enforce the
+#               strict AVer checks — caller in the claude-broker group and
+#               the inbound spool carrying that group (setgid evidence).
 _ccs_dispatch_agentpager_available() {
   command -v systemctl >/dev/null 2>&1 || return 1
   systemctl --user is-active --quiet agent-pager.service 2>/dev/null || return 1
   local pager_dir="${AGENT_PAGER_DIR:-$HOME/.agent-pager}"
   [ -d "$pager_dir" ] || return 1
-  # local channel readiness: spool present, caller in the broker group,
-  # and the spool carries that group (setgid evidence from install.sh).
   [ -d "$pager_dir/inbound" ] || return 1
+
+  # same-uid personal workflow: caller owns the spool -> trust it.
+  [ "$(stat -c %u "$pager_dir" 2>/dev/null)" = "$(id -u)" ] && return 0
+
+  # cross-uid shared seat: strict group + setgid verification.
   id -nG "$(id -un)" 2>/dev/null | tr ' ' '\n' | grep -qx claude-broker || return 1
   [ "$(stat -c %G "$pager_dir/inbound" 2>/dev/null)" = "claude-broker" ] || return 1
   return 0
