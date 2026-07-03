@@ -67,6 +67,15 @@ _ccs_jobs_sync_status
 after=$(wc -l < "$JOBS")
 assert_eq "md present -> sync appends nothing" "$before" "$after"
 
+echo "=== sync: agentpager with a LIVE monitor is deferred to (no startup race) ==="
+reset_jobs
+jrec '{"job_id":"d-mon","project":"p","backend":"agentpager","status":"running","created_at":"2026-07-03T10:00:00+08:00"}'
+echo $$ > "$DD/pids/d-mon.pid"   # live monitor (this shell's pid)
+_ccs_dispatch_agentpager_session_alive() { return 1; }  # worker session not up yet (startup lag)
+_ccs_jobs_sync_status
+assert_eq "live monitor + session-not-yet-up -> still running (no premature complete)" "running" \
+  "$(_ccs_dispatch_jsonl_latest "d-mon" | jq -r '.status')"
+
 echo "=== sync tiebreak: only newest running agentpager owns the live session ==="
 reset_jobs
 jrec '{"job_id":"d-old","project":"p","backend":"agentpager","status":"running","created_at":"2026-07-03T09:00:00+08:00"}'

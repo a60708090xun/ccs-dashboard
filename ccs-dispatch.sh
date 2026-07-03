@@ -869,8 +869,17 @@ _ccs_jobs_sync_status() {
     backend=$(echo "$merged" | jq -r '.backend // "headless"')
 
     if [ "$backend" = "agentpager" ]; then
-      # Agentpager: the worker's tmux session — not the background monitor's pid —
-      # is the liveness signal (the monitor can die independently of the worker).
+      # Defer to a live monitor: it owns startup grace (the worker's tmux session
+      # appears a few seconds after dispatch), handoff detection, stop, and
+      # finalize. sync must not race ahead of it — during that startup window the
+      # session is legitimately absent, and finalizing here would falsely complete
+      # a job that is merely starting. sync only reconciles a monitor that is gone.
+      local pidfile="$dispatch_dir/pids/${jid}.pid"
+      if [ -f "$pidfile" ] && kill -0 "$(cat "$pidfile" 2>/dev/null)" 2>/dev/null; then
+        continue
+      fi
+      # Monitor is gone (died / never started). The worker's tmux session — not
+      # the monitor pid — is now the liveness signal.
       if _ccs_dispatch_agentpager_session_alive "agent-pager-$key"; then
         [ "$jid" = "$newest_ap_jid" ] && continue   # live worker, still running
         # An older running record is stale (a newer worker owns the session). If
