@@ -505,8 +505,9 @@ ccs-dispatch 有兩個執行後端，由 `CCS_DISPATCH_BACKEND` 選擇（預設 
 - **完成判定**：worker 完成時把交接寫到 `tmp/handoff-<job-id>.md`（開場 prompt 已注入
   此規則）；ccs 偵測到即收席位、把交接存到 `results/<job-id>.handoff`，狀態記為
   `handoff-ready`。無交接但 session 自行結束 → `completed`；session 從未起來 → `failed`。
-- **不自動中止**：卡住的 worker 不會被 wall-clock timeout 殺掉——在 `ccs-jobs <job-id>`
-  看 last-activity 後手動處理（MVP 單 worker per user，多 worker 為 v2）。
+- **不自動中止**：卡住的 worker 不會被 wall-clock timeout 殺掉——`ccs-jobs` 清單底部會
+  顯示 running worker 的 last-activity（idle 時間），`ccs-jobs <job-id>` 亦有；據此手動
+  `/stop` 處理（MVP 單 worker per user，多 worker 為 v2）。
 
 結果存放：`${XDG_DATA_HOME:-~/.local/share}/ccs-dashboard/dispatch/`
 
@@ -519,6 +520,11 @@ ccs-jobs              # 最近 20 筆
 ccs-jobs --all        # 全部
 ccs-jobs <job-id>     # 單筆詳細結果（顯示 .md）
 ```
+
+- **清單 footer**：有 running 的 agentpager worker 時，清單底部顯示其 last-activity
+  （out.stream idle 時間），方便發現卡住的 worker。
+- **handoff-ready 提示**：單筆 view 對 `handoff-ready` job 會提示 `.handoff` 路徑與接力
+  `ccs-dispatch` 範本（auto-chain 為 v2）。
 
 ## ccs-review
 
