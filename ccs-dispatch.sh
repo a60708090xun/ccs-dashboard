@@ -949,29 +949,35 @@ _ccs_jobs_show_single() {
   local dispatch_dir
   dispatch_dir="$(_ccs_dispatch_dir)"
   local md="$dispatch_dir/results/${job_id}.md"
+  local record
+  record=$(_ccs_dispatch_jsonl_latest "$job_id")
 
   if [ -f "$md" ]; then
     cat "$md"
-  else
-    local record
-    record=$(_ccs_dispatch_jsonl_latest "$job_id")
-    if [ -n "$record" ]; then
-      echo "$record" | jq .
-      # For a still-running agent-pager worker, surface last-activity (out.stream
-      # mtime) so a stalled worker is visible for a manual /stop (design D2).
-      local be st
-      be=$(echo "$record" | jq -r '.backend // ""')
-      st=$(echo "$record" | jq -r '.status // ""')
-      if [ "$be" = "agentpager" ] && [ "$st" = "running" ]; then
-        local la
-        la=$(_ccs_dispatch_agentpager_last_activity \
-          "local-$(id -un)" "${AGENT_PAGER_DIR:-$HOME/.agent-pager}")
-        [ -n "$la" ] && echo "Last activity: $la"
-      fi
-    else
-      echo "Job not found: $job_id" >&2
-      return 1
+  elif [ -n "$record" ]; then
+    echo "$record" | jq .
+    # For a still-running agent-pager worker, surface last-activity (out.stream
+    # mtime) so a stalled worker is visible for a manual /stop (design D2).
+    local be st
+    be=$(echo "$record" | jq -r '.backend // ""')
+    st=$(echo "$record" | jq -r '.status // ""')
+    if [ "$be" = "agentpager" ] && [ "$st" = "running" ]; then
+      local la
+      la=$(_ccs_dispatch_agentpager_last_activity \
+        "local-$(id -un)" "${AGENT_PAGER_DIR:-$HOME/.agent-pager}")
+      [ -n "$la" ] && echo "Last activity: $la"
     fi
+  else
+    echo "Job not found: $job_id" >&2
+    return 1
+  fi
+
+  # Q3=A: handoff-ready action hint (applies to both the md and record paths).
+  if [ -n "$record" ]; then
+    local hint_st hint_proj
+    hint_st=$(echo "$record" | jq -r '.status // ""')
+    hint_proj=$(echo "$record" | jq -r '.project // "."')
+    _ccs_jobs_handoff_hint "$job_id" "$hint_st" "$hint_proj" "$dispatch_dir"
   fi
 }
 
@@ -991,6 +997,19 @@ _ccs_jobs_agentpager_footer() {
   idle_min=$(( (now - mtime) / 60 ))
   iso=$(date -Iseconds -d "@$mtime" 2>/dev/null)
   printf '⏱ local worker: last activity %s (%s)\n' "$iso" "$(_ccs_ago_str "$idle_min")"
+}
+
+# Echo a handoff-ready action hint: point at the captured .handoff and give a
+# project-prefilled chain command. The next task can't be prefilled (it lives in
+# the handoff the operator must read), and auto-chaining is v2 (design Q3=A).
+_ccs_jobs_handoff_hint() {
+  local job_id="$1" status="$2" project="$3" dispatch_dir="$4"
+  [ "$status" = "handoff-ready" ] || return 0
+  printf '\n'
+  printf '→ Handoff ready: %s/results/%s.handoff\n' "$dispatch_dir" "$job_id"
+  printf '  Review it, then chain the next worker:\n'
+  printf '    ccs-dispatch --project %s "<next task from handoff>"\n' "$project"
+  printf '  (auto-chaining is v2)\n'
 }
 
 # Generate suggested_actions for a session
