@@ -846,20 +846,57 @@ _ccs_jobs_sync_status() {
 
   local jids
   jids=$(jq -r 'select(.status=="running") | .job_id' "$jobs_file" | sort -u)
+
+  # Which running agentpager job owns the (per-user, shared-name) tmux session:
+  # the newest by created_at. The spawn guard admits at most one live worker, so
+  # older running agentpager records are stale (monitor died before finalizing).
+  local newest_ap_jid
+  newest_ap_jid=$(jq -rs '
+    group_by(.job_id) | map(reduce .[] as $r ({}; . + $r))
+    | map(select(.status=="running" and .backend=="agentpager"))
+    | sort_by(.created_at) | reverse | .[0].job_id // empty' "$jobs_file")
+
+  local key="local-$(id -un)"
   local jid
   for jid in $jids; do
-    local latest_status
-    latest_status=$(grep "\"job_id\":\"$jid\"" "$jobs_file" | tail -1 | jq -r '.status')
-    [ "$latest_status" = "running" ] || continue
+    # Effective status = reduce-merge (consistent with the board's show_list),
+    # not tail -1 of the last raw record — a trailing fallback marker has no
+    # status field and would otherwise read as null and skip this job.
+    local merged status backend
+    merged=$(_ccs_dispatch_jsonl_latest "$jid")
+    status=$(echo "$merged" | jq -r '.status // ""')
+    [ "$status" = "running" ] || continue
+    backend=$(echo "$merged" | jq -r '.backend // "headless"')
 
+    if [ "$backend" = "agentpager" ]; then
+      # Agentpager: the worker's tmux session — not the background monitor's pid —
+      # is the liveness signal (the monitor can die independently of the worker).
+      if _ccs_dispatch_agentpager_session_alive "agent-pager-$key"; then
+        [ "$jid" = "$newest_ap_jid" ] && continue   # live worker, still running
+        _ccs_dispatch_jsonl_append "$(jq -nc \
+          --arg jid "$jid" --arg fa "$(date -Iseconds)" \
+          '{job_id:$jid, status:"completed", finished_at:$fa,
+            note:"superseded; monitor exited"}')"
+        continue
+      fi
+      # Session gone. The monitor normally finalizes; if it did (md present),
+      # leave it alone. If not, reconcile to completed without doing the monitor's
+      # heavy finalize (stream/handoff capture) — design Q1=C keeps sync light.
+      [ -f "$dispatch_dir/results/${jid}.md" ] && continue
+      _ccs_dispatch_jsonl_append "$(jq -nc \
+        --arg jid "$jid" --arg fa "$(date -Iseconds)" \
+        '{job_id:$jid, status:"completed", finished_at:$fa,
+          note:"monitor exited without finalizing; session gone"}')"
+      continue
+    fi
+
+    # Headless (unchanged): the pidfile IS the worker; dead pid + no md = crash.
     local pidfile="$dispatch_dir/pids/${jid}.pid"
     if [ -f "$pidfile" ]; then
       kill -0 "$(cat "$pidfile")" 2>/dev/null && continue
     fi
-
     local md="$dispatch_dir/results/${jid}.md"
     [ -f "$md" ] && continue
-
     _ccs_dispatch_jsonl_append "$(jq -nc \
       --arg jid "$jid" \
       --arg fa "$(date -Iseconds)" \
