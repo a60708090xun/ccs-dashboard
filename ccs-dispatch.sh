@@ -216,14 +216,356 @@ _ccs_dispatch_resolve_proj_from_dir() {
   return 1
 }
 
-# agent-pager backend — STAGE 1 STUB.
-# Stage 2 will write a local-channel inbound launch and map the worker
-# lifecycle back into jobs.jsonl. Until then this always fails so the
-# dispatcher falls back to headless.
+# ── agent-pager backend (stage 2) ──────────────────────────────────────────
+# Dispatch a worker over the agent-pager local channel: write an inbound launch,
+# then watch the per-user out.stream + the worker's handoff file back into a job
+# result. Completion is signalled by the worker writing tmp/handoff-<job_id>.md
+# (design Decision B): ccs then stops the seat and finalizes. There is NO
+# wall-clock kill — a stuck worker stays up for the operator to /stop (design D2).
+
+# Build the worker's opening prompt: the dispatch prompt plus a handoff-gating
+# invariant that tells the worker to write tmp/handoff-<job_id>.md when done
+# (that file is ccs's completion signal). ccs-handoff's own default output path
+# differs, so the worker is told to save to this exact per-job path.
+_ccs_dispatch_agentpager_prompt() {
+  local job_id="$1" task="$2"
+  cat <<HGRULE
+${task}
+
+---
+DISPATCH HANDOFF RULE (job ${job_id}, non-negotiable):
+This is a dispatched worker session. When the task above is fully complete (or
+before your context fills), first report a one-line summary of what you did.
+Then, AS YOUR VERY LAST ACTION, write a concise handoff to the file
+tmp/handoff-${job_id}.md (path relative to the project root; use ccs-handoff for
+the content if helpful). Writing that file is your completion signal: the
+dispatcher watches for tmp/handoff-${job_id}.md and closes this session once it
+appears, so do not create it until everything else — including your summary — is
+already done. You do NOT need to exit yourself.
+HGRULE
+}
+
+# Write an agent-pager inbound launch file. Frontmatter matches inbound-handler.sh
+# (kind/slot/proj/cli + two --- delimiters, body after the second). ccs passes a
+# proj KEY only — agent-pager resolves it to a path from its own whitelist (the
+# RCE boundary). Echoes the file path; rc 1 on write failure.
+_ccs_dispatch_agentpager_launch_file() {
+  local job_id="$1" proj="$2" key="$3" prompt="$4" pager_dir="$5"
+  local inbound="$pager_dir/inbound"
+  mkdir -p "$inbound" || return 1
+  local f="$inbound/$(date +%s)-${job_id}.md"
+  {
+    printf -- '---\n'
+    printf 'kind: launch\n'
+    printf 'slot: %s\n' "$key"
+    printf 'proj: %s\n' "$proj"
+    printf 'cli: claude\n'
+    printf -- '---\n'
+    printf '%s\n' "$prompt"
+  } > "$f" || return 1
+  printf '%s\n' "$f"
+}
+
+# Write an agent-pager inbound stop file to reclaim the local seat. Echoes the
+# path; rc 1 on write failure.
+_ccs_dispatch_agentpager_stop_file() {
+  local key="$1" pager_dir="$2"
+  local inbound="$pager_dir/inbound"
+  mkdir -p "$inbound" || return 1
+  local f="$inbound/$(date +%s%N)-${key}-stop.md"
+  {
+    printf -- '---\n'
+    printf 'kind: stop\n'
+    printf 'slot: %s\n' "$key"
+    printf -- '---\n'
+  } > "$f" || return 1
+  printf '%s\n' "$f"
+}
+
+# Decode only this job's frames from the per-user out.stream. The stream is
+# append-only and persists across jobs, so we read from the byte offset captured
+# at launch, not the whole file.
+_ccs_dispatch_agentpager_collect() {
+  local stream="$1" offset="$2" dest="$3"
+  if [ -f "$stream" ]; then
+    tail -c +$((offset + 1)) "$stream" | _ccs_consume_framed_stream > "$dest"
+  else
+    : > "$dest"
+  fi
+}
+
+# True while the worker's tmux session is alive. Wrapped so tests can mock tmux.
+_ccs_dispatch_agentpager_session_alive() {
+  tmux has-session -t "$1" 2>/dev/null
+}
+
+# Echo the last-activity timestamp (ISO) of a local session = mtime of its
+# out.stream. Lets ccs-jobs surface a stalled worker so the operator can /stop
+# it (design D2: no auto-kill). Empty if the stream does not exist yet.
+_ccs_dispatch_agentpager_last_activity() {
+  local key="$1" pager_dir="$2"
+  local stream="$pager_dir/channels/$key/out.stream"
+  [ -f "$stream" ] || return 0
+  date -Iseconds -r "$stream" 2>/dev/null
+}
+
+# Finalize an agent-pager job (handoff gating). Handoff file present + copied ->
+# handoff-ready (captured to results/<job_id>.handoff). Otherwise the status is
+# $3 (no_handoff_status, default "completed"; the monitor passes "failed" when
+# the worker session was never observed). ccs is not the worker's parent, so
+# there is no exit code. $4 is an optional operator note appended to md + jsonl.
+_ccs_dispatch_finish_agentpager() {
+  local job_id="$1" handoff_src="$2"
+  local no_handoff_status="${3:-completed}" note="${4:-}"
+  local dispatch_dir
+  dispatch_dir="$(_ccs_dispatch_dir)"
+  local raw="$dispatch_dir/results/${job_id}.raw"
+  local err="$dispatch_dir/results/${job_id}.err"
+  local md="$dispatch_dir/results/${job_id}.md"
+  local handoff_dst="$dispatch_dir/results/${job_id}.handoff"
+  local prompt_f="$dispatch_dir/results/${job_id}.prompt"
+
+  # handoff-ready only when the file is actually captured; a failed copy must not
+  # claim a handoff it did not save.
+  local status handoff_flag=false
+  if [ -f "$handoff_src" ] && cp "$handoff_src" "$handoff_dst" 2>/dev/null; then
+    handoff_flag=true
+    status="handoff-ready"
+  else
+    [ -f "$handoff_src" ] && note="${note:+$note; }handoff present but copy failed"
+    status="$no_handoff_status"
+  fi
+
+  local task=""
+  [ -f "$prompt_f" ] && task=$(head -c 200 "$prompt_f")
+  local initial project created_at backend
+  initial=$(_ccs_dispatch_jsonl_latest "$job_id")
+  project=$(echo "$initial" | jq -r '.project // "unknown"')
+  created_at=$(echo "$initial" | jq -r '.created_at // "unknown"')
+  backend=$(echo "$initial" | jq -r '.backend // "agentpager"')
+  local finished_at
+  finished_at=$(date -Iseconds)
+
+  local duration_s=""
+  if [ "$created_at" != "unknown" ]; then
+    local start_epoch
+    start_epoch=$(date -d "$created_at" +%s 2>/dev/null || echo "")
+    [ -n "$start_epoch" ] && duration_s="$(( $(date +%s) - start_epoch ))s"
+  fi
+
+  {
+    echo "# Dispatch Result: $job_id"
+    echo ""
+    echo "- **Project:** $project"
+    echo "- **Task:** $task"
+    echo "- **Status:** $status"
+    echo "- **Backend:** $backend"
+    echo "- **Created:** $created_at"
+    echo "- **Finished:** $finished_at"
+    [ -n "$duration_s" ] && echo "- **Duration:** $duration_s"
+    [ "$handoff_flag" = true ] && echo "- **Handoff:** $handoff_dst"
+    [ -n "$note" ] && echo "- **Note:** ⚠️ $note"
+    echo ""
+    echo "## Output"
+    echo ""
+    # A zero-frame stream collects to a lone newline, so test emptiness by
+    # non-whitespace content, not just file size.
+    if [ -f "$raw" ] && grep -q '[^[:space:]]' "$raw" 2>/dev/null; then
+      cat "$raw"
+    else
+      echo "(no output)"
+    fi
+    echo ""
+    echo "## Errors"
+    echo ""
+    if [ -f "$err" ] && [ -s "$err" ]; then
+      cat "$err"
+    else
+      echo "(none)"
+    fi
+  } > "$md"
+
+  local summary=""
+  if [ -f "$raw" ]; then
+    summary=$(tail -n "$CCS_DISPATCH_SUMMARY_LINES" "$raw" | head -c "$CCS_DISPATCH_SUMMARY_MAX_CHARS")
+  fi
+
+  _ccs_dispatch_jsonl_append "$(jq -nc \
+    --arg jid "$job_id" \
+    --arg st "$status" \
+    --arg fa "$finished_at" \
+    --arg sum "$summary" \
+    --arg note "$note" \
+    --argjson ho "$handoff_flag" \
+    '{job_id:$jid, status:$st, finished_at:$fa, summary:$sum, handoff:$ho}
+     + (if $note == "" then {} else {note:$note} end)'
+  )"
+
+  rm -f "$dispatch_dir/pids/${job_id}.pid"
+  [ -f "$md" ] && rm -f "$raw"
+  rm -f "$prompt_f"
+}
+
+# Background monitor for one agent-pager job. Runs under nohup from spawn. Polls
+# for the handoff file; when it appears, stops the seat and finalizes. Also exits
+# the loop if the worker's tmux session disappears on its own (self /exit or
+# crash). No wall-clock timeout (design D2: never auto-kill).
+_ccs_dispatch_agentpager_monitor() {
+  local job_id="$1" key="$2" project_dir="$3" start_offset="$4" pager_dir="$5"
+  local tmux_session="agent-pager-$key"
+  local stream="$pager_dir/channels/$key/out.stream"
+  local state_json="$pager_dir/state/sessions/$key.json"
+  local handoff_src="$project_dir/tmp/handoff-${job_id}.md"
+  local dispatch_dir
+  dispatch_dir="$(_ccs_dispatch_dir)"
+  local poll="${CCS_DISPATCH_AGENTPAGER_POLL:-3}"
+  local startup="${CCS_DISPATCH_AGENTPAGER_STARTUP:-60}"
+  local stop_wait="${CCS_DISPATCH_AGENTPAGER_STOP_WAIT:-30}"
+  local observed=0 note=""
+
+  # Phase A — startup grace. The runner spawns the worker's tmux session a few
+  # seconds after ccs writes the launch, so has-session is false right now.
+  # Wait for it to appear before the completion loop; otherwise the monitor would
+  # read "already gone" and finalize before the worker even runs.
+  local waited=0
+  while [ "$waited" -lt "$startup" ]; do
+    if _ccs_dispatch_agentpager_session_alive "$tmux_session"; then observed=1; break; fi
+    [ -f "$handoff_src" ] && break
+    sleep 1; waited=$((waited + 1))
+  done
+
+  # Watch the cwd agent-pager ACTUALLY resolved the proj key to (its state json),
+  # not ccs's project_dir. This is the single source of truth for where the worker
+  # runs, so the handoff path can never drift from a stale proj-map entry.
+  if [ -r "$state_json" ]; then
+    local real_cwd
+    real_cwd="$(jq -r '.cwd // empty' "$state_json" 2>/dev/null)"
+    [ -n "$real_cwd" ] && [ -d "$real_cwd" ] && \
+      handoff_src="$real_cwd/tmp/handoff-${job_id}.md"
+  fi
+
+  # Phase B — completion. Handoff file appears -> stop the seat; or the worker
+  # ends the session on its own. No wall-clock kill (design D2).
+  while _ccs_dispatch_agentpager_session_alive "$tmux_session"; do
+    observed=1
+    if [ -f "$handoff_src" ]; then
+      # The worker writes the handoff mid-turn, but its tool/prose frames only
+      # relay to out.stream at turn end. Wait for the stream to settle before
+      # stopping, or an eager stop truncates the captured output (E2E-observed).
+      _ccs_dispatch_agentpager_wait_settle "$stream"
+      # Reclaim the seat. If the first stop is not honored (worker mid-tool-call),
+      # retry once; if it still will not die, leave a note so the operator knows
+      # to reclaim manually rather than silently orphaning the single per-user seat.
+      _ccs_dispatch_agentpager_stop_file "$key" "$pager_dir" >/dev/null
+      _ccs_dispatch_agentpager_wait_gone "$tmux_session" "$stop_wait"
+      if _ccs_dispatch_agentpager_session_alive "$tmux_session"; then
+        _ccs_dispatch_agentpager_stop_file "$key" "$pager_dir" >/dev/null
+        _ccs_dispatch_agentpager_wait_gone "$tmux_session" "$stop_wait"
+        _ccs_dispatch_agentpager_session_alive "$tmux_session" && \
+          note="worker session did not stop; reclaim manually (tmux $tmux_session)"
+      fi
+      break
+    fi
+    sleep "$poll"
+  done
+  sleep 1  # let any trailing frames flush to the stream
+  _ccs_dispatch_agentpager_collect "$stream" "$start_offset" \
+    "$dispatch_dir/results/${job_id}.raw"
+  # A session that never appeared is a launch failure, not a clean completion.
+  local no_handoff_status="completed"
+  [ "$observed" = 0 ] && no_handoff_status="failed"
+  _ccs_dispatch_finish_agentpager "$job_id" "$handoff_src" "$no_handoff_status" "$note"
+}
+
+# Poll until the tmux session is gone or $2 seconds elapse. Extracted so the
+# stop-reclaim path stays readable and the wait bound is testable.
+_ccs_dispatch_agentpager_wait_gone() {
+  local session="$1" limit="$2" waited=0
+  while _ccs_dispatch_agentpager_session_alive "$session" && [ "$waited" -lt "$limit" ]; do
+    sleep 1; waited=$((waited + 1))
+  done
+}
+
+# Wait for the out.stream ($1) to stop growing (turn-end relay flushed), so a
+# fast worker's frames are captured before we stop it. Breaks after the size is
+# stable for QUIET consecutive checks, or after SETTLE seconds regardless.
+_ccs_dispatch_agentpager_wait_settle() {
+  local stream="$1"
+  local grace="${CCS_DISPATCH_AGENTPAGER_SETTLE:-8}"
+  local quiet="${CCS_DISPATCH_AGENTPAGER_SETTLE_QUIET:-2}"
+  local last=-1 stable=0 waited=0 sz
+  while [ "$waited" -lt "$grace" ]; do
+    sz=0; [ -f "$stream" ] && sz="$(stat -c %s "$stream" 2>/dev/null || echo 0)"
+    if [ "$sz" = "$last" ]; then
+      stable=$((stable + 1)); [ "$stable" -ge "$quiet" ] && break
+    else
+      stable=0; last="$sz"
+    fi
+    sleep 1; waited=$((waited + 1))
+  done
+}
+
+# agent-pager backend spawn. Async-only: writes an inbound launch and starts a
+# background monitor, returning immediately. Returns 2 (dispatcher falls back to
+# headless) for --sync, an unresolvable proj key, or an inbound write failure.
 _ccs_dispatch_spawn_agentpager() {
-  echo "ccs-dispatch: agent-pager backend not yet implemented (stage 2)," \
-       "falling back to headless" >&2
-  return 2
+  local job_id="$1" project_dir="$2" prompt="$3" timeout_secs="$4" mode="$5"
+
+  if [ "$mode" = "sync" ]; then
+    echo "ccs-dispatch: agent-pager backend is async-only;" \
+         "falling back to headless for --sync" >&2
+    return 2
+  fi
+
+  local proj
+  if ! proj="$(_ccs_dispatch_resolve_proj_from_dir "$project_dir")"; then
+    echo "ccs-dispatch: no proj-map entry for $project_dir" \
+         "(set \$CCS_DISPATCH_PROJ_MAP or ~/.config/ccs-dashboard/proj-map);" \
+         "falling back to headless" >&2
+    return 2
+  fi
+
+  local pager_dir="${AGENT_PAGER_DIR:-$HOME/.agent-pager}"
+  local luser key stream start_offset=0
+  luser="$(id -un)"
+  key="local-$luser"
+
+  # Single-worker per user (key local-<user>): a second concurrent dispatch would
+  # share the same tmux session + out.stream and corrupt both jobs' output. Refuse
+  # and fall back to headless while one is already running (multi-worker is v2).
+  if _ccs_dispatch_agentpager_session_alive "agent-pager-$key"; then
+    echo "ccs-dispatch: a local agent-pager worker (agent-pager-$key) is already" \
+         "running; falling back to headless" >&2
+    return 2
+  fi
+
+  stream="$pager_dir/channels/$key/out.stream"
+  [ -f "$stream" ] && start_offset="$(stat -c %s "$stream" 2>/dev/null || echo 0)"
+
+  local worker_prompt launch_file
+  worker_prompt="$(_ccs_dispatch_agentpager_prompt "$job_id" "$prompt")"
+  if ! launch_file="$(_ccs_dispatch_agentpager_launch_file \
+        "$job_id" "$proj" "$key" "$worker_prompt" "$pager_dir")"; then
+    echo "ccs-dispatch: failed to write agent-pager launch;" \
+         "falling back to headless" >&2
+    return 2
+  fi
+
+  local dispatch_dir script_dir
+  dispatch_dir="$(_ccs_dispatch_dir)"
+  script_dir="$(cd "${BASH_SOURCE[0]%/*}" && pwd)"
+  printf '%s' "$prompt" > "$dispatch_dir/results/${job_id}.prompt"
+
+  if [ "${CCS_DISPATCH_AGENTPAGER_MONITOR:-1}" = "1" ]; then
+    nohup bash -c '
+      source "$6/ccs-dashboard.sh"
+      _ccs_dispatch_agentpager_monitor "$1" "$2" "$3" "$4" "$5"
+    ' _ "$job_id" "$key" "$project_dir" "$start_offset" "$pager_dir" "$script_dir" \
+      > /dev/null 2>&1 &
+    echo $! > "$dispatch_dir/pids/${job_id}.pid"
+    disown
+  fi
+  return 0
 }
 
 _ccs_dispatch_spawn_headless() {
@@ -550,7 +892,7 @@ _ccs_jobs_show_list() {
   echo "========================"
 
   echo "$deduped" | jq -r --argjson tl "$tlen" '
-    .[] | "\(.job_id)  \((.backend // "?") | .[0:10] | . + " " * (10 - length))  \(.status | .[0:9] | . + " " * (9 - length))  \(.task | .[0:$tl])"
+    .[] | "\(.job_id)  \((.backend // "?") | .[0:10] | . + " " * (10 - length))  \(.status | .[0:13] | . + " " * (13 - length))  \(.task | .[0:$tl])"
   '
 }
 
@@ -567,6 +909,17 @@ _ccs_jobs_show_single() {
     record=$(_ccs_dispatch_jsonl_latest "$job_id")
     if [ -n "$record" ]; then
       echo "$record" | jq .
+      # For a still-running agent-pager worker, surface last-activity (out.stream
+      # mtime) so a stalled worker is visible for a manual /stop (design D2).
+      local be st
+      be=$(echo "$record" | jq -r '.backend // ""')
+      st=$(echo "$record" | jq -r '.status // ""')
+      if [ "$be" = "agentpager" ] && [ "$st" = "running" ]; then
+        local la
+        la=$(_ccs_dispatch_agentpager_last_activity \
+          "local-$(id -un)" "${AGENT_PAGER_DIR:-$HOME/.agent-pager}")
+        [ -n "$la" ] && echo "Last activity: $la"
+      fi
     else
       echo "Job not found: $job_id" >&2
       return 1

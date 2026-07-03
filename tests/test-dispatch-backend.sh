@@ -118,13 +118,13 @@ assert_eq "headless dispatch completed" "completed" "$st"
 assert_eq "spawn_headless defined" "function" "$(type -t _ccs_dispatch_spawn_headless)"
 rm -rf "$mock_dir2" "$proj"
 
-echo "=== agentpager backend stub falls back to headless ==="
+echo "=== agentpager backend falls back to headless (sync / no proj-map) ==="
 mock_dir3="$SCRIPT_DIR/tmp/test-dispatch-backend-bin3"
 proj3="$SCRIPT_DIR/tmp/test-dispatch-backend-proj3"
 mkdir -p "$mock_dir3" "$proj3"
 printf '#!/bin/bash\necho "mock result: $*"\n' > "$mock_dir3/claude"
 chmod +x "$mock_dir3/claude"
-# force agentpager; stub fails -> dispatcher falls back to headless
+# force agentpager; --sync (async-only backend) returns 2 -> dispatcher falls back
 # Capture stderr/stdout to temp file to avoid subshell (which loses variable assignments)
 tmplog="$SCRIPT_DIR/tmp/test-dispatch-backend-log3"
 CCS_DISPATCH_BACKEND=agentpager PATH="$mock_dir3:$PATH" \
