@@ -471,7 +471,42 @@ CCS_DISPATCH_SYNC_TIMEOUT=120     # sync 預設 timeout
 CCS_DISPATCH_TIMEOUT=600          # async 預設 timeout
 CCS_DISPATCH_RESULT_TTL_DAYS=7    # 結果檔保留天數
 CCS_DISPATCH_MAX_CONCURRENT_WARN=3  # 並行 job 警告閾值
+CCS_DISPATCH_BACKEND=auto         # auto | agentpager | headless
 ```
+
+### 後端 (Backends)
+
+ccs-dispatch 有兩個執行後端，由 `CCS_DISPATCH_BACKEND` 選擇（預設 `auto`）：
+
+- **headless**（預設 / fallback）：用 `claude -p` 跑封閉的 one-shot worker，跑完寫
+  `results/<job-id>.md`。無需額外設定，永遠可用。
+- **agentpager**：透過 agent-pager（選用的外部工具）的 local channel 起一個**可監控的
+  互動 worker**（tmux session），輸出即時回流、可中途接管。需要 agent-pager daemon 在跑
+  且 local channel 就緒；不可用時自動 fallback 回 headless（漸進增強，不硬依賴）。
+
+`auto` 在 agent-pager 可用時選 agentpager，否則 headless。
+
+**啟用 agentpager（same-uid 個人工作流）：**
+
+1. agent-pager daemon 運行中且 `~/.agent-pager/inbound/` 存在（same-uid 免建
+   `claude-broker` 群組）。
+2. 建 `~/.config/ccs-dashboard/proj-map`（可用 `CCS_DISPATCH_PROJ_MAP` 覆寫），把專案
+   絕對路徑對應到 agent-pager 白名單裡的 key。ccs 只傳 key，實際路徑由 agent-pager 端
+   解析（key 即 RCE 邊界）：
+
+   ```
+   # <key>=<專案絕對路徑>（需與 agent-pager 白名單一致）
+   my-project=/abs/path/to/my-project
+   ```
+
+**agentpager 行為：**
+
+- **async only**：`--sync` 會 fallback 回 headless（互動 worker 可能長跑）。
+- **完成判定**：worker 完成時把交接寫到 `tmp/handoff-<job-id>.md`（開場 prompt 已注入
+  此規則）；ccs 偵測到即收席位、把交接存到 `results/<job-id>.handoff`，狀態記為
+  `handoff-ready`。無交接但 session 自行結束 → `completed`；session 從未起來 → `failed`。
+- **不自動中止**：卡住的 worker 不會被 wall-clock timeout 殺掉——在 `ccs-jobs <job-id>`
+  看 last-activity 後手動處理（MVP 單 worker per user，多 worker 為 v2）。
 
 結果存放：`${XDG_DATA_HOME:-~/.local/share}/ccs-dashboard/dispatch/`
 
