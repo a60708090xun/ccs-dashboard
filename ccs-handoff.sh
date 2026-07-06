@@ -321,69 +321,20 @@ HELP
   fi
 
   # ── Extract recent conversation pairs ──
-  # Count only real user prompts (skip meta/system messages)
-  # Build filtered pair indices: map real prompt index → raw prompt index
   local provider=$(_ccs_get_provider "$jsonl")
-  local -a real_to_raw=()
-  local raw_idx=0
-
-  local jq_filter
+  local real_count=0
   if [ "$provider" = "gemini" ]; then
-    jq_filter='(if type == "array" then . else .messages // [] end)[]? | select(.type == "user" or .role == "user") | [((.isMeta // false) | tostring), ((.content // .message.content) | if type == "array" then [.[]? | select(.text) | .text] | join(" ") else . end | .[:80] | gsub("\n"; " "))] | @tsv'
+    real_count=$(jq '[ (if type == "array" then . else .messages // [] end)[]? | select((.type == "user" or .role == "user") and ((.isMeta // false) == false)) ] | length' "$jsonl" 2>/dev/null || echo 0)
   else
-    jq_filter='select(.type == "user") | [(.isMeta // false | tostring), ((.message.content | '"${_CCS_JQ_EXTRACT_TEXT}"') | .[:80] | gsub("\n"; " "))] | @tsv'
+    real_count=$(jq '[ select(.type == "user" and ((.isMeta // false) == false)) ] | length' "$jsonl" 2>/dev/null || echo 0)
   fi
 
-  while IFS=$'\t' read -r is_meta content; do
-    raw_idx=$((raw_idx + 1))
-    # Skip meta messages
-    [ "$is_meta" = "true" ] && continue
-    # Skip system/command wrapper messages
-    case "$content" in
-      '<local-command'*|'<command-name'*|'<system-'*) continue ;;
-    esac
-    # Skip /exit, /quit, empty
-    [[ "$content" =~ ^[[:space:]]*/exit ]] && continue
-    [[ "$content" =~ ^[[:space:]]*/quit ]] && continue
-    [ -z "${content// /}" ] && continue
-    real_to_raw+=("$raw_idx")
-  done < <(jq -r "$jq_filter" "$jsonl" 2>/dev/null)
-
-  local real_count=${#real_to_raw[@]}
-  local start_from=$((real_count - pair_count + 1))
-  [ "$start_from" -lt 1 ] && start_from=1
-
-  local conversation_summary=""
-  local ri
-  local asst_label="Claude"
-  [ "$provider" = "gemini" ] && asst_label="Gemini"
-
-  for ((ri = start_from; ri <= real_count; ri++)); do
-    local raw_p=${real_to_raw[$((ri - 1))]}
-    local pair_json user_text assistant_text user_preview assistant_preview
-    pair_json=$(_ccs_get_pair "$jsonl" "$raw_p")
-    user_text=$(echo "$pair_json" | head -1 | jq -r '.text' 2>/dev/null)
-    assistant_text=$(echo "$pair_json" | tail -1 | jq -r '.text' 2>/dev/null)
-
-    # Truncate for token efficiency
-    user_preview=$(echo "$user_text" | head -3 | cut -c1-200)
-    local user_lines
-    user_lines=$(echo "$user_text" | wc -l)
-    [ "$user_lines" -gt 3 ] && user_preview="${user_preview}..."
-
-    assistant_preview=$(echo "$assistant_text" | head -5 | cut -c1-200)
-    local asst_lines
-    asst_lines=$(echo "$assistant_text" | wc -l)
-    [ "$asst_lines" -gt 5 ] && assistant_preview="${assistant_preview}..."
-
-    conversation_summary="${conversation_summary}
-### [${ri}/${real_count}] User
-${user_preview}
-
-### [${ri}/${real_count}] ${asst_label}
-${assistant_preview}
-"
-  done
+  local conversation_summary
+  conversation_summary=$(python3 "$_CCS_DASHBOARD_DIR/ccs_resume.py" \
+    --file "$jsonl" \
+    --provider "$provider" \
+    --pairs "$pair_count" \
+    --limit 150 2>/dev/null)
 
   # ── Extract tool usage from last assistant turn ──
   local recent_files=""
