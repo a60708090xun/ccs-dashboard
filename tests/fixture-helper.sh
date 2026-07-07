@@ -5,6 +5,11 @@
 
 PASS=0 FAIL=0
 
+# Tests must never page the operator: any code path that reaches the dispatch
+# completion notification (#74) is muted by default. A test that exercises the
+# notification itself unsets this and stubs the sender.
+export CCS_DISPATCH_NOTIFY=0
+
 _TEST_DIRS=()
 
 assert_eq() {

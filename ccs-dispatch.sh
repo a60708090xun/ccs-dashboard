@@ -309,6 +309,50 @@ _ccs_dispatch_agentpager_last_activity() {
   date -Iseconds -r "$stream" 2>/dev/null
 }
 
+# Resolve the agent-pager outbound sender (notify-send.sh). Order: the
+# AGENT_PAGER_SENDER convention (agent-pager's own scripts honor it), then a
+# sibling of the runner unit's ExecStart script — the services run straight
+# from the checkout, so the unit is the one place that knows the bin dir.
+# Empty output = no sender available; callers skip the notification.
+_ccs_dispatch_notify_sender() {
+  if [ -n "${AGENT_PAGER_SENDER:-}" ] && [ -x "$AGENT_PAGER_SENDER" ]; then
+    echo "$AGENT_PAGER_SENDER"; return 0
+  fi
+  local exec_start script_path candidate
+  exec_start="$(systemctl --user show agent-pager-runner.service -p ExecStart 2>/dev/null)" || return 0
+  script_path="$(echo "$exec_start" | grep -o 'path=[^ ;]*' | head -1 | cut -d= -f2-)"
+  [ -n "$script_path" ] || return 0
+  candidate="$(dirname "$script_path")/notify-send.sh"
+  [ -x "$candidate" ] && echo "$candidate"
+  return 0
+}
+
+# Best-effort completion notification for an agentpager job (#74). Sends one
+# short pager message via notify-send.sh at finalize. Never fails the caller:
+# a missing sender or a send error is silently ignored (the sender itself
+# always exits 0). CCS_DISPATCH_NOTIFY=0 opts out entirely; the send is opted
+# in per call (AGENT_PAGER_NOTIFY=1, the launching-caller convention), while
+# the actual delivery still depends on agent-pager's own telegram config.
+_ccs_dispatch_notify_completion() {
+  [ "${CCS_DISPATCH_NOTIFY:-1}" != "0" ] || return 0
+  local job_id="$1" status="$2" project="$3" handoff_dst="$4" note="$5"
+  local sender
+  sender="$(_ccs_dispatch_notify_sender)"
+  [ -n "$sender" ] && [ -x "$sender" ] || return 0
+  {
+    # No prefix here: notify-send.sh already prepends the --label.
+    echo "$job_id $status"
+    echo "project: $project"
+    [ -n "$handoff_dst" ] && echo "handoff: $handoff_dst"
+    [ -n "$note" ] && echo "note: $note"
+  } | AGENT_PAGER_NOTIFY=1 \
+    AGENT_PAGER_BOT_SLOT="${CCS_DISPATCH_NOTIFY_SLOT:-1}" \
+    timeout "${CCS_DISPATCH_NOTIFY_TIMEOUT:-10}" \
+    "$sender" --cwd "$HOME" --label "ccs-dispatch" \
+    >/dev/null 2>&1 || true
+  return 0
+}
+
 # Finalize an agent-pager job (handoff gating). Handoff file present + copied ->
 # handoff-ready (captured to results/<job_id>.handoff). Otherwise the status is
 # $3 (no_handoff_status, default "completed"; the monitor passes "failed" when
@@ -404,6 +448,14 @@ _ccs_dispatch_finish_agentpager() {
   rm -f "$dispatch_dir/pids/${job_id}.pid"
   [ -f "$md" ] && rm -f "$raw"
   rm -f "$prompt_f"
+
+  # Notify after the job record is fully landed, so a pager reader who reacts
+  # immediately sees the final state. Sync's stale reconciliation does not come
+  # through here, so only a live finalize notifies.
+  local notify_handoff=""
+  [ "$handoff_flag" = true ] && notify_handoff="$handoff_dst"
+  _ccs_dispatch_notify_completion "$job_id" "$status" "$project" \
+    "$notify_handoff" "$note"
 }
 
 # Background monitor for one agent-pager job. Runs under nohup from spawn. Polls
