@@ -462,7 +462,17 @@ ccs-dispatch --timeout 300 \
 --context      注入目標專案 git 狀態
 --timeout <s>  覆蓋預設 timeout
 --project <d>  目標專案目錄（必填）
+--preview      派發前顯示 sign-off 區塊（prompt / 專案 / backend / seat），
+               stdin 確認 y 才 launch；拒絕、EOF、timeout 都直接中止且
+               不留任何 job 紀錄
+--yes          跳過確認（配 --preview = 印出預覽直接派，供自動化留痕）
 ```
+
+**拍板流程（operator sign-off）**：人直接操作時 `--preview` 會互動確認；
+agent（如 Claude 經 Bash 呼叫）stdin 無資料會得到 EOF → 乾淨中止，agent
+把印出的預覽呈給使用者，核准後帶 `--yes` 重跑。確認等待上限
+`CCS_DISPATCH_PREVIEW_TIMEOUT`（預設 60s），prompt 折疊長度
+`CCS_DISPATCH_PREVIEW_MAX_CHARS`（預設 1500）。
 
 可配置環境變數：
 
@@ -472,6 +482,8 @@ CCS_DISPATCH_TIMEOUT=600          # async 預設 timeout
 CCS_DISPATCH_RESULT_TTL_DAYS=7    # 結果檔保留天數
 CCS_DISPATCH_MAX_CONCURRENT_WARN=3  # 並行 job 警告閾值
 CCS_DISPATCH_BACKEND=auto         # auto | agentpager | headless
+CCS_DISPATCH_PREVIEW_TIMEOUT=60   # --preview 確認等待秒數
+CCS_DISPATCH_PREVIEW_MAX_CHARS=1500  # preview prompt 折疊長度
 ```
 
 ### 後端 (Backends)

@@ -12,6 +12,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follo
 - **ccs-dispatch agent-pager backend** — optional local-channel worker backend (`CCS_DISPATCH_BACKEND=agentpager`, auto-detected) that runs a monitorable interactive worker via agent-pager instead of headless `claude -p`. Same-uid hybrid detection needs no `claude-broker` group; projects map to agent-pager keys via `~/.config/ccs-dashboard/proj-map`. Handoff-driven completion (`handoff-ready` status), async-only, and falls back to headless when agent-pager is unavailable. See `docs/commands.md`.
 - **ccs-jobs agent-pager visibility** — the list shows a running agent-pager worker's last-activity in a footer line, and the single-job view hints the `.handoff` path plus a prefilled follow-up `ccs-dispatch` template on handoff-ready jobs. (PR #72)
 - **ccs-dispatch completion notification** — an agentpager job pushes one short pager message at finalize (job id, status, project, `.handoff` path) via agent-pager's notify channel. Best-effort (a missing or hung sender never affects finalize), opt-out with `CCS_DISPATCH_NOTIFY=0`, bot slot pinned via `CCS_DISPATCH_NOTIFY_SLOT`. (#74)
+- **ccs-dispatch preview sign-off** — `--preview` shows the worker prompt, project, backend, and seat, then asks for confirmation before dispatching; rejection, EOF, or timeout aborts with no job record. `--yes` skips the question for automation. (#75)
 
 ### Fixed
 
