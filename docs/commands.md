@@ -508,6 +508,15 @@ ccs-dispatch 有兩個執行後端，由 `CCS_DISPATCH_BACKEND` 選擇（預設 
 - **不自動中止**：卡住的 worker 不會被 wall-clock timeout 殺掉——`ccs-jobs` 清單底部會
   顯示 running worker 的 last-activity（idle 時間），`ccs-jobs <job-id>` 亦有；據此手動
   `/stop` 處理（MVP 單 worker per user，多 worker 為 v2）。
+- **完成通知**：job 進入終態（`handoff-ready` / `completed` / `failed`）時，透過
+  agent-pager 的 notify 通道推一則短訊（job id、狀態、專案、`.handoff` 路徑）。
+  Best-effort：找不到 sender 或送出失敗不影響 finalize；實際送達仍依 agent-pager 的
+  telegram 設定。`CCS_DISPATCH_NOTIFY=0` 可關閉。sender 路徑取自 `AGENT_PAGER_SENDER`，
+  未設時從 agent-pager 的 systemd user unit 推導。`CCS_DISPATCH_NOTIFY_SLOT`（預設 `1`）
+  指定發送用的 pager bot slot——建議指到一個不掛互動 session 的保留 slot，避免通知
+  混進互動對話串（slot role 的原生支援由 agent-pager 端追蹤——internal GitLab
+  issue #76，落地後此預設會改為查詢保留 slot）。注意：只有 monitor 的
+  即時 finalize 會通知；`ccs-jobs` sync 的事後補帳（stale 對帳）不通知。
 
 結果存放：`${XDG_DATA_HOME:-~/.local/share}/ccs-dashboard/dispatch/`
 
