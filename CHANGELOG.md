@@ -10,6 +10,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follo
 
 - `ccs-failure-triage`: triage a session for model confabulation-family failure signals (Sub-pattern A/B/C/D). Includes 5 automated forensic checks and writes a report to `<project>/tmp/`. See `docs/failure-triage.md`.
 - **ccs-dispatch agent-pager backend** — optional local-channel worker backend (`CCS_DISPATCH_BACKEND=agentpager`, auto-detected) that runs a monitorable interactive worker via agent-pager instead of headless `claude -p`. Same-uid hybrid detection needs no `claude-broker` group; projects map to agent-pager keys via `~/.config/ccs-dashboard/proj-map`. Handoff-driven completion (`handoff-ready` status), async-only, and falls back to headless when agent-pager is unavailable. See `docs/commands.md`.
+- **ccs-jobs agent-pager visibility** — the list shows a running agent-pager worker's last-activity in a footer line, and the single-job view hints the `.handoff` path plus a prefilled follow-up `ccs-dispatch` template on handoff-ready jobs. (PR #72)
+
+### Fixed
+
+- `ccs-jobs` status sync is now agent-pager-aware: resolves effective status via the same reduce-merge as the board (fallback markers no longer skip liveness), uses the worker tmux session instead of the monitor pid as the liveness signal, and defers to a live monitor during worker startup to avoid falsely completing a just-dispatched job. (PR #72)
 
 ## [0.3.3] — 2026-04-17
 
