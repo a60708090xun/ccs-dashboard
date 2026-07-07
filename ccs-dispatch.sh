@@ -744,6 +744,50 @@ A reported failure is always preferable to a fabricated success.
 VRULE
 }
 
+# Render the sign-off block an operator reads before approving a dispatch
+# (#75). Narrow layout for phone reading; a long prompt folds to its head plus
+# a size note (CCS_DISPATCH_PREVIEW_MAX_CHARS, default 1500).
+_ccs_dispatch_preview_render() {
+  local project="$1" backend="$2" mode="$3" timeout_secs="$4" prompt="$5"
+  local max="${CCS_DISPATCH_PREVIEW_MAX_CHARS:-1500}"
+  local seat=""
+  [ "$backend" = "agentpager" ] && seat=" (seat local-$(id -un))"
+  echo "── dispatch preview ──"
+  echo "project : $project"
+  echo "backend : ${backend}${seat}"
+  [ "$backend" = "agentpager" ] && \
+    echo "          (falls back to headless if the seat is unavailable)"
+  echo "mode    : $mode (timeout ${timeout_secs}s)"
+  echo "prompt  : ${#prompt} chars"
+  # Fold the middle, not the tail: the prompt ends with "Task: ...", which is
+  # exactly what the operator signs off on. Char-based slicing keeps multibyte
+  # prompts intact (head -c would cut mid-UTF-8).
+  if [ "${#prompt}" -gt "$max" ]; then
+    local half=$(( max / 2 ))
+    printf '%s\n' "${prompt:0:half}"
+    echo "··· (folded $(( ${#prompt} - half * 2 )) of ${#prompt} chars) ···"
+    printf '%s\n' "${prompt: -half}"
+  else
+    printf '%s\n' "$prompt"
+  fi
+  echo "── end preview ──"
+}
+
+# Read the operator's verdict from stdin: y/yes (any case) approves (0),
+# anything else — including EOF from a non-interactive caller and a silence
+# timeout (CCS_DISPATCH_PREVIEW_TIMEOUT, default 60s) — rejects (1). A
+# non-interactive agent flow is expected to hit EOF, show the printed preview
+# to its user, and re-run with --yes once approved.
+_ccs_dispatch_preview_confirm() {
+  local reply=""
+  printf 'Dispatch? [y/N] ' >&2
+  IFS= read -r -t "${CCS_DISPATCH_PREVIEW_TIMEOUT:-60}" reply || return 1
+  case "$reply" in
+    [yY]|[yY][eE][sS]) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 ccs-dispatch() {
   if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
     cat <<'HELP'
@@ -758,13 +802,16 @@ Options:
   --context        Inject git status + todos
   --timeout <secs> Override timeout
   --project <dir>  Target project (required)
+  --preview        Show a sign-off block and ask before dispatching;
+                   rejection / EOF / timeout aborts with no job record
+  --yes            Skip the confirmation (with --preview: print and go)
 HELP
     return 0
   fi
 
   _ccs_dispatch_lazy_cleanup
 
-  local mode="async" context=false
+  local mode="async" context=false preview=false assume_yes=false
   local timeout_secs="" project="" task=""
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -772,6 +819,8 @@ HELP
       --context) context=true; shift ;;
       --timeout) timeout_secs="$2"; shift 2 ;;
       --project) project="$2"; shift 2 ;;
+      --preview) preview=true; shift ;;
+      --yes) assume_yes=true; shift ;;
       *) task="$1"; shift ;;
     esac
   done
@@ -813,6 +862,18 @@ HELP
 
   local backend
   backend=$(_ccs_dispatch_resolve_backend)
+
+  # Sign-off gate (#75): before the first side effect, so a rejection leaves
+  # no job record and no worker. --yes keeps automation non-interactive.
+  if $preview; then
+    _ccs_dispatch_preview_render "$project" "$backend" "$mode" \
+      "$timeout_secs" "$prompt"
+    if ! $assume_yes && ! _ccs_dispatch_preview_confirm; then
+      echo "ccs-dispatch: aborted (preview not approved)" >&2
+      return 1
+    fi
+  fi
+
   local job_id
   job_id=$(_ccs_dispatch_job_id)
   _ccs_dispatch_jsonl_append "$(jq -nc \
