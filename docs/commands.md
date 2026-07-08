@@ -537,11 +537,18 @@ ccs-dispatch 有兩個執行後端，由 `CCS_DISPATCH_BACKEND` 選擇（預設 
 查看 dispatch 任務歷史與結果。
 
 ```bash
-ccs-jobs              # 最近 20 筆
-ccs-jobs --all        # 全部
-ccs-jobs <job-id>     # 單筆詳細結果（顯示 .md）
+ccs-jobs                  # 最近 20 筆
+ccs-jobs --all            # 全部
+ccs-jobs <job-id>         # 單筆詳情：狀態欄位 + 一行 summary + artifact 路徑
+ccs-jobs <job-id> --full  # 單筆詳情並內嵌完整 .md 輸出
 ```
 
+- **單筆詳情預設精簡**：只印 header 欄位、worker 回傳的一行 `Summary` 與 artifact
+  路徑指標（`.md` / `.handoff`）；完整輸出改由 `--full` 或直接 Read `.md` 取得。
+  設計目的是讓指揮席（lead）查 job 時 context 不隨 worker 產出膨脹——證據留在磁碟，
+  需要才載入。`--full` flag 位置無關（可放 id 前或後）。
+- **Summary 來源**：agentpager worker 的 handoff 檔開頭若有 YAML frontmatter
+  `summary:`，優先採用（乾淨的一行）；否則 fallback 用 transcript 尾端截斷。
 - **清單 footer**：有 running 的 agentpager worker 時，清單底部顯示其 last-activity
   （out.stream idle 時間），方便發現卡住的 worker。
 - **handoff-ready 提示**：單筆 view 對 `handoff-ready` job 會提示 `.handoff` 路徑與接力
