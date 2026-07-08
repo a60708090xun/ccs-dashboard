@@ -157,4 +157,54 @@ printf '# Dispatch Result: d-cp\n- **Status:** completed\n' > "$DD/results/d-cp.
 cp_out="$(ccs-jobs d-cp 2>/dev/null)"
 assert_not_contains "completed job -> no chain hint" "$cp_out" "auto-chaining is v2"
 
+echo "=== single view: default is slim (summary + pointer, no full output) ==="
+reset_jobs
+jrec '{"job_id":"d-slim","project":"p","backend":"headless","status":"completed","exit_code":0,"summary":"did the thing in one line","created_at":"2026-07-03T10:00:00+08:00","finished_at":"2026-07-03T10:05:00+08:00"}'
+{ printf '# Dispatch Result: d-slim\n## Output\n'; head -c 40000 /dev/zero | tr '\0' 'x'; } > "$DD/results/d-slim.md"
+def_out="$(ccs-jobs d-slim 2>/dev/null)"
+assert_contains "default shows the one-line summary" "$def_out" "did the thing in one line"
+assert_contains "default points at the full artifact" "$def_out" "results/d-slim.md"
+assert_not_contains "default does NOT inline the 40KB output" "$def_out" "xxxxxxxxxx"
+# Payload must be decoupled from artifact size.
+def_bytes=$(printf '%s' "$def_out" | wc -c)
+if [ "$def_bytes" -lt 2000 ]; then
+  printf '  PASS: default payload stays small (%s bytes vs 40KB artifact)\n' "$def_bytes"
+  PASS=$((PASS + 1))
+else
+  printf '  FAIL: default payload too large (%s bytes)\n' "$def_bytes"
+  FAIL=$((FAIL + 1))
+fi
+
+echo "=== single view: --full inlines the artifact ==="
+full_out="$(ccs-jobs d-slim --full 2>/dev/null)"
+assert_contains "--full inlines the full output" "$full_out" "xxxxxxxxxx"
+
+echo "=== handoff frontmatter summary parser ==="
+hf="$DD/results/hf-sample.handoff"
+printf -- '---\nsummary:   clean intended line   \noutcome: done\n---\n\nsummary: body decoy\n' > "$hf"
+assert_eq "parser extracts + trims frontmatter summary" \
+  "clean intended line" "$(_ccs_dispatch_parse_handoff_summary "$hf")"
+printf '# no frontmatter\nsummary: body\n' > "$hf"
+assert_eq "parser returns empty when no frontmatter" \
+  "" "$(_ccs_dispatch_parse_handoff_summary "$hf")"
+# Unterminated frontmatter must NOT leak a body summary (review finding #3).
+printf -- '---\noutcome: done\nsummary: leaked from unterminated block\n' > "$hf"
+assert_eq "parser ignores summary in unterminated frontmatter" \
+  "" "$(_ccs_dispatch_parse_handoff_summary "$hf")"
+# CRLF line endings tolerated (review finding #2).
+printf -- '---\r\nsummary: crlf line\r\n---\r\n' > "$hf"
+assert_eq "parser tolerates CRLF frontmatter" \
+  "crlf line" "$(_ccs_dispatch_parse_handoff_summary "$hf")"
+# Colon-in-value preserved.
+printf -- '---\nsummary: fix: the bar\n---\n' > "$hf"
+assert_eq "parser preserves colons in the value" \
+  "fix: the bar" "$(_ccs_dispatch_parse_handoff_summary "$hf")"
+
+echo "=== ccs-jobs: --full accepted before the id (review finding #4) ==="
+reset_jobs
+jrec '{"job_id":"d-pos","project":"p","backend":"headless","status":"completed","summary":"pos test","created_at":"2026-07-03T10:00:00+08:00"}'
+{ printf '## Output\n'; head -c 3000 /dev/zero | tr '\0' 'y'; } > "$DD/results/d-pos.md"
+assert_contains "--full before id still inlines output" \
+  "$(ccs-jobs --full d-pos 2>/dev/null)" "yyyyyyyyyy"
+
 test_summary

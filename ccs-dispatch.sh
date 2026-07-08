@@ -238,11 +238,44 @@ This is a dispatched worker session. When the task above is fully complete (or
 before your context fills), first report a one-line summary of what you did.
 Then, AS YOUR VERY LAST ACTION, write a concise handoff to the file
 tmp/handoff-${job_id}.md (path relative to the project root; use ccs-handoff for
-the content if helpful). Writing that file is your completion signal: the
-dispatcher watches for tmp/handoff-${job_id}.md and closes this session once it
-appears, so do not create it until everything else — including your summary — is
-already done. You do NOT need to exit yourself.
+the content if helpful). Begin that file with a YAML frontmatter block the
+dispatcher parses for the job board — the lead reads this line instead of your
+full transcript, so make it a clean standalone summary:
+---
+summary: <one line, <=120 chars, what you accomplished>
+outcome: done | partial | blocked
+next: <one line, the next step if any — omit if none>
+---
+Writing tmp/handoff-${job_id}.md is your completion signal: the dispatcher
+watches for it and closes this session once it appears, so do not create it
+until everything else — including your summary — is already done. You do NOT
+need to exit yourself.
 HGRULE
+}
+
+# Extract the `summary:` line from a handoff file's leading YAML frontmatter.
+# Only a properly CLOSED `---`-delimited block at the top of the file is
+# honoured: the value is emitted only once the closing `---` is seen, so a
+# `summary:` in the body (or an unterminated frontmatter block) is never
+# mistaken for the header field. CRLF line endings are tolerated. Echoes the
+# trimmed value (empty if no frontmatter / no closing / no summary); always rc 0.
+_ccs_dispatch_parse_handoff_summary() {
+  local f="$1"
+  [ -f "$f" ] || return 0
+  awk '
+    { sub(/\r$/, "") }                   # tolerate CRLF
+    NR==1 && $0 != "---" { exit }        # no frontmatter -> nothing to read
+    NR==1 { in_fm=1; next }
+    in_fm && $0 == "---" {               # closing delimiter: block is valid
+      print found; exit
+    }
+    in_fm && found == "" && /^summary:[[:space:]]*/ {
+      val = $0
+      sub(/^summary:[[:space:]]*/, "", val)
+      sub(/[[:space:]]+$/, "", val)
+      found = val
+    }
+  ' "$f"
 }
 
 # Write an agent-pager inbound launch file. Frontmatter matches inbound-handler.sh
@@ -429,8 +462,14 @@ _ccs_dispatch_finish_agentpager() {
     fi
   } > "$md"
 
+  # Prefer the worker's structured handoff frontmatter summary (a clean, intended
+  # one-liner) over the raw-transcript tail, which is noisy. Fall back to the tail
+  # only when no frontmatter summary is present.
   local summary=""
-  if [ -f "$raw" ]; then
+  if [ "$handoff_flag" = true ]; then
+    summary=$(_ccs_dispatch_parse_handoff_summary "$handoff_dst")
+  fi
+  if [ -z "$summary" ] && [ -f "$raw" ]; then
     summary=$(tail -n "$CCS_DISPATCH_SUMMARY_LINES" "$raw" | head -c "$CCS_DISPATCH_SUMMARY_MAX_CHARS")
   fi
 
@@ -919,9 +958,10 @@ ccs-jobs() {
 ccs-jobs — view dispatch job history
 
 Usage:
-  ccs-jobs            Recent jobs
-  ccs-jobs --all      All jobs
-  ccs-jobs <job-id>   Single job detail
+  ccs-jobs                 Recent jobs
+  ccs-jobs --all           All jobs
+  ccs-jobs <job-id>        Single job detail (summary + artifact paths)
+  ccs-jobs <job-id> --full Single job detail with full output inlined
 HELP
     return 0
   fi
@@ -937,15 +977,19 @@ HELP
 
   _ccs_jobs_sync_status
 
-  local show_all=false single_id=""
-  case "${1:-}" in
-    --all) show_all=true ;;
-    "") ;;
-    *)  single_id="$1" ;;
-  esac
+  local show_all=false single_id="" full=false
+  local arg
+  for arg in "$@"; do
+    case "$arg" in
+      --all)  show_all=true ;;
+      --full) full=true ;;
+      "") ;;
+      *)      [ -z "$single_id" ] && single_id="$arg" ;;
+    esac
+  done
 
   if [ -n "$single_id" ]; then
-    _ccs_jobs_show_single "$single_id"
+    _ccs_jobs_show_single "$single_id" "$full"
   else
     _ccs_jobs_show_list "$show_all"
   fi
@@ -1071,28 +1115,61 @@ _ccs_jobs_show_list() {
 }
 
 _ccs_jobs_show_single() {
-  local job_id="$1"
+  local job_id="$1" full="${2:-false}"
   local dispatch_dir
   dispatch_dir="$(_ccs_dispatch_dir)"
   local md="$dispatch_dir/results/${job_id}.md"
   local record
   record=$(_ccs_dispatch_jsonl_latest "$job_id")
 
-  if [ -f "$md" ]; then
+  # --full inlines the whole result md (the on-disk artifact). Default stays lean
+  # so the lead's context does not grow with worker output: header fields + the
+  # one-line summary + pointers to the artifacts, which the lead reads on demand.
+  if [ "$full" = true ] && [ -f "$md" ]; then
     cat "$md"
   elif [ -n "$record" ]; then
-    echo "$record" | jq .
-    # For a still-running agent-pager worker, surface last-activity (out.stream
-    # mtime) so a stalled worker is visible for a manual /stop (design D2).
-    local be st
+    local be st proj ec created finished sum handoff_dst
     be=$(echo "$record" | jq -r '.backend // ""')
     st=$(echo "$record" | jq -r '.status // ""')
+    proj=$(echo "$record" | jq -r '.project // "unknown"')
+    ec=$(echo "$record" | jq -r '.exit_code // empty')
+    created=$(echo "$record" | jq -r '.created_at // empty')
+    finished=$(echo "$record" | jq -r '.finished_at // empty')
+    sum=$(echo "$record" | jq -r '.summary // ""')
+
+    echo "# Dispatch Job: $job_id"
+    echo ""
+    echo "- **Project:** $proj"
+    echo "- **Status:** $st"
+    [ -n "$ec" ] && echo "- **Exit code:** $ec"
+    [ -n "$be" ] && echo "- **Backend:** $be"
+    [ -n "$created" ] && echo "- **Created:** $created"
+    [ -n "$finished" ] && echo "- **Finished:** $finished"
+    if [ -n "$sum" ]; then
+      echo ""
+      echo "**Summary:** $sum"
+    fi
+    # Pointers, not content: the lead Reads these only when the summary is not
+    # enough (design: evidence stays on disk).
+    handoff_dst="$dispatch_dir/results/${job_id}.handoff"
+    if [ -f "$md" ]; then
+      echo ""
+      echo "Full output: $md (ccs-jobs $job_id --full)"
+    fi
+    [ -f "$handoff_dst" ] && echo "Handoff: $handoff_dst"
+
+    # For a still-running agent-pager worker, surface last-activity (out.stream
+    # mtime) so a stalled worker is visible for a manual /stop (design D2).
     if [ "$be" = "agentpager" ] && [ "$st" = "running" ]; then
       local la
       la=$(_ccs_dispatch_agentpager_last_activity \
         "local-$(id -un)" "${AGENT_PAGER_DIR:-$HOME/.agent-pager}")
       [ -n "$la" ] && echo "Last activity: $la"
     fi
+  elif [ -f "$md" ]; then
+    # No jsonl record but the artifact exists: nothing structured to distill, so
+    # fall back to the full md regardless of --full.
+    cat "$md"
   else
     echo "Job not found: $job_id" >&2
     return 1
