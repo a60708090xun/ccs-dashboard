@@ -5,6 +5,13 @@
 # CCS_DISPATCH_AGENTPAGER_MONITOR=0 to skip starting the background monitor.
 set -u
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+
+# Sandbox the data dir BEFORE sourcing anything that resolves it, so the test's
+# d-test-* records never land in the user's real jobs.jsonl (mirrors the
+# sibling test-jobs-agentpager.sh isolation).
+export XDG_DATA_HOME="$SCRIPT_DIR/tmp/test-spawn-ap-xdg"
+rm -rf "$XDG_DATA_HOME"; mkdir -p "$XDG_DATA_HOME"
+
 source "$SCRIPT_DIR/tests/fixture-helper.sh"
 source "$SCRIPT_DIR/ccs-dashboard.sh"
 
@@ -15,6 +22,8 @@ p="$(_ccs_dispatch_agentpager_prompt "d-test-1234" $'VERIFICATION RULE ...\nTask
 assert_contains "prompt keeps original task" "$p" "Task: do X"
 assert_contains "prompt names per-job handoff file" "$p" "tmp/handoff-d-test-1234.md"
 assert_contains "prompt references the job id" "$p" "d-test-1234"
+assert_contains "prompt carries the autonomy invariant" "$p" "Do not ask clarifying questions"
+assert_contains "prompt routes blocked to outcome: blocked" "$p" "outcome: blocked"
 
 echo "=== launch file has valid frontmatter + body ==="
 tmproot="$SCRIPT_DIR/tmp/test-spawn-ap-pager"
