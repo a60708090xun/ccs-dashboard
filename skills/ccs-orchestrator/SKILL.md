@@ -126,6 +126,31 @@ Options 數量控制在 3-6 個，不超過 7 個。
 2. **進階狀態摘要：** 理解「等 MR approve」「blocked by 上游」等需要語境的判斷
 3. **優先順序建議：** 結合 deadline context + feature status + 活躍度推斷（僅在使用者要求時）
 
+## Context Discipline（指揮席：看板只裝指標，證據留磁碟）
+
+長壽指揮席（在 home dir 做跨 repo 協調的 orchestrator session）的可行性前提是
+**context 成長與 worker 工作量脫鉤**。dispatch 的 worker 產出（完整 stdout、
+handoff 全文）是隨工作量線性膨脹的大 payload，一旦灌進指揮席 context，指揮席壽命
+就與工作量掛鉤，違背此架構。因此以下為**強制紀律，不靠自覺**：
+
+1. **看板 / 詳情只吃指標行，不吃全文。** dispatch 任務詳情一律用 `ccs-jobs <id>`
+   的精簡 view（狀態欄位 + 一行 `summary` + 磁碟 artifact 路徑指標）。這個精簡 view
+   本身就是要 `Read` 後**逐字貼給使用者**的指標輸出（見 Agent Behavior 原文輸出規則）。
+2. **禁止把 worker 全文產出灌進指揮席 context。** 不要 `cat` / `tail` 完整
+   `results/<id>.md`、`results/<id>.handoff`、`out.stream` 進自己的 context，也不要
+   對這些 artifact 預設加 `ccs-jobs <id> --full`。
+3. **細節按需 Read，看完即用完。** 需要某個 artifact 的特定內容時，才 `Read` 該檔案
+   的**特定區段**（用 `offset` / `limit`），不整檔載入、不重複整檔重讀。
+4. **摘要品質由 worker 端保證，不由指揮席事後蒸餾。** chained handoff 的 frontmatter
+   `summary:` / `outcome:` / `next:` 已由 worker 蒸餾（等同 Workflow StructuredOutput）；
+   指揮席讀 frontmatter 判斷即可，handoff body 全文按需 Read。
+5. **例外：使用者明示要看全文。** 使用者明確要求「看完整輸出 / 看 handoff 全文」時，
+   `--full` 或 `Read` artifact 貼給使用者是正當的——那是 user-driven 且輸出目的地是
+   使用者，不算指揮席自我膨脹。紀律針對的是**指揮席為自己協調而預設拉全文**的行為。
+
+此紀律依據內部 context-economy 設計理念文件（§4 可操作設計原則）；核心是
+「看板只裝指標，證據留磁碟，compact 是 fallback 不是主策略」。
+
 ## Agent Behavior
 
 1. **先 JSON 後呈現：** 內部先跑 `--json` 做判斷（需要哪些 options、有無殭屍等），再跑 `--md` 取人讀格式呈現。如果 `--md` 已包含所需資訊，可省略 `--json` 步驟。
