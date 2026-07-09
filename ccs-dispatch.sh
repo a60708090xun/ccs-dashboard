@@ -93,6 +93,42 @@ _ccs_dispatch_gate_load_task() {
   echo "$js"
 }
 
+# Run one acceptance criterion against ground truth. cmd track: `bash -c <cmd>`
+# with cwd=<cwd>, exit 0 = PASS / non-zero = FAIL. guidance track: no execution,
+# verdict SKIPPED_FOR_LLM (Stage 2 fills it later). Echoes the §4.1 AC record.
+_ccs_dispatch_gate_run_ac() {
+  local cwd="$1" ac="$2"
+  local id cmd guidance
+  id="$(echo "$ac" | jq -r '.id')"
+  cmd="$(echo "$ac" | jq -r '.verify.cmd // empty')"
+  guidance="$(echo "$ac" | jq -r '.verify.guidance // empty')"
+
+  if [ -n "$guidance" ]; then
+    jq -n --arg id "$id" \
+      '{ac_id:$id, track:"guidance", cmd:null, verdict:"SKIPPED_FOR_LLM",
+        exit_code:null, stdout_tail:"", stderr_tail:"", duration_ms:null,
+        na_reason:null, stage2_note:null}'
+    return 0
+  fi
+
+  local t0 t1 dur out err rc verdict errfile
+  errfile="$cwd/.gate-ac-err.$$"
+  t0="$(date +%s%N)"
+  out="$( (cd "$cwd" && bash -c "$cmd") 2> "$errfile" )"; rc=$?
+  err="$(cat "$errfile" 2>/dev/null)"; rm -f "$errfile"
+  t1="$(date +%s%N)"
+  dur=$(( (t1 - t0) / 1000000 ))
+  [ "$rc" -eq 0 ] && verdict="PASS" || verdict="FAIL"
+
+  jq -n --arg id "$id" --arg cmd "$cmd" --arg v "$verdict" \
+    --argjson ec "$rc" --argjson dur "$dur" \
+    --arg so "$(printf '%s' "$out" | tail -c "$CCS_DISPATCH_GATE_CMD_TAIL_CHARS")" \
+    --arg se "$(printf '%s' "$err" | tail -c "$CCS_DISPATCH_GATE_CMD_TAIL_CHARS")" \
+    '{ac_id:$id, track:"cmd", cmd:$cmd, verdict:$v, exit_code:$ec,
+      stdout_tail:$so, stderr_tail:$se, duration_ms:$dur,
+      na_reason:null, stage2_note:null}'
+}
+
 # ── Job ID: d-YYYYMMDD-HHMMSS-XXXX ──
 _ccs_dispatch_job_id() {
   printf 'd-%s-%s' \
