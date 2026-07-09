@@ -11,7 +11,7 @@
 #   ccs-overview.sh       — ccs-overview
 #   ccs-feature.sh        — ccs-feature, ccs-tag
 #   ccs-ops.sh            — ccs-crash, ccs-recap, ccs-checkpoint
-#   ccs-dispatch.sh       — ccs-dispatch, ccs-jobs
+#   ccs-dispatch.sh       — ccs-dispatch, ccs-jobs, ccs-dispatch-run
 #
 # Commands defined in this file:
 #   ccs-status (ccs) — unified session dashboard

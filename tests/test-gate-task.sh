@@ -57,4 +57,52 @@ YAML
 _ccs_dispatch_gate_load_task "$WORK/bothtracks.yaml" >/dev/null 2>&1
 assert_eq "AC with both tracks -> rc 1" "1" "$?"
 
+cat > "$WORK/dupid.yaml" <<'YAML'
+id: t
+goal: g
+acceptance_criteria:
+  - id: AC1
+    text: a
+    verify: {cmd: "true"}
+  - id: AC1
+    text: b
+    verify: {cmd: "true"}
+YAML
+_ccs_dispatch_gate_load_task "$WORK/dupid.yaml" >/dev/null 2>&1
+assert_eq "duplicate AC id -> rc 1" "1" "$?"
+
+cat > "$WORK/badid.yaml" <<'YAML'
+id: t
+goal: g
+acceptance_criteria:
+  - id: "api/health"
+    text: a
+    verify: {cmd: "true"}
+YAML
+_ccs_dispatch_gate_load_task "$WORK/badid.yaml" >/dev/null 2>&1
+assert_eq "AC id with path separator -> rc 1" "1" "$?"
+
+cat > "$WORK/allguidance.yaml" <<'YAML'
+id: t
+goal: g
+acceptance_criteria:
+  - id: AC1
+    text: a
+    verify: {guidance: "looks right"}
+YAML
+_ccs_dispatch_gate_load_task "$WORK/allguidance.yaml" >/dev/null 2>&1
+assert_eq "all-guidance task (no cmd AC) -> rc 1" "1" "$?"
+
+echo "=== non-AC-prefixed ids are valid (must not force AC prefix) ==="
+cat > "$WORK/okids.yaml" <<'YAML'
+id: t
+goal: g
+acceptance_criteria:
+  - id: builds
+    text: a
+    verify: {cmd: "true"}
+YAML
+_ccs_dispatch_gate_load_task "$WORK/okids.yaml" >/dev/null 2>&1
+assert_eq "safe non-AC id (builds) -> rc 0" "0" "$?"
+
 test_summary

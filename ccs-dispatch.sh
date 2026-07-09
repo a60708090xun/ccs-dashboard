@@ -80,24 +80,35 @@ _ccs_dispatch_gate_load_task() {
   local js
   js="$(python3 -c 'import sys,yaml,json; json.dump(yaml.safe_load(open(sys.argv[1])) or {}, sys.stdout)' "$yaml" 2>/dev/null)" \
     || { echo "gate: task YAML parse failed: $yaml" >&2; return 1; }
+  # Validation: id/goal non-empty strings; non-empty AC array; each AC id is a
+  # filesystem-safe token (used verbatim as gate/<id>.json) and unique; each AC
+  # has exactly one of cmd/guidance; and at least one cmd-track AC exists (an
+  # all-guidance task would auto-PASS with zero deterministic verification,
+  # defeating the gate's purpose).
   echo "$js" | jq -e '
     (.id | type == "string" and (length > 0))
     and (.goal | type == "string" and (length > 0))
     and (.acceptance_criteria | type == "array" and (length > 0))
     and (all(.acceptance_criteria[];
-      (.id | type == "string" and (length > 0))
+      (.id | type == "string" and test("^[A-Za-z0-9_.-]+$"))
       and (([.verify.cmd, .verify.guidance]
             | map(select(. != null and . != "")) | length) == 1)))
+    and (([.acceptance_criteria[].id] | length) ==
+         ([.acceptance_criteria[].id] | unique | length))
+    and (any(.acceptance_criteria[]; (.verify.cmd // "") != ""))
   ' >/dev/null 2>&1 \
     || { echo "gate: task validation failed: $yaml" >&2; return 1; }
   echo "$js"
 }
 
 # Run one acceptance criterion against ground truth. cmd track: `bash -c <cmd>`
-# with cwd=<cwd>, exit 0 = PASS / non-zero = FAIL. guidance track: no execution,
+# with cwd=<cwd>, bounded by <timeout_sec> (0 = unbounded), exit 0 = PASS /
+# non-zero = FAIL (a timeout returns 124 -> FAIL). guidance track: no execution,
 # verdict SKIPPED_FOR_LLM (Stage 2 fills it later). Echoes the §4.1 AC record.
+# The stderr scratch file lives OUTSIDE <cwd> so it never perturbs an AC that
+# inspects the repo's own working tree (e.g. a clean-tree check).
 _ccs_dispatch_gate_run_ac() {
-  local cwd="$1" ac="$2"
+  local cwd="$1" ac="$2" timeout_sec="${3:-0}"
   local id cmd guidance
   id="$(echo "$ac" | jq -r '.id')"
   cmd="$(echo "$ac" | jq -r '.verify.cmd // empty')"
@@ -111,10 +122,12 @@ _ccs_dispatch_gate_run_ac() {
     return 0
   fi
 
-  local t0 t1 dur out err rc verdict errfile
-  errfile="$cwd/.gate-ac-err.$$"
+  local t0 t1 dur out err rc verdict errfile to=""
+  case "$timeout_sec" in ''|*[!0-9]*) timeout_sec=0 ;; esac
+  [ "$timeout_sec" -gt 0 ] && to="timeout $timeout_sec"
+  errfile="$(_ccs_dispatch_dir)/.gate-ac-err.$$.${id}"
   t0="$(date +%s%N)"
-  out="$( (cd "$cwd" && bash -c "$cmd") 2> "$errfile" )"; rc=$?
+  out="$( (cd "$cwd" && $to bash -c "$cmd") 2> "$errfile" )"; rc=$?
   err="$(cat "$errfile" 2>/dev/null)"; rm -f "$errfile"
   t1="$(date +%s%N)"
   dur=$(( (t1 - t0) / 1000000 ))
@@ -165,12 +178,16 @@ _ccs_dispatch_gate_run() {
   local gate_dir="$attempt_dir/gate"
   mkdir -p "$gate_dir"
 
+  local timeout_sec
+  timeout_sec="$(echo "$task" | jq -r '.execution_policy.timeout_sec // empty')"
+  [ -z "$timeout_sec" ] && timeout_sec="$CCS_DISPATCH_TIMEOUT"
+
   local n verdicts='[]' ac rec ac_id
   n="$(echo "$task" | jq '.acceptance_criteria | length')"
   local i=0
   while [ "$i" -lt "$n" ]; do
     ac="$(echo "$task" | jq -c ".acceptance_criteria[$i]")"
-    rec="$(_ccs_dispatch_gate_run_ac "$cwd" "$ac")"
+    rec="$(_ccs_dispatch_gate_run_ac "$cwd" "$ac" "$timeout_sec")"
     ac_id="$(echo "$rec" | jq -r '.ac_id')"
     echo "$rec" | jq '.' > "$gate_dir/${ac_id}.json"
     verdicts="$(jq -n --argjson a "$verdicts" --argjson r "$rec" \
@@ -190,9 +207,13 @@ _ccs_dispatch_gate_run() {
 # polluting the next attempt's fresh context. Empty output if no cmd-AC FAILed.
 _ccs_dispatch_gate_feedback() {
   local attempt_dir="$1" attempt="$2"
+  # Iterate every per-AC evidence file (any id, not just AC*), skipping the gate
+  # verdict summary. AC ids are validated to a filesystem-safe token by the
+  # loader, so <id>.json is a stable 1:1 mapping.
   local gate_dir="$attempt_dir/gate" lines="" f
-  for f in "$gate_dir"/AC*.json; do
+  for f in "$gate_dir"/*.json; do
     [ -f "$f" ] || continue
+    [ "$(basename "$f")" = "verdict.json" ] && continue
     [ "$(jq -r '.verdict' "$f")" = "FAIL" ] || continue
     lines+="- $(jq -r '.ac_id' "$f") FAIL: \`$(jq -r '.cmd' "$f")\` → exit $(jq -r '.exit_code' "$f")"$'\n'
   done
@@ -207,13 +228,20 @@ _ccs_dispatch_runs_dir() {
   local d; d="$(_ccs_dispatch_dir)/runs"; mkdir -p "$d"; echo "$d"
 }
 
-# Allocate a fresh run dir <runs>/<task-id>-<NN> (NN = 1 + existing count).
+# Allocate a fresh run dir <runs>/<task-id>-<NN>. Seeds NN from the existing
+# count, then claims the dir with a bare `mkdir` (fails if it exists) so two
+# concurrent runs of the same task never share a run dir; on collision it bumps
+# NN and retries.
 _ccs_dispatch_run_alloc_dir() {
   local task_id="$1" runs seq dir
   runs="$(_ccs_dispatch_runs_dir)"
   seq=$(( $(find "$runs" -maxdepth 1 -type d -name "${task_id}-*" 2>/dev/null | wc -l) + 1 ))
   dir="$runs/${task_id}-$(printf '%02d' "$seq")"
-  mkdir -p "$dir"; echo "$dir"
+  while ! mkdir "$dir" 2>/dev/null; do
+    seq=$((seq + 1))
+    dir="$runs/${task_id}-$(printf '%02d' "$seq")"
+  done
+  echo "$dir"
 }
 
 # SPAWN SEAM. Real impl runs the executor synchronously (headless claude -p) in
@@ -222,9 +250,10 @@ _ccs_dispatch_run_alloc_dir() {
 # async backend for the gate loop is deferred (see plan Deferred).
 _ccs_dispatch_run_worker() {
   local cwd="$1" prompt="$2" run_dir="$3" attempt="$4"
+  local timeout_sec="${5:-$CCS_DISPATCH_TIMEOUT}"
   local ad="$run_dir/attempt-$(printf '%02d' "$attempt")"
   mkdir -p "$ad"
-  (cd "$cwd" && timeout "$CCS_DISPATCH_TIMEOUT" claude -p "$prompt") \
+  (cd "$cwd" && timeout "$timeout_sec" claude -p "$prompt") \
     > "$ad/executor-output.md" 2>&1 || true
   (cd "$cwd" && git status --porcelain) > "$ad/git-status.txt" 2>/dev/null || true
   (cd "$cwd" && git diff) > "$ad/diff.patch" 2>/dev/null || true
@@ -238,11 +267,13 @@ _ccs_dispatch_run_worker() {
 _ccs_dispatch_run() {
   local task_yaml="$1"
   local task; task="$(_ccs_dispatch_gate_load_task "$task_yaml")" || return 2
-  local task_id cwd budget goal
+  local task_id cwd budget goal timeout_sec
   task_id="$(echo "$task" | jq -r '.id')"
   cwd="$(echo "$task" | jq -r '.scope.cwd // "."')"
   budget="$(echo "$task" | jq -r ".execution_policy.loop_budget // $CCS_DISPATCH_GATE_LOOP_BUDGET")"
   goal="$(echo "$task" | jq -r '.goal')"
+  timeout_sec="$(echo "$task" | jq -r '.execution_policy.timeout_sec // empty')"
+  [ -z "$timeout_sec" ] && timeout_sec="$CCS_DISPATCH_TIMEOUT"
 
   local run_dir; run_dir="$(_ccs_dispatch_run_alloc_dir "$task_id")"
   cp "$task_yaml" "$run_dir/task.yaml"   # freeze (§1)
@@ -259,7 +290,7 @@ _ccs_dispatch_run() {
     fi
     printf '%s' "$prompt" > "$ad/prompt.md"
 
-    _ccs_dispatch_run_worker "$cwd" "$prompt" "$run_dir" "$attempt"
+    _ccs_dispatch_run_worker "$cwd" "$prompt" "$run_dir" "$attempt" "$timeout_sec"
     verdict="$(_ccs_dispatch_gate_run "$cwd" "$task" "$ad" "$attempt" "$budget")"
 
     case "$verdict" in
