@@ -146,6 +146,21 @@ assert_json_field "notool prompt_count" "$notool_result" '.prompt_count' "1"
 assert_json_field "notool tool_reads" "$notool_result" '.tool_reads | length' "0"
 assert_json_field "notool tool_greps" "$notool_result" '.tool_greps | length' "0"
 
+echo ""
+echo "=== context_tokens: last assistant usage sum ==="
+CTX_FIXTURE="$FIXTURE_DIR/ctx00001-context-tokens.jsonl"
+cat > "$CTX_FIXTURE" <<'JSONL'
+{"type":"user","message":{"content":"hi"},"timestamp":"2026-03-21T09:00:00Z"}
+{"type":"assistant","message":{"content":[{"type":"text","text":"a"}],"usage":{"input_tokens":10,"cache_read_input_tokens":1000,"cache_creation_input_tokens":100,"output_tokens":50}},"timestamp":"2026-03-21T09:01:00Z"}
+{"type":"user","message":{"content":"more"},"timestamp":"2026-03-21T09:02:00Z"}
+{"type":"assistant","message":{"content":[{"type":"text","text":"b"}],"usage":{"input_tokens":5,"cache_read_input_tokens":2000,"cache_creation_input_tokens":300,"output_tokens":80}},"timestamp":"2026-03-21T09:03:00Z"}
+JSONL
+ctx_events=$(_ccs_health_events "$CTX_FIXTURE")
+# last assistant usage: 5 + 2000 + 300 = 2305 (last message wins, not summed across turns)
+assert_json_field "context_tokens = last-msg usage sum" "$ctx_events" '.context_tokens' "2305"
+# a session with no usage field → null (graceful for gemini / partial logs)
+assert_json_field "context_tokens null when no usage" "$notool_result" '.context_tokens' "null"
+
 # ══════════════════════════════════════
 # _ccs_health_score tests
 # ══════════════════════════════════════
@@ -248,6 +263,91 @@ assert_json_field "null duration level" "$score_null" '.indicators.duration.leve
 assert_json_field "null duration value" "$score_null" '.indicators.duration.value' "0"
 assert_json_field "null dup_tool value" "$score_null" '.indicators.dup_tool.value' "0"
 assert_json_field "null rounds value" "$score_null" '.indicators.rounds.value' "0"
+
+echo ""
+echo "=== _ccs_health_score: context indicator (info by default) ==="
+score_ctx=$(cat <<'JSON' | _ccs_health_score
+{
+  "session_id": "ctx00001",
+  "first_ts": "2026-03-21T09:00:00Z",
+  "last_ts": "2026-03-21T09:30:00Z",
+  "prompt_count": 5,
+  "tool_reads": {},
+  "tool_greps": {},
+  "context_tokens": 234951
+}
+JSON
+)
+assert_json_field "context value" "$score_ctx" '.indicators.context.value' "234951"
+assert_json_field "context level info (thresholds off)" "$score_ctx" '.indicators.context.level' "info"
+assert_json_field "context excluded from overall" "$score_ctx" '.overall' "green"
+
+# context_tokens absent → value null, level info
+score_ctx_absent=$(cat <<'JSON' | _ccs_health_score
+{
+  "session_id": "ctxnull1",
+  "first_ts": "2026-03-21T09:00:00Z",
+  "last_ts": "2026-03-21T09:05:00Z",
+  "prompt_count": 1,
+  "tool_reads": {},
+  "tool_greps": {}
+}
+JSON
+)
+assert_json_field "context value null when absent" "$score_ctx_absent" '.indicators.context.value' "null"
+assert_json_field "context level info when absent" "$score_ctx_absent" '.indicators.context.level' "info"
+
+# env thresholds enable classification without touching overall
+CCS_HEALTH_CONTEXT_YELLOW=100000 CCS_HEALTH_CONTEXT_RED=200000
+score_ctx_red=$(cat <<'JSON' | _ccs_health_score
+{
+  "session_id": "ctxred01",
+  "first_ts": "2026-03-21T09:00:00Z",
+  "last_ts": "2026-03-21T09:30:00Z",
+  "prompt_count": 5,
+  "tool_reads": {},
+  "tool_greps": {},
+  "context_tokens": 234951
+}
+JSON
+)
+assert_json_field "context level red when threshold set" "$score_ctx_red" '.indicators.context.level' "red"
+assert_json_field "context still excluded from overall" "$score_ctx_red" '.overall' "green"
+CCS_HEALTH_CONTEXT_YELLOW=0 CCS_HEALTH_CONTEXT_RED=0
+
+# red-only config (yellow off) still keeps a green tier below the red line
+CCS_HEALTH_CONTEXT_YELLOW=0 CCS_HEALTH_CONTEXT_RED=200000
+score_ctx_redonly=$(cat <<'JSON' | _ccs_health_score
+{
+  "session_id": "ctxron01",
+  "first_ts": "2026-03-21T09:00:00Z",
+  "last_ts": "2026-03-21T09:30:00Z",
+  "prompt_count": 5,
+  "tool_reads": {},
+  "tool_greps": {},
+  "context_tokens": 50000
+}
+JSON
+)
+assert_json_field "context green below red line (yellow off)" "$score_ctx_redonly" '.indicators.context.level' "green"
+CCS_HEALTH_CONTEXT_YELLOW=0 CCS_HEALTH_CONTEXT_RED=0
+
+# runtime-emptied threshold degrades to disabled instead of crashing argjson
+CCS_HEALTH_CONTEXT_RED=""
+score_ctx_empty=$(cat <<'JSON' | _ccs_health_score
+{
+  "session_id": "ctxemp01",
+  "first_ts": "2026-03-21T09:00:00Z",
+  "last_ts": "2026-03-21T09:30:00Z",
+  "prompt_count": 5,
+  "tool_reads": {},
+  "tool_greps": {},
+  "context_tokens": 234951
+}
+JSON
+)
+assert_json_field "context info when threshold empty (no crash)" "$score_ctx_empty" '.indicators.context.level' "info"
+CCS_HEALTH_CONTEXT_RED=0
 
 # ══════════════════════════════════════
 # _ccs_health_badge tests
@@ -352,7 +452,7 @@ mkdir -p "$MOCK_PROJECTS/-pool2-testuser-project-beta"
 ALPHA_GREEN="$MOCK_PROJECTS/-pool2-testuser-project-alpha/aaaa1111-0000-0000-0000-000000000001.jsonl"
 cat > "$ALPHA_GREEN" <<'JSONL'
 {"type":"user","message":{"content":"hello alpha"},"timestamp":"2026-03-21T09:00:00Z"}
-{"type":"assistant","message":{"content":[{"type":"text","text":"Hi!"}]},"timestamp":"2026-03-21T09:05:00Z"}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Hi!"}],"usage":{"input_tokens":10,"cache_read_input_tokens":5000,"cache_creation_input_tokens":200,"output_tokens":30}},"timestamp":"2026-03-21T09:05:00Z"}
 JSONL
 
 # Red session in project-beta (post-compaction dups → dup_val=5)
@@ -444,6 +544,35 @@ if echo "$md_out" | grep -q "## Session Health Report"; then
   pass=$((pass + 1))
 else
   printf '  FAIL: --md missing "## Session Health Report"\n'
+  fail=$((fail + 1))
+fi
+
+# Test 3b: context indicator surfaced in --json and rendered in --md
+echo ""
+echo "--- Test: context indicator (--json value + --md render) ---"
+alpha_ctx=$(echo "$json_out" | jq -r '.[] | select(.session_id=="aaaa1111") | .indicators.context.value')
+if [ "$alpha_ctx" = "5210" ]; then
+  printf '  PASS: --json context value = 5210\n'
+  pass=$((pass + 1))
+else
+  printf '  FAIL: --json context value → got "%s", expected "5210"\n' "$alpha_ctx"
+  fail=$((fail + 1))
+fi
+alpha_ctx_lv=$(echo "$json_out" | jq -r '.[] | select(.session_id=="aaaa1111") | .indicators.context.level')
+if [ "$alpha_ctx_lv" = "info" ]; then
+  printf '  PASS: --json context level info (thresholds off)\n'
+  pass=$((pass + 1))
+else
+  printf '  FAIL: --json context level → got "%s", expected "info"\n' "$alpha_ctx_lv"
+  fail=$((fail + 1))
+fi
+# fixtures are stale-dated, so expand with --all to render per-session lines
+md_all_out=$(CCS_PROJECTS_DIR="$MOCK_PROJECTS" ccs-health --md --all 2>/dev/null)
+if echo "$md_all_out" | grep -q "context:.*~5k"; then
+  printf '  PASS: --md renders context ~5k line\n'
+  pass=$((pass + 1))
+else
+  printf '  FAIL: --md missing context ~5k line\n'
   fail=$((fail + 1))
 fi
 

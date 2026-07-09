@@ -10,6 +10,11 @@ CCS_HEALTH_DURATION_RED="${CCS_HEALTH_DURATION_RED:-4320}"
 CCS_HEALTH_ROUNDS_YELLOW="${CCS_HEALTH_ROUNDS_YELLOW:-30}"
 CCS_HEALTH_ROUNDS_RED="${CCS_HEALTH_ROUNDS_RED:-60}"
 CCS_HEALTH_STALE_DAYS="${CCS_HEALTH_STALE_DAYS:-7}"
+# context occupancy thresholds — 0 = disabled (informational only, not scored
+# into overall). Context window size varies by model (200K vs 1M), so no
+# default red line; set explicitly to enable coloring for a known model tier.
+CCS_HEALTH_CONTEXT_YELLOW="${CCS_HEALTH_CONTEXT_YELLOW:-0}"
+CCS_HEALTH_CONTEXT_RED="${CCS_HEALTH_CONTEXT_RED:-0}"
 
 # ── Helper: extract health events from a JSONL session file ──
 # Usage: _ccs_health_events /path/to/SESSION.jsonl
@@ -35,7 +40,7 @@ _ccs_health_events() {
     reduce .[] as $line (
       {
         first_ts: null, last_ts: null, prompt_count: 0,
-        tool_reads: {}, tool_greps: {},
+        tool_reads: {}, tool_greps: {}, context_tokens: null,
         _seq: 0, _last_read_seq: {}, _last_edit_seq: {},
         _compact_seqs: [], _last_grep_seq: {},
         _dup_reads_x2: {}, _dup_greps_x2: {}
@@ -54,6 +59,17 @@ _ccs_health_events() {
             and ($line.isMeta | not)
             and ($line.message.content | type) == "string"
          then .prompt_count += 1
+         else . end)
+
+      # Track context occupancy: last main-thread assistant message with usage
+      # wins. input + cache_read + cache_creation ≈ current context tokens.
+      # Skip sidechain (subagent) turns so the estimate reflects the main thread.
+      | (if $line.type == "assistant" and ($line.message.usage != null)
+            and ($line.isSidechain != true)
+         then .context_tokens = (
+                ($line.message.usage.input_tokens // 0)
+                + ($line.message.usage.cache_read_input_tokens // 0)
+                + ($line.message.usage.cache_creation_input_tokens // 0))
          else . end)
 
       # Detect compaction events
@@ -143,6 +159,8 @@ _ccs_health_score() {
     --argjson dur_r "${CCS_HEALTH_DURATION_RED}" \
     --argjson rnd_y "${CCS_HEALTH_ROUNDS_YELLOW}" \
     --argjson rnd_r "${CCS_HEALTH_ROUNDS_RED}" \
+    --argjson ctx_y "${CCS_HEALTH_CONTEXT_YELLOW:-0}" \
+    --argjson ctx_r "${CCS_HEALTH_CONTEXT_RED:-0}" \
     '
     # dup_tool: max count across tool_reads and tool_greps
     def max_val:
@@ -152,6 +170,16 @@ _ccs_health_score() {
     def classify($v; $y; $r):
       if $v >= $r then "red"
       elif $v >= $y then "yellow"
+      else "green" end;
+
+    # context indicator: informational. Each line applies only when its own
+    # threshold is > 0, so a red-only or yellow-only config still has a green
+    # tier. Disabled (info) when both thresholds are off or the value is absent.
+    def classify_ctx($v; $y; $r):
+      if $v == null then "info"
+      elif ($y <= 0) and ($r <= 0) then "info"
+      elif ($r > 0) and ($v >= $r) then "red"
+      elif ($y > 0) and ($v >= $y) then "yellow"
       else "green" end;
 
     def severity:
@@ -178,11 +206,15 @@ _ccs_health_score() {
      end) as $dur_val |
 
     .prompt_count as $rnd_val |
+    (.context_tokens // null) as $ctx_val |
 
     classify($dup_val; $dup_y; $dup_r) as $dup_lv |
     classify($dur_val; $dur_y; $dur_r) as $dur_lv |
     classify($rnd_val; $rnd_y; $rnd_r) as $rnd_lv |
+    classify_ctx($ctx_val; $ctx_y; $ctx_r) as $ctx_lv |
 
+    # context is informational: it never feeds overall (context window size is
+    # model-dependent, so it must not distort the health verdict/sort)
     worst($dup_lv; worst($dur_lv; $rnd_lv)) as $overall |
 
     {
@@ -204,6 +236,12 @@ _ccs_health_score() {
           level: $rnd_lv,
           value: $rnd_val,
           threshold: { yellow: $rnd_y, red: $rnd_r }
+        },
+        context: {
+          level: $ctx_lv,
+          value: $ctx_val,
+          unit: "tokens",
+          threshold: { yellow: $ctx_y, red: $ctx_r }
         }
       }
     }
@@ -270,6 +308,9 @@ Indicators:
   dup_tool   Max effective duplicate tool calls
   duration   Session duration (minutes)
   rounds     User prompt count
+  context    Est. context occupancy from last assistant message
+             usage (input+cache_read+cache_creation). Informational;
+             set CCS_HEALTH_CONTEXT_YELLOW/RED (tokens) to color it.
 HELP
         return 0
         ;;
@@ -432,6 +473,14 @@ HELP
           if $lv == "red" then $red
           elif $lv == "yellow" then $yel
           else $grn end;
+        def cbadge($lv):
+          if $lv == "red" then $red
+          elif $lv == "yellow" then $yel
+          elif $lv == "green" then $grn
+          else "⚪" end;
+        def fmt_ctx($v):
+          if $v == null then "-"
+          else "~" + (($v / 1000) | floor | tostring) + "k" end;
         .[] |
         "### " + badge + " "
           + .session_id
@@ -453,6 +502,10 @@ HELP
           + " "
           + (.indicators.rounds.value
              | tostring),
+        "- context: "
+          + cbadge(.indicators.context.level)
+          + " "
+          + fmt_ctx(.indicators.context.value),
         ""
       '
       # Stale summary
@@ -490,13 +543,17 @@ HELP
           | tostring),
          .indicators.rounds.level,
          (.indicators.rounds.value
+          | tostring),
+         .indicators.context.level,
+         (.indicators.context.value
           | tostring)
         ] | @tsv
       ' | while IFS=$'\t' read -r \
           overall sid proj topic \
           dup_lv dup_v \
           dur_lv dur_v \
-          rnd_lv rnd_v; do
+          rnd_lv rnd_v \
+          ctx_lv ctx_v; do
 
         # Overall badge with color
         local badge color reset
@@ -542,6 +599,23 @@ HELP
         printf "  rounds:   "
         _health_ibadge "$rnd_lv"
         printf " %s\n" "$rnd_v"
+
+        # context occupancy (informational; dim dot when disabled/absent)
+        local ctx_badge ctx_disp
+        case "$ctx_lv" in
+          green)  ctx_badge='\033[32m●\033[0m' ;;
+          yellow) ctx_badge='\033[33m◐\033[0m' ;;
+          red)    ctx_badge='\033[31m○\033[0m' ;;
+          *)      ctx_badge='\033[90m·\033[0m' ;;
+        esac
+        if [ "$ctx_v" = "null" ]; then
+          ctx_disp="-"
+        else
+          ctx_disp="~$((ctx_v / 1000))k"
+        fi
+        printf "  context:  "
+        printf '%b' "$ctx_badge"
+        printf " %s\n" "$ctx_disp"
         echo
       done
 
