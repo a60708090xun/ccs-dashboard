@@ -129,6 +129,33 @@ _ccs_dispatch_gate_run_ac() {
       na_reason:null, stage2_note:null}'
 }
 
+# Pure gate verdict (scope C: no tier ladder). Input: JSON array of
+# {ac_id,track,verdict}. Rules (§3.2/§3.3): any HARD_STOP -> HARD_STOP; else any
+# ERROR -> ESCALATE (no budget consumed); else any FAIL -> RETRY if
+# attempt<=budget else ESCALATE; else PASS (guidance SKIPPED_FOR_LLM ignored).
+# Echoes §4.2 JSON with timestamp:null (caller stamps it). No side effects.
+_ccs_dispatch_gate_verdict() {
+  local acs="$1" attempt="$2" budget="$3"
+  local remaining=$(( budget - attempt ))
+  [ "$remaining" -lt 0 ] && remaining=0
+  echo "$acs" | jq \
+    --argjson attempt "$attempt" --argjson budget "$budget" \
+    --argjson remaining "$remaining" '
+    ([.[] | select(.verdict=="FAIL") | .ac_id]) as $failed
+    | (any(.[]; .verdict=="HARD_STOP")) as $hard
+    | (any(.[]; .verdict=="ERROR")) as $err
+    | (($failed|length) > 0) as $anyfail
+    | (if $hard then "HARD_STOP"
+       elif $err then "ESCALATE"
+       elif $anyfail then (if $attempt <= $budget then "RETRY" else "ESCALATE" end)
+       else "PASS" end) as $verdict
+    | {verdict:$verdict, attempt:$attempt, failed_acs:$failed,
+       loop_budget_remaining:$remaining,
+       next_executor:{cli:"", reason:"same_executor_no_tier_ladder"},
+       timestamp:null}
+  '
+}
+
 # ── Job ID: d-YYYYMMDD-HHMMSS-XXXX ──
 _ccs_dispatch_job_id() {
   printf 'd-%s-%s' \
