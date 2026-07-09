@@ -30,6 +30,20 @@ ac='{"id":"AC3","text":"t","verify":{"cmd":"test -f greeter.py"}}'
 out="$(cd / && _ccs_dispatch_gate_run_ac "$WORK" "$ac")"
 assert_eq "cwd honored -> PASS" "PASS" "$(echo "$out" | jq -r '.verdict')"
 
+echo "=== timeout bounds a hanging cmd -> FAIL, cwd not polluted ==="
+ac='{"id":"AC5","text":"t","verify":{"cmd":"sleep 5"}}'
+out="$(_ccs_dispatch_gate_run_ac "$WORK" "$ac" 1)"
+assert_eq "hanging cmd within timeout -> FAIL" "FAIL" "$(echo "$out" | jq -r '.verdict')"
+assert_eq "errfile not left in cwd" "" "$(find "$WORK" -maxdepth 1 -name '.gate-ac-err*' -print -quit)"
+
+echo "=== clean-tree AC not perturbed by the gate's own stderr file ==="
+GREPO="$WORK/gitrepo"; rm -rf "$GREPO"; mkdir -p "$GREPO"
+( cd "$GREPO" && git init -q && git config user.email t@t && git config user.name t \
+  && echo x > f && git add f && git commit -qm init )
+ac='{"id":"AC6","text":"clean tree","verify":{"cmd":"test -z \"$(git status --porcelain)\""}}'
+out="$(_ccs_dispatch_gate_run_ac "$GREPO" "$ac" 10)"
+assert_eq "clean-tree AC -> PASS (no scratch file in repo)" "PASS" "$(echo "$out" | jq -r '.verdict')"
+
 echo "=== guidance track -> SKIPPED_FOR_LLM ==="
 ac='{"id":"AC4","text":"t","verify":{"guidance":"looks right"}}'
 out="$(_ccs_dispatch_gate_run_ac "$WORK" "$ac")"
