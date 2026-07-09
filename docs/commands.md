@@ -417,6 +417,12 @@ ccs-health <session-id-prefix>
 
 整體等級取三項指標中最差的一項。
 
+另有一項**資訊指標**（不計入整體等級）：
+- **context** — 估算當前 context 佔用（取最後一則 assistant message
+  的 `input + cache_read + cache_creation` token 數）。因 context window
+  大小依 model 而異（200K vs 1M），預設不上色（⚪）；設定
+  `CCS_HEALTH_CONTEXT_YELLOW/RED`（token 數）才會分級。
+
 閾值預設值（可用環境變數覆蓋）：
 
 ```
@@ -426,6 +432,8 @@ CCS_HEALTH_DURATION_YELLOW=2880  # 持續時間黃色閾值（分鐘）
 CCS_HEALTH_DURATION_RED=4320     # 持續時間紅色閾值（分鐘）
 CCS_HEALTH_ROUNDS_YELLOW=30     # 輪數黃色閾值
 CCS_HEALTH_ROUNDS_RED=60        # 輪數紅色閾值
+CCS_HEALTH_CONTEXT_YELLOW=0     # context 黃色閾值（token；0=停用）
+CCS_HEALTH_CONTEXT_RED=0        # context 紅色閾值（token；0=停用）
 ```
 
 詳見 `ccs-health.sh`。
