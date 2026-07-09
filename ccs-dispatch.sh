@@ -13,6 +13,8 @@ CCS_DISPATCH_SUMMARY_MAX_CHARS="${CCS_DISPATCH_SUMMARY_MAX_CHARS:-200}"
 CCS_DISPATCH_MAX_CONCURRENT_WARN="${CCS_DISPATCH_MAX_CONCURRENT_WARN:-3}"
 CCS_DISPATCH_CHAIN_MAX_DEPTH="${CCS_DISPATCH_CHAIN_MAX_DEPTH:-5}"
 CCS_DISPATCH_CHAIN_BRIDGE_MAX_CHARS="${CCS_DISPATCH_CHAIN_BRIDGE_MAX_CHARS:-4000}"
+CCS_DISPATCH_GATE_LOOP_BUDGET="${CCS_DISPATCH_GATE_LOOP_BUDGET:-1}"
+CCS_DISPATCH_GATE_CMD_TAIL_CHARS="${CCS_DISPATCH_GATE_CMD_TAIL_CHARS:-2000}"
 
 # ── Backend selection ──
 # Returns 0 if the agent-pager backend is usable, 1 otherwise.
@@ -62,6 +64,33 @@ _ccs_dispatch_dir() {
   dir="$(_ccs_data_dir)/dispatch"
   mkdir -p "$dir/results" "$dir/pids"
   echo "$dir"
+}
+
+# ── Review gate (Stage 1): task.yaml + acceptance-criteria verification ──
+# See docs/commands.md § ccs-dispatch-run. Scope C: gate + single retry, no
+# tier ladder, no chain wiring, no Stage-2 automation.
+
+# Parse a task.yaml into compact JSON (python+pyyaml -> jq). Validates: id and
+# goal are non-empty strings; acceptance_criteria is a non-empty array; each AC
+# has a string id and EXACTLY ONE of verify.cmd / verify.guidance. Echoes the
+# JSON; rc 1 (+ stderr) on a missing file, parse error, or validation failure.
+_ccs_dispatch_gate_load_task() {
+  local yaml="$1"
+  [ -f "$yaml" ] || { echo "gate: task file not found: $yaml" >&2; return 1; }
+  local js
+  js="$(python3 -c 'import sys,yaml,json; json.dump(yaml.safe_load(open(sys.argv[1])) or {}, sys.stdout)' "$yaml" 2>/dev/null)" \
+    || { echo "gate: task YAML parse failed: $yaml" >&2; return 1; }
+  echo "$js" | jq -e '
+    (.id | type == "string" and (length > 0))
+    and (.goal | type == "string" and (length > 0))
+    and (.acceptance_criteria | type == "array" and (length > 0))
+    and (all(.acceptance_criteria[];
+      (.id | type == "string" and (length > 0))
+      and (([.verify.cmd, .verify.guidance]
+            | map(select(. != null and . != "")) | length) == 1)))
+  ' >/dev/null 2>&1 \
+    || { echo "gate: task validation failed: $yaml" >&2; return 1; }
+  echo "$js"
 }
 
 # ── Job ID: d-YYYYMMDD-HHMMSS-XXXX ──
