@@ -201,6 +201,109 @@ _ccs_dispatch_gate_feedback() {
     "$attempt" "$lines"
 }
 
+# Centralized runs/ root (§8.1): same tree as dispatch results, outside any
+# worker worktree (reinforces the §5 "worker cannot write runs/" boundary).
+_ccs_dispatch_runs_dir() {
+  local d; d="$(_ccs_dispatch_dir)/runs"; mkdir -p "$d"; echo "$d"
+}
+
+# Allocate a fresh run dir <runs>/<task-id>-<NN> (NN = 1 + existing count).
+_ccs_dispatch_run_alloc_dir() {
+  local task_id="$1" runs seq dir
+  runs="$(_ccs_dispatch_runs_dir)"
+  seq=$(( $(find "$runs" -maxdepth 1 -type d -name "${task_id}-*" 2>/dev/null | wc -l) + 1 ))
+  dir="$runs/${task_id}-$(printf '%02d' "$seq")"
+  mkdir -p "$dir"; echo "$dir"
+}
+
+# SPAWN SEAM. Real impl runs the executor synchronously (headless claude -p) in
+# <cwd> and captures evidence into attempt-NN/. Tests override this to simulate
+# worker edits. Scope C drives synchronous headless execution; the agentpager
+# async backend for the gate loop is deferred (see plan Deferred).
+_ccs_dispatch_run_worker() {
+  local cwd="$1" prompt="$2" run_dir="$3" attempt="$4"
+  local ad="$run_dir/attempt-$(printf '%02d' "$attempt")"
+  mkdir -p "$ad"
+  (cd "$cwd" && timeout "$CCS_DISPATCH_TIMEOUT" claude -p "$prompt") \
+    > "$ad/executor-output.md" 2>&1 || true
+  (cd "$cwd" && git status --porcelain) > "$ad/git-status.txt" 2>/dev/null || true
+  (cd "$cwd" && git diff) > "$ad/diff.patch" 2>/dev/null || true
+  return 0
+}
+
+# Scope-C loop driver: freeze task -> for each attempt, build prompt (attempt 1
+# = goal; >=2 = §6 feedback + goal), spawn worker, run gate, branch on verdict.
+# Writes final.json (§4.3). Echoes the run dir; rc 0 accepted / 10 escalated /
+# 11 hard_stop / 2 task-load error.
+_ccs_dispatch_run() {
+  local task_yaml="$1"
+  local task; task="$(_ccs_dispatch_gate_load_task "$task_yaml")" || return 2
+  local task_id cwd budget goal
+  task_id="$(echo "$task" | jq -r '.id')"
+  cwd="$(echo "$task" | jq -r '.scope.cwd // "."')"
+  budget="$(echo "$task" | jq -r ".execution_policy.loop_budget // $CCS_DISPATCH_GATE_LOOP_BUDGET")"
+  goal="$(echo "$task" | jq -r '.goal')"
+
+  local run_dir; run_dir="$(_ccs_dispatch_run_alloc_dir "$task_id")"
+  cp "$task_yaml" "$run_dir/task.yaml"   # freeze (§1)
+
+  local attempt=1 verdict outcome="escalated" rc=10 ad prev prompt fb
+  while [ "$attempt" -le $(( budget + 1 )) ]; do
+    ad="$run_dir/attempt-$(printf '%02d' "$attempt")"
+    mkdir -p "$ad"
+    prompt="Task: $goal"
+    if [ "$attempt" -gt 1 ]; then
+      prev="$run_dir/attempt-$(printf '%02d' $((attempt - 1)))"
+      fb="$(_ccs_dispatch_gate_feedback "$prev" $((attempt - 1)))"
+      prompt="${fb}"$'\n'"Task: $goal"
+    fi
+    printf '%s' "$prompt" > "$ad/prompt.md"
+
+    _ccs_dispatch_run_worker "$cwd" "$prompt" "$run_dir" "$attempt"
+    verdict="$(_ccs_dispatch_gate_run "$cwd" "$task" "$ad" "$attempt" "$budget")"
+
+    case "$verdict" in
+      PASS)      outcome="accepted";  rc=0;  break ;;
+      HARD_STOP) outcome="hard_stop"; rc=11; break ;;
+      ESCALATE)  outcome="escalated"; rc=10; break ;;
+      RETRY)     : ;;   # loop again
+    esac
+    attempt=$((attempt + 1))
+  done
+
+  jq -n --arg o "$outcome" --argjson n "$attempt" \
+    '{outcome:$o, attempts:$n, stage2:null,
+      escalation:(if $o=="escalated" then {reason:"gate"} else null end)}' \
+    > "$run_dir/final.json"
+  echo "$run_dir"
+  return "$rc"
+}
+
+# Public entry: verify args, run the scope-C gate loop, print outcome + evidence.
+ccs-dispatch-run() {
+  local task_yaml="${1:-}"
+  if [ -z "$task_yaml" ] || [ "$task_yaml" = "-h" ] || [ "$task_yaml" = "--help" ]; then
+    cat <<'HELP'
+Usage: ccs-dispatch-run <task.yaml>
+  Dispatch a worker, verify its output against the task's acceptance criteria
+  (deterministic Stage-1 gate), retry once on FAIL with a machine-fact failure
+  summary, and record structured evidence under the dispatch runs/ tree.
+  Exit: 0 accepted / 10 escalated / 11 hard_stop.
+HELP
+    [ -z "$task_yaml" ] && return 1 || return 0
+  fi
+  local run_dir rc outcome
+  run_dir="$(_ccs_dispatch_run "$task_yaml")"; rc=$?
+  if [ "$rc" -eq 2 ]; then
+    echo "ccs-dispatch-run: could not load task: $task_yaml" >&2
+    return 2
+  fi
+  outcome="$(jq -r '.outcome' "$run_dir/final.json" 2>/dev/null)"
+  echo "run: $run_dir"
+  echo "outcome: $outcome (see $run_dir/final.json)"
+  return "$rc"
+}
+
 # ── Job ID: d-YYYYMMDD-HHMMSS-XXXX ──
 _ccs_dispatch_job_id() {
   printf 'd-%s-%s' \
