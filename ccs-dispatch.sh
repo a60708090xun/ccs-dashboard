@@ -185,6 +185,22 @@ _ccs_dispatch_gate_run() {
   echo "$verdict_json" | jq -r '.verdict'
 }
 
+# Build the §6 retry failure summary from a completed attempt's gate evidence.
+# Machine facts only (AC id + cmd + exit code); never worker prose, to avoid
+# polluting the next attempt's fresh context. Empty output if no cmd-AC FAILed.
+_ccs_dispatch_gate_feedback() {
+  local attempt_dir="$1" attempt="$2"
+  local gate_dir="$attempt_dir/gate" lines="" f
+  for f in "$gate_dir"/AC*.json; do
+    [ -f "$f" ] || continue
+    [ "$(jq -r '.verdict' "$f")" = "FAIL" ] || continue
+    lines+="- $(jq -r '.ac_id' "$f") FAIL: \`$(jq -r '.cmd' "$f")\` → exit $(jq -r '.exit_code' "$f")"$'\n'
+  done
+  [ -n "$lines" ] || return 0
+  printf '前次嘗試（attempt-%s）未通過驗收：\n%s請針對以上條件修正。驗收條件不變。\n' \
+    "$attempt" "$lines"
+}
+
 # ── Job ID: d-YYYYMMDD-HHMMSS-XXXX ──
 _ccs_dispatch_job_id() {
   printf 'd-%s-%s' \
