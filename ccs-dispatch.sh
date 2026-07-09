@@ -11,6 +11,8 @@ CCS_DISPATCH_RESULT_TTL_DAYS="${CCS_DISPATCH_RESULT_TTL_DAYS:-7}"
 CCS_DISPATCH_SUMMARY_LINES="${CCS_DISPATCH_SUMMARY_LINES:-30}"
 CCS_DISPATCH_SUMMARY_MAX_CHARS="${CCS_DISPATCH_SUMMARY_MAX_CHARS:-200}"
 CCS_DISPATCH_MAX_CONCURRENT_WARN="${CCS_DISPATCH_MAX_CONCURRENT_WARN:-3}"
+CCS_DISPATCH_CHAIN_MAX_DEPTH="${CCS_DISPATCH_CHAIN_MAX_DEPTH:-5}"
+CCS_DISPATCH_CHAIN_BRIDGE_MAX_CHARS="${CCS_DISPATCH_CHAIN_BRIDGE_MAX_CHARS:-4000}"
 
 # ── Backend selection ──
 # Returns 0 if the agent-pager backend is usable, 1 otherwise.
@@ -250,32 +252,96 @@ Writing tmp/handoff-${job_id}.md is your completion signal: the dispatcher
 watches for it and closes this session once it appears, so do not create it
 until everything else — including your summary — is already done. You do NOT
 need to exit yourself.
+
+AUTONOMY (this is an unattended dispatched session):
+Do not ask clarifying questions and do not wait on terminal input. If a detail
+is ambiguous, make a reasonable assumption, proceed, and record the assumption
+in your handoff. If you are genuinely blocked and cannot proceed, do NOT stall
+waiting for input — set outcome: blocked in the handoff frontmatter and explain
+what you need. A blocked handoff surfaces the question to the operator.
 HGRULE
 }
 
-# Extract the `summary:` line from a handoff file's leading YAML frontmatter.
+# Extract the `<field>:` value from a handoff file's leading YAML frontmatter.
 # Only a properly CLOSED `---`-delimited block at the top of the file is
 # honoured: the value is emitted only once the closing `---` is seen, so a
-# `summary:` in the body (or an unterminated frontmatter block) is never
-# mistaken for the header field. CRLF line endings are tolerated. Echoes the
-# trimmed value (empty if no frontmatter / no closing / no summary); always rc 0.
-_ccs_dispatch_parse_handoff_summary() {
-  local f="$1"
+# `<field>:` in the body (or an unterminated frontmatter block) is never
+# mistaken for the header field. First occurrence wins. CRLF tolerated.
+# Echoes the trimmed value (empty if no frontmatter / no closing / no field);
+# always rc 0.
+_ccs_dispatch_parse_handoff_field() {
+  local f="$1" field="$2"
   [ -f "$f" ] || return 0
-  awk '
+  awk -v key="$field" '
     { sub(/\r$/, "") }                   # tolerate CRLF
     NR==1 && $0 != "---" { exit }        # no frontmatter -> nothing to read
     NR==1 { in_fm=1; next }
     in_fm && $0 == "---" {               # closing delimiter: block is valid
       print found; exit
     }
-    in_fm && found == "" && /^summary:[[:space:]]*/ {
-      val = $0
-      sub(/^summary:[[:space:]]*/, "", val)
+    in_fm && found == "" && index($0, key ":") == 1 {
+      val = substr($0, length(key) + 2)  # drop "key:"
+      sub(/^[[:space:]]*/, "", val)
       sub(/[[:space:]]+$/, "", val)
       found = val
     }
   ' "$f"
+}
+
+# Extract the `summary:` frontmatter field (see _ccs_dispatch_parse_handoff_field
+# for the exact semantics). Kept as a named helper for its existing callers.
+_ccs_dispatch_parse_handoff_summary() {
+  _ccs_dispatch_parse_handoff_field "$1" summary
+}
+
+# Build the context preamble that prefixes a chained hop's task. The parent
+# handoff is the chain's context carrier (design §9.3): the next worker cold-
+# starts, so it must be told what the previous worker did. Emits the parent
+# summary line plus the handoff body (frontmatter stripped), capped to
+# ~CCS_DISPATCH_CHAIN_BRIDGE_MAX_CHARS bytes (head -c; a soft ceiling that may
+# slice a trailing multibyte char). Empty output when the file is absent.
+_ccs_dispatch_chain_context_bridge() {
+  local handoff="$1"
+  [ -f "$handoff" ] || return 0
+  local summary body
+  summary="$(_ccs_dispatch_parse_handoff_field "$handoff" summary)"
+  # Body = everything after a closed leading frontmatter block; if there is no
+  # frontmatter, the whole file is the body.
+  body="$(awk '
+    NR==1 && $0 != "---" { print; body=1; next }
+    NR==1 { in_fm=1; next }
+    in_fm && $0 == "---" { in_fm=0; body=1; next }
+    in_fm { next }
+    body { print }
+  ' "$handoff" | head -c "$CCS_DISPATCH_CHAIN_BRIDGE_MAX_CHARS")"
+  printf 'You are continuing a chained task. The previous worker reported:\n'
+  [ -n "$summary" ] && printf '  %s\n' "$summary"
+  printf '\nIts full handoff (your context) follows:\n'
+  printf -- '---\n%s\n---\n\n' "$body"
+}
+
+# Pure continuation predicate. Returns an empty string when the chain should
+# CONTINUE (outcome==done AND next non-empty AND depth<max), or a verbatim stop
+# reason otherwise (partial / blocked / failed / depth / empty-next). No side
+# effects. See spec §2 (predicate) and §6 (reason strings).
+_ccs_dispatch_chain_stop_reason() {
+  local status="$1" outcome="$2" next="$3" depth="$4" max="$5"
+  if [ "$status" != "handoff-ready" ]; then
+    printf 'failed\n'; return 0
+  fi
+  case "$outcome" in
+    done)    : ;;                       # candidate to continue; checks below
+    partial) printf 'partial\n'; return 0 ;;
+    blocked) printf 'blocked\n'; return 0 ;;
+    *)       printf 'failed\n'; return 0 ;;  # empty / unknown outcome
+  esac
+  if [ -z "$next" ]; then
+    printf 'empty-next\n'; return 0
+  fi
+  if [ "$depth" -ge "$max" ]; then
+    printf 'depth\n'; return 0
+  fi
+  printf '\n'                            # continue
 }
 
 # Write an agent-pager inbound launch file. Frontmatter matches inbound-handler.sh
@@ -497,12 +563,128 @@ _ccs_dispatch_finish_agentpager() {
     "$notify_handoff" "$note"
 }
 
+# Best-effort chain-termination pager notify (spec §7): one short message with
+# the stop reason when a chain ends. "complete" for a clean end (empty-next /
+# depth), "stopped" otherwise. Never fails the caller. CCS_DISPATCH_NOTIFY=0
+# opts out (shared with the per-job completion notify).
+_ccs_dispatch_chain_notify() {
+  [ "${CCS_DISPATCH_NOTIFY:-1}" != "0" ] || return 0
+  local job_id="$1" reason="$2" project="$3" depth="$4"
+  local sender
+  sender="$(_ccs_dispatch_notify_sender)"
+  [ -n "$sender" ] && [ -x "$sender" ] || return 0
+  local verb="stopped"
+  case "$reason" in empty-next|depth) verb="complete" ;; esac
+  {
+    echo "chain ${verb}: ${reason}"
+    echo "last job: ${job_id} (depth ${depth})"
+    echo "project: ${project}"
+  } | AGENT_PAGER_NOTIFY=1 \
+    AGENT_PAGER_BOT_SLOT="${CCS_DISPATCH_NOTIFY_SLOT:-1}" \
+    timeout "${CCS_DISPATCH_NOTIFY_TIMEOUT:-10}" \
+    "$sender" --cwd "$HOME" --label "ccs-dispatch" \
+    >/dev/null 2>&1 || true
+  return 0
+}
+
+# Chain continuation engine (spec §2-§7). Called by the monitor after a job is
+# finalized. Reads the just-captured handoff's outcome/next, evaluates the
+# continuation predicate, and either stops the chain (record chain_stopped +
+# terminal notify) or mints + launches the next hop and re-enters the monitor.
+# The chain is single-project by construction: the next hop inherits the parent
+# project_dir and re-resolves the SAME proj key (no cross-project branch).
+_ccs_dispatch_chain_next() {
+  local job_id="$1" key="$2" project_dir="$3" pager_dir="$4"
+  local chain_depth="$5" max_depth="$6"
+  local dispatch_dir
+  dispatch_dir="$(_ccs_dispatch_dir)"
+  local handoff_dst="$dispatch_dir/results/${job_id}.handoff"
+
+  local status outcome next_task project reason
+  status="$(_ccs_dispatch_jsonl_latest "$job_id" | jq -r '.status // ""')"
+  outcome="$(_ccs_dispatch_parse_handoff_field "$handoff_dst" outcome)"
+  next_task="$(_ccs_dispatch_parse_handoff_field "$handoff_dst" next)"
+  project="$(_ccs_dispatch_jsonl_latest "$job_id" | jq -r '.project // "unknown"')"
+  reason="$(_ccs_dispatch_chain_stop_reason \
+    "$status" "$outcome" "$next_task" "$chain_depth" "$max_depth")"
+
+  if [ -n "$reason" ]; then
+    _ccs_dispatch_jsonl_append "$(jq -nc \
+      --arg jid "$job_id" --arg r "$reason" \
+      '{job_id:$jid, chain_stopped:$r}')"
+    _ccs_dispatch_chain_notify "$job_id" "$reason" "$project" "$chain_depth"
+    return 0
+  fi
+
+  # Continue: resolve the inherited proj key. Same dir the parent used, so this
+  # succeeds unless the proj-map changed mid-chain; if it cannot resolve, stop.
+  local proj
+  if ! proj="$(_ccs_dispatch_resolve_proj_from_dir "$project_dir")"; then
+    _ccs_dispatch_jsonl_append "$(jq -nc --arg jid "$job_id" \
+      '{job_id:$jid, chain_stopped:"failed",
+        note:"chain: parent proj key no longer resolvable"}')"
+    _ccs_dispatch_chain_notify "$job_id" "failed" "$project" "$chain_depth"
+    return 0
+  fi
+
+  local next_job_id next_depth
+  next_job_id="$(_ccs_dispatch_job_id)"
+  next_depth=$((chain_depth + 1))
+
+  # Lineage record for the new hop (running).
+  _ccs_dispatch_jsonl_append "$(jq -nc \
+    --arg jid "$next_job_id" \
+    --arg proj "$project" \
+    --arg t "$next_task" \
+    --arg be "agentpager" \
+    --arg ca "$(date -Iseconds)" \
+    --arg cp "$job_id" \
+    --argjson cd "$next_depth" \
+    --argjson cm "$max_depth" \
+    '{job_id:$jid, project:$proj, task:$t, backend:$be, status:"running",
+      created_at:$ca, chain:true, chain_parent:$cp, chain_depth:$cd,
+      chain_max:$cm}')"
+  printf '%s' "$next_task" > "$dispatch_dir/results/${next_job_id}.prompt"
+
+  # Build the next worker prompt: parent context bridge + verification rule +
+  # the next task, then wrapped by the handoff rule + autonomy invariant.
+  local bridge vrule inner worker_prompt
+  bridge="$(_ccs_dispatch_chain_context_bridge "$handoff_dst")"
+  vrule="$(_ccs_dispatch_verification_rule)"
+  inner="${bridge}${vrule}Task: ${next_task}"
+  worker_prompt="$(_ccs_dispatch_agentpager_prompt "$next_job_id" "$inner")"
+
+  # Launch offset: only capture the new hop's frames.
+  local stream start_offset=0
+  stream="$pager_dir/channels/$key/out.stream"
+  [ -f "$stream" ] && start_offset="$(stat -c %s "$stream" 2>/dev/null || echo 0)"
+
+  if ! _ccs_dispatch_agentpager_launch_file \
+        "$next_job_id" "$proj" "$key" "$worker_prompt" "$pager_dir" >/dev/null; then
+    _ccs_dispatch_jsonl_append "$(jq -nc --arg jid "$next_job_id" \
+      '{job_id:$jid, status:"failed", chain_stopped:"failed",
+        note:"chain: launch write failed"}')"
+    _ccs_dispatch_chain_notify "$next_job_id" "failed" "$project" "$next_depth"
+    return 0
+  fi
+
+  # This same background process keeps owning the chain: register its pid under
+  # the new hop so ccs-jobs sync defers to the live monitor, then re-enter.
+  echo $$ > "$dispatch_dir/pids/${next_job_id}.pid"
+  _ccs_dispatch_agentpager_monitor "$next_job_id" "$key" "$project_dir" \
+    "$start_offset" "$pager_dir" 1 "$next_depth" "$max_depth" "$job_id"
+}
+
 # Background monitor for one agent-pager job. Runs under nohup from spawn. Polls
 # for the handoff file; when it appears, stops the seat and finalizes. Also exits
 # the loop if the worker's tmux session disappears on its own (self /exit or
 # crash). No wall-clock timeout (design D2: never auto-kill).
 _ccs_dispatch_agentpager_monitor() {
   local job_id="$1" key="$2" project_dir="$3" start_offset="$4" pager_dir="$5"
+  local chain_enabled="${6:-0}" chain_depth="${7:-0}" max_depth="${8:-5}"
+  # Slot 9 (chain_parent) is accepted for call-site symmetry but not read here:
+  # chain_next derives the parent from the finished job_id it is handed.
+  local _chain_parent="${9:-}"
   local tmux_session="agent-pager-$key"
   local stream="$pager_dir/channels/$key/out.stream"
   local state_json="$pager_dir/state/sessions/$key.json"
@@ -566,6 +748,13 @@ _ccs_dispatch_agentpager_monitor() {
   local no_handoff_status="completed"
   [ "$observed" = 0 ] && no_handoff_status="failed"
   _ccs_dispatch_finish_agentpager "$job_id" "$handoff_src" "$no_handoff_status" "$note"
+
+  # Chain continuation: only when this dispatch opted in. chain_next evaluates
+  # the predicate on the captured handoff and either stops or launches + re-
+  # enters the monitor for the next hop (bounded by max_depth). (spec §3)
+  [ "$chain_enabled" = 1 ] || return 0
+  _ccs_dispatch_chain_next "$job_id" "$key" "$project_dir" "$pager_dir" \
+    "$chain_depth" "$max_depth"
 }
 
 # Poll until the tmux session is gone or $2 seconds elapse. Extracted so the
@@ -601,6 +790,7 @@ _ccs_dispatch_agentpager_wait_settle() {
 # headless) for --sync, an unresolvable proj key, or an inbound write failure.
 _ccs_dispatch_spawn_agentpager() {
   local job_id="$1" project_dir="$2" prompt="$3" timeout_secs="$4" mode="$5"
+  local chain_enabled="${6:-0}" max_depth="${7:-5}"
 
   if [ "$mode" = "sync" ]; then
     echo "ccs-dispatch: agent-pager backend is async-only;" \
@@ -650,8 +840,9 @@ _ccs_dispatch_spawn_agentpager() {
   if [ "${CCS_DISPATCH_AGENTPAGER_MONITOR:-1}" = "1" ]; then
     nohup bash -c '
       source "$6/ccs-dashboard.sh"
-      _ccs_dispatch_agentpager_monitor "$1" "$2" "$3" "$4" "$5"
+      _ccs_dispatch_agentpager_monitor "$1" "$2" "$3" "$4" "$5" "$7" 0 "$8" ""
     ' _ "$job_id" "$key" "$project_dir" "$start_offset" "$pager_dir" "$script_dir" \
+      "$chain_enabled" "$max_depth" \
       > /dev/null 2>&1 &
     echo $! > "$dispatch_dir/pids/${job_id}.pid"
     disown
@@ -708,11 +899,13 @@ _ccs_dispatch_spawn() {
   local job_id="$1" project_dir="$2" prompt="$3"
   local timeout_secs="$4" mode="$5"
   local backend="${6:-$(_ccs_dispatch_resolve_backend)}"
+  local chain_enabled="${7:-0}" max_depth="${8:-5}"
 
   _CCS_DISPATCH_LAST_BACKEND="$backend"
   if [ "$backend" = "agentpager" ]; then
     if _ccs_dispatch_spawn_agentpager \
-         "$job_id" "$project_dir" "$prompt" "$timeout_secs" "$mode"; then
+         "$job_id" "$project_dir" "$prompt" "$timeout_secs" "$mode" \
+         "$chain_enabled" "$max_depth"; then
       return 0
     fi
     _CCS_DISPATCH_LAST_BACKEND="headless"  # agent-pager failed -> fell back
@@ -788,6 +981,7 @@ VRULE
 # a size note (CCS_DISPATCH_PREVIEW_MAX_CHARS, default 1500).
 _ccs_dispatch_preview_render() {
   local project="$1" backend="$2" mode="$3" timeout_secs="$4" prompt="$5"
+  local chain_enabled="${6:-0}" max_depth="${7:-5}"
   local max="${CCS_DISPATCH_PREVIEW_MAX_CHARS:-1500}"
   local seat=""
   [ "$backend" = "agentpager" ] && seat=" (seat local-$(id -un))"
@@ -797,6 +991,9 @@ _ccs_dispatch_preview_render() {
   [ "$backend" = "agentpager" ] && \
     echo "          (falls back to headless if the seat is unavailable)"
   echo "mode    : $mode (timeout ${timeout_secs}s)"
+  [ "$chain_enabled" = 1 ] && \
+    echo "chain   : auto-continue up to ${max_depth} hops in this project" \
+         "(worker reports done + next)"
   echo "prompt  : ${#prompt} chars"
   # Fold the middle, not the tail: the prompt ends with "Task: ...", which is
   # exactly what the operator signs off on. Char-based slicing keeps multibyte
@@ -844,6 +1041,10 @@ Options:
   --preview        Show a sign-off block and ask before dispatching;
                    rejection / EOF / timeout aborts with no job record
   --yes            Skip the confirmation (with --preview: print and go)
+  --chain          (agentpager only) auto-continue the chain: when a worker
+                   reports outcome:done + next, launch the next worker in the
+                   same project without asking again. Approved once up front.
+  --max-depth <n>  Max chained hops (default 5); a runaway ceiling.
 HELP
     return 0
   fi
@@ -852,6 +1053,7 @@ HELP
 
   local mode="async" context=false preview=false assume_yes=false
   local timeout_secs="" project="" task=""
+  local chain=false max_depth="$CCS_DISPATCH_CHAIN_MAX_DEPTH"
   while [ $# -gt 0 ]; do
     case "$1" in
       --sync) mode="sync"; shift ;;
@@ -860,6 +1062,14 @@ HELP
       --project) project="$2"; shift 2 ;;
       --preview) preview=true; shift ;;
       --yes) assume_yes=true; shift ;;
+      --chain) chain=true; shift ;;
+      --max-depth)
+        case "$2" in
+          ''|*[!0-9]*)
+            echo "ccs-dispatch: --max-depth needs a non-negative integer" >&2
+            return 1 ;;
+        esac
+        max_depth="$2"; shift 2 ;;
       *) task="$1"; shift ;;
     esac
   done
@@ -902,11 +1112,20 @@ HELP
   local backend
   backend=$(_ccs_dispatch_resolve_backend)
 
+  # --chain needs the agentpager monitor; headless is fire-and-forget with no
+  # monitor to run the chain loop. Warn and dispatch a single job. (spec §3/§8)
+  if $chain && [ "$backend" != "agentpager" ]; then
+    echo "ccs-dispatch: --chain requires the agentpager backend;" \
+         "dispatching a single (non-chained) job on $backend" >&2
+    chain=false
+  fi
+  local chain_enabled=0; $chain && chain_enabled=1
+
   # Sign-off gate (#75): before the first side effect, so a rejection leaves
   # no job record and no worker. --yes keeps automation non-interactive.
   if $preview; then
     _ccs_dispatch_preview_render "$project" "$backend" "$mode" \
-      "$timeout_secs" "$prompt"
+      "$timeout_secs" "$prompt" "$chain_enabled" "$max_depth"
     if ! $assume_yes && ! _ccs_dispatch_preview_confirm; then
       echo "ccs-dispatch: aborted (preview not approved)" >&2
       return 1
@@ -923,12 +1142,15 @@ HELP
     --arg m "$mode" \
     --arg be "$backend" \
     --arg ca "$(date -Iseconds)" \
-    '{job_id:$jid, project:$proj, task:$t, context_injected:$ctx, mode:$m, backend:$be, status:"running", created_at:$ca}'
+    --argjson ce "$chain_enabled" \
+    --argjson md "$max_depth" \
+    '{job_id:$jid, project:$proj, task:$t, context_injected:$ctx, mode:$m, backend:$be, status:"running", created_at:$ca}
+     + (if $ce == 1 then {chain:true, chain_depth:0, chain_max:$md} else {} end)'
   )"
 
   local spawn_rc=0
   _ccs_dispatch_spawn "$job_id" "$project" "$prompt" \
-    "$timeout_secs" "$mode" "$backend" || spawn_rc=$?
+    "$timeout_secs" "$mode" "$backend" "$chain_enabled" "$max_depth" || spawn_rc=$?
 
   if [ "${_CCS_DISPATCH_LAST_BACKEND:-$backend}" != "$backend" ]; then
     _ccs_dispatch_jsonl_append "$(jq -nc \
@@ -1145,6 +1367,18 @@ _ccs_jobs_show_single() {
     [ -n "$be" ] && echo "- **Backend:** $be"
     [ -n "$created" ] && echo "- **Created:** $created"
     [ -n "$finished" ] && echo "- **Finished:** $finished"
+    local cdepth cmax cparent cstopped
+    cdepth=$(echo "$record" | jq -r '.chain_depth // empty')
+    if [ -n "$cdepth" ]; then
+      cmax=$(echo "$record" | jq -r '.chain_max // empty')
+      cparent=$(echo "$record" | jq -r '.chain_parent // empty')
+      cstopped=$(echo "$record" | jq -r '.chain_stopped // empty')
+      local cline="- **Chain:** depth ${cdepth}"
+      [ -n "$cmax" ] && cline="${cline}/${cmax}"
+      [ -n "$cparent" ] && cline="${cline}, parent=${cparent}"
+      [ -n "$cstopped" ] && cline="${cline}, stopped: ${cstopped}"
+      echo "$cline"
+    fi
     if [ -n "$sum" ]; then
       echo ""
       echo "**Summary:** $sum"
