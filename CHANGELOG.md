@@ -13,6 +13,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follo
 - **ccs-jobs agent-pager visibility** — the list shows a running agent-pager worker's last-activity in a footer line, and the single-job view hints the `.handoff` path plus a prefilled follow-up `ccs-dispatch` template on handoff-ready jobs. (PR #72)
 - **ccs-dispatch completion notification** — an agentpager job pushes one short pager message at finalize (job id, status, project, `.handoff` path) via agent-pager's notify channel. Best-effort (a missing or hung sender never affects finalize), opt-out with `CCS_DISPATCH_NOTIFY=0`, bot slot pinned via `CCS_DISPATCH_NOTIFY_SLOT`. (#74)
 - **ccs-dispatch preview sign-off** — `--preview` shows the worker prompt, project, backend, and seat, then asks for confirmation before dispatching; rejection, EOF, or timeout aborts with no job record. `--yes` skips the question for automation. (#75)
+- **ccs-dispatch chained handoffs** — `--chain [--max-depth N]` (agentpager only) auto-launches the next worker when one reports `outcome: done` + a non-empty `next:` in its handoff, within the same project, without routing the intermediate decision back through the lead session. Approved once up front; stops on `partial`/`blocked`/`failed`/empty-next/max-depth with a chain-termination pager notify. Lineage (`chain_parent`/`chain_depth`) shows in `ccs-jobs <id>`. An autonomy invariant (do not ask clarifying questions; blocked → `outcome: blocked`) now applies to all agentpager workers. See `docs/commands.md`.
 
 ### Fixed
 

@@ -466,6 +466,9 @@ ccs-dispatch --timeout 300 \
                stdin 確認 y 才 launch；拒絕、EOF、timeout 都直接中止且
                不留任何 job 紀錄
 --yes          跳過確認（配 --preview = 印出預覽直接派，供自動化留痕）
+--chain        (agentpager only) 自動接力：worker 回報 outcome:done + next 時，
+               在同一專案內自動派出下一個 worker，不再逐跳詢問（鏈首一次核准）
+--max-depth <n> 最大接力跳數（預設 5），防跑飛硬上限
 ```
 
 **拍板流程（operator sign-off）**：人直接操作時 `--preview` 會互動確認；
@@ -484,6 +487,8 @@ CCS_DISPATCH_MAX_CONCURRENT_WARN=3  # 並行 job 警告閾值
 CCS_DISPATCH_BACKEND=auto         # auto | agentpager | headless
 CCS_DISPATCH_PREVIEW_TIMEOUT=60   # --preview 確認等待秒數
 CCS_DISPATCH_PREVIEW_MAX_CHARS=1500  # preview prompt 折疊長度
+CCS_DISPATCH_CHAIN_MAX_DEPTH=5    # --chain 預設最大接力跳數
+CCS_DISPATCH_CHAIN_BRIDGE_MAX_CHARS=4000  # 鏈鎖 context 橋接上限
 ```
 
 ### 後端 (Backends)
@@ -529,6 +534,20 @@ ccs-dispatch 有兩個執行後端，由 `CCS_DISPATCH_BACKEND` 選擇（預設 
   混進互動對話串（slot role 的原生支援由 agent-pager 端追蹤——internal GitLab
   issue #76，落地後此預設會改為查詢保留 slot）。注意：只有 monitor 的
   即時 finalize 會通知；`ccs-jobs` sync 的事後補帳（stale 對帳）不通知。
+
+**鏈鎖模式（`--chain`）：**
+
+- 僅 agentpager 後端支援（headless 無 monitor，會警告並退回單發）。
+- 鏈首 `--preview` 會多顯示一行鏈鎖模式與最大跳數；核准一次即涵蓋整條鏈，
+  中繼決策不進指揮席（lead）context。
+- 續鏈判定：worker 的 handoff frontmatter `outcome: done` 且 `next:` 非空且
+  未達 max-depth 時，monitor 讀 `next:` 自動組下一跳（含前一跳 handoff 的
+  context 橋接 + HANDOFF RULE + 自主性指令），繼承同一專案 proj key。
+- 停鏈原因：`partial` / `blocked` / `failed` / `empty-next` / `depth`，記入
+  `chain_stopped`，並發一則鏈終止 pager 通知。
+- `ccs-jobs <job-id>` 顯示 `Chain: depth N/max, parent=…, stopped: …` 血緣。
+- 自主性指令套用**所有** agentpager 派工（不限鏈鎖）：worker 不問澄清問題、
+  卡住時設 `outcome: blocked`（→ 停鏈浮回指揮席），不等終端輸入。
 
 結果存放：`${XDG_DATA_HOME:-~/.local/share}/ccs-dashboard/dispatch/`
 
