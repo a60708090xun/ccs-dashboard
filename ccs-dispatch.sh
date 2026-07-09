@@ -156,6 +156,35 @@ _ccs_dispatch_gate_verdict() {
   '
 }
 
+# Run the full gate for one attempt: execute each AC against <cwd>, write per-AC
+# evidence to <attempt_dir>/gate/AC<n>.json, compute + stamp the gate verdict to
+# <attempt_dir>/gate/verdict.json. Echoes the verdict string for the caller to
+# branch on. The sole writer of the gate/ evidence dir (§5).
+_ccs_dispatch_gate_run() {
+  local cwd="$1" task="$2" attempt_dir="$3" attempt="$4" budget="$5"
+  local gate_dir="$attempt_dir/gate"
+  mkdir -p "$gate_dir"
+
+  local n verdicts='[]' ac rec ac_id
+  n="$(echo "$task" | jq '.acceptance_criteria | length')"
+  local i=0
+  while [ "$i" -lt "$n" ]; do
+    ac="$(echo "$task" | jq -c ".acceptance_criteria[$i]")"
+    rec="$(_ccs_dispatch_gate_run_ac "$cwd" "$ac")"
+    ac_id="$(echo "$rec" | jq -r '.ac_id')"
+    echo "$rec" | jq '.' > "$gate_dir/${ac_id}.json"
+    verdicts="$(jq -n --argjson a "$verdicts" --argjson r "$rec" \
+      '$a + [{ac_id:$r.ac_id, track:$r.track, verdict:$r.verdict}]')"
+    i=$((i + 1))
+  done
+
+  local verdict_json
+  verdict_json="$(_ccs_dispatch_gate_verdict "$verdicts" "$attempt" "$budget" \
+    | jq --arg ts "$(date -Iseconds)" '.timestamp = $ts')"
+  echo "$verdict_json" > "$gate_dir/verdict.json"
+  echo "$verdict_json" | jq -r '.verdict'
+}
+
 # ── Job ID: d-YYYYMMDD-HHMMSS-XXXX ──
 _ccs_dispatch_job_id() {
   printf 'd-%s-%s' \
