@@ -245,6 +245,36 @@ _ccs_dispatch_run_alloc_dir() {
   echo "$dir"
 }
 
+# Normalize a path to absolute (does not require existence; `-m`).
+_ccs_dispatch_abspath() { realpath -m "$1"; }
+
+# Resolve a task's `next:` to a normalized absolute path. Relative values are
+# resolved against the CURRENT task file's directory (not the frozen copy, not
+# cwd), so a chain author writes paths relative to where the task.yaml lives.
+_ccs_dispatch_resolve_next() {
+  local cur="$1" next="$2" base
+  base="$(dirname "$cur")"
+  case "$next" in
+    /*) realpath -m "$next" ;;
+    *)  realpath -m "$base/$next" ;;
+  esac
+}
+
+# Allocate a fresh chain run dir <runs>/<first-id>-chain-NN. Same atomic
+# count-then-claim strategy as _ccs_dispatch_run_alloc_dir.
+_ccs_dispatch_chain_alloc_dir() {
+  local first_id="$1" runs seq dir
+  runs="$(_ccs_dispatch_runs_dir)"
+  seq=$(( $(find "$runs" -maxdepth 1 -type d -name "${first_id}-chain-*" \
+    2>/dev/null | wc -l) + 1 ))
+  dir="$runs/${first_id}-chain-$(printf '%02d' "$seq")"
+  while ! mkdir "$dir" 2>/dev/null; do
+    seq=$((seq + 1))
+    dir="$runs/${first_id}-chain-$(printf '%02d' "$seq")"
+  done
+  echo "$dir"
+}
+
 # SPAWN SEAM. Real impl runs the executor synchronously (headless claude -p) in
 # <cwd> and captures evidence into attempt-NN/. Tests override this to simulate
 # worker edits. Scope C drives synchronous headless execution; the agentpager
