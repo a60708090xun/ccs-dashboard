@@ -80,7 +80,7 @@ ccs-dashboard 分兩層：
 | `ccs-health` | Session 健康偵測 — 偵測注意力退化信號 |
 | `ccs-dispatch` | 派發任務到新的 Claude Code session（async 或 sync） |
 | `ccs-jobs` | 查看 dispatch 任務歷史與結果 |
-| `ccs-dispatch-run` | 帶 deterministic review gate + 單次重派的派工（task.yaml） |
+| `ccs-dispatch-run` | 帶 review gate + 鏈結派工（gated task-list chaining，task.yaml） |
 | `ccs-review` | Session 回顧報告 — 統計、對話、LLM 摘要（md/html/pdf） |
 | `ccs-project` | 專案層級洞察報告 — 成本、進度、節奏、程式碼變動（md/html） |
 | `ccs-failure-triage` | 對 session 進行 model confabulation-family 失效信號分類診斷 |

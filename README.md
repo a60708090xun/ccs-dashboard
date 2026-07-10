@@ -80,7 +80,7 @@ ccs-dashboard has two layers:
 | `ccs-health` | Session health detection — surface attention-degradation signals |
 | `ccs-dispatch` | Dispatch a task to a new Claude Code session (async or sync) |
 | `ccs-jobs` | View dispatch job history and results |
-| `ccs-dispatch-run` | Dispatch with a deterministic review gate + single retry (task.yaml) |
+| `ccs-dispatch-run` | Dispatch with a review gate + gated task-list chaining (task.yaml) |
 | `ccs-review` | Session review report — stats, conversation, LLM summary (md/html/pdf) |
 | `ccs-project` | Per-project insight report — cost, features, rhythm, code changes (md/html) |
 | `ccs-failure-triage` | Triage a session for model confabulation-family failure signals |

@@ -583,29 +583,34 @@ ccs-jobs <job-id> --full  # 單筆詳情並內嵌完整 .md 輸出
 
 ## ccs-dispatch-run
 
-Deterministic review-gate dispatch（scope C：gate + 單次重派）。把「派工 →
-以現實驗收 → 失敗重派一次」包成一個前景指令，worker 的自報永遠不作為裁決依據。
+Deterministic review-gate dispatch（review-gate：gate + 鏈結派工）。把「派工 → 以現實驗收 → 失敗重派一次」包成一個前景指令，且支援**同步 gated task-list 鏈結（gated task-list chain）**：當前任務驗收 PASS 後，會跟隨 `next:` 欄位自動執行並驗收下一個任務。這與非驗收的、非同步的 `--chain`（agentpager 快速通道）是完全獨立的兩層。
 
 ```bash
 ccs-dispatch-run <task.yaml>
 ```
 
-**三段式流程：**
+**三段式流程（單一任務 attempt 迴圈）：**
 
-1. **Dispatch：** 讀取並凍結 `task.yaml`（複製到 `runs/<run-id>/task.yaml`，
-   之後只讀凍結副本），依 `goal` 派 worker 到 `scope.cwd`。
-2. **Gate（Stage 1，零 LLM）：** 對 worker 改動後的 worktree 重跑每條 AC 的
-   `verify.cmd`（exit 0 = PASS，非零 = FAIL），寫結構化 evidence。裁決一律以
-   重跑結果為準，不看 worker 自述。
-3. **單次重派：** gate 判 RETRY（有 FAIL 且 loop_budget 未耗盡）時，帶「上一輪
-   失敗的 machine 事實摘要」重派一次；再失敗即 ESCALATE。
+1. **Dispatch：** 讀取並凍結 `task.yaml`（複製到鏈目錄下 `hop-NN-<task-id>/task.yaml`），依 `goal` 派 worker 到 `scope.cwd`。
+2. **Gate（Stage 1，零 LLM）：** 對 worker 改動後的 worktree 重跑每條 AC 的 `verify.cmd`（exit 0 = PASS，非零 = FAIL），寫結構化 evidence。裁決一律以重跑結果為準，不看 worker 自述。
+3. **單次重派：** gate 判 RETRY（有 FAIL 且 loop_budget 未耗盡）時，帶「上一輪失敗的 machine 事實摘要」重派一次；再失敗即 ESCALATE。
+
+**同步鏈結迴圈（gated task-list chaining）：**
+當一個任務獲得 `PASS` 裁決後：
+1. 讀取任務 `task.yaml` 中的 `next:` 欄位。若其不存在或為空，則鏈結正常結束（exit 0，`stop_reason: empty-next`）。
+2. 若 `next:` 存在，則解析為絕對路徑（若為相對路徑，則相對於當前任務檔所在目錄進行解析）。
+3. 執行各項邊界與安全保護檢查：
+   - **環路偵測（cycle）**：檢查下一個任務路徑是否已被執行過。若是，鏈結中斷（`stop_reason: cycle`）。
+   - **最大深度限制（depth）**：鏈結深度不能超過 `CCS_DISPATCH_CHAIN_MAX_DEPTH`。若是，鏈結中斷（`stop_reason: depth`）。
+   - **載入失敗（failed）**：下一個 YAML 檔案不存在或格式不合規。若是，鏈結中斷（`stop_reason: failed`）。
+4. 載入下一個任務，分配下一個 `hop-NN-<task-id>` 目錄並繼續 attempt 迴圈。
 
 **Gate verdict（四值，純函式判定）：**
 
 - `PASS` — 全部 cmd-AC PASS（guidance-AC 記 SKIPPED_FOR_LLM，不參與判定）
 - `RETRY` — 有 FAIL 且 `attempt <= loop_budget` → 重派
 - `ESCALATE` — budget 耗盡、或任一 AC ERROR
-- `HARD_STOP` — 破壞性操作（scope C 尚未有偵測者產生此值，判定函式已支援）
+- `HARD_STOP` — 破壞性操作（判定函式已支援）
 
 **Task 檔案格式（`task.yaml`）：**
 
@@ -614,8 +619,9 @@ id: task-x                      # slug，也是 run-id 前綴
 goal: "新增 greeter 並被 CLI 呼叫"
 scope:
   cwd: "/abs/path/to/project"   # worker 執行與 gate 驗收的目錄
+next: "task-y.yaml"             # 可選：下一個要自動執行與驗收的任務路徑（相對於此 yaml）
 execution_policy:
-  loop_budget: 1                # 重派上限（scope C 預設 1 = 共 2 attempts）
+  loop_budget: 1                # 重派上限（預設 1 = 共 2 attempts）
 acceptance_criteria:
   - id: AC1
     text: "greet 函式存在"       # 外部可觀察行為（給人讀）
@@ -624,30 +630,32 @@ acceptance_criteria:
   - id: AC2
     text: "符合既有錯誤處理 pattern"
     verify:
-      guidance: "對照 src/loader.py"               # 升 LLM 裁決（scope C 先跳過）
+      guidance: "對照 src/loader.py"               # 升 LLM 裁決（暫時跳過）
 ```
 
-每條 AC 二擇一：`verify.cmd`（走 gate 重跑）或 `verify.guidance`（記
-SKIPPED_FOR_LLM，留給未來 Stage 2）。每份 task 至少一條 integration AC
-（呼叫鏈 reachable，非僅檔案存在），對齊 plan-quality 規則。
+每條 AC 二擇一：`verify.cmd`（走 gate 重跑）或 `verify.guidance`（記 SKIPPED_FOR_LLM，留給未來 Stage 2）。每份 task 至少一條 integration AC（呼叫鏈 reachable，非僅檔案存在），對齊 plan-quality 規則。
 
 **Evidence layout（集中式）：**
 
 ```
-${XDG_DATA_HOME:-~/.local/share}/ccs-dashboard/dispatch/runs/<run-id>/
-  task.yaml              # 凍結副本
-  attempt-01/
-    prompt.md            # 實際送 worker 的 prompt
-    executor-output.md   # worker 原始輸出
-    git-status.txt       # gate 當下 git status --porcelain
-    diff.patch           # git diff
-    gate/AC<n>.json      # per-AC 紀錄（verdict/exit/stdout tail…）
-    gate/verdict.json    # gate verdict
-  attempt-02/            # 重派時遞增；prompt.md 含前輪 FAIL 摘要
-  final.json             # 終態 outcome: accepted | escalated | hard_stop
+${XDG_DATA_HOME:-~/.local/share}/ccs-dashboard/dispatch/runs/<first-task-id>-chain-<NN>/
+  chain.json             # 鏈結執行摘要（包含 hops 陣列、stopped_at_hop、stop_reason、outcome 與 depth 欄位）
+  hop-01-<task-id-1>/
+    task.yaml            # 凍結副本
+    attempt-01/
+      prompt.md          # 實際送 worker 的 prompt
+      executor-output.md # worker 原始輸出
+      git-status.txt     # gate 當下 git status --porcelain
+      diff.patch         # git diff
+      gate/AC<n>.json    # per-AC 紀錄（verdict/exit/stdout tail…）
+      gate/verdict.json  # gate verdict
+    attempt-02/          # 重派時遞增；prompt.md 含前輪 FAIL 摘要
+    final.json           # 終態 outcome: accepted | escalated | hard_stop
+  hop-02-<task-id-2>/
+    ...
 ```
 
-**Exit code：** `0` accepted / `10` escalated / `11` hard_stop。
+**Exit code：** 跟隨最後執行的任務 verdict：`0` accepted / `10` escalated / `11` hard_stop。若因為 next: 載入失敗、語法錯誤或環路造成鏈中斷，其 exit code 依然跟隨前一個 PASS 的任務判定為 `0`。
 
 **環境變數：**
 
@@ -656,16 +664,9 @@ CCS_DISPATCH_GATE_LOOP_BUDGET=1        # loop_budget 預設值（task.yaml 可�
 CCS_DISPATCH_GATE_CMD_TAIL_CHARS=2000  # per-AC stdout/stderr 擷取尾端字元數
 ```
 
-> **安全註記（§8.4）：** AC `verify.cmd` 會執行 worker 產出的 code
-> （`pytest`、`python -c` 等，驗證本質使然），僅靠 `execution_policy.timeout_sec`
-> 設界。只對「你本就願意在本機執行」的 worker 開跑；不加 network / write-path
-> 限制（單人本地 MVP）。
+> **安全註記（§8.4）：** AC `verify.cmd` 會執行 worker 產出的 code（`pytest`、`python -c` 等，驗證本質使然），僅靠 `execution_policy.timeout_sec` 設界。只對「你本就願意在本機執行」的 worker 開跑；不加 network / write-path 限制（單人本地 MVP）。
 
-**Scope C 限制（後續 sprint 補）：** 無 tier ladder（重派用同一 executor）、
-無 pager escalation ladder、不接 `--chain`（gated chain 續鏈為獨立層）、無
-Stage-2 judgment review 自動化、guidance-AC 一律 SKIPPED_FOR_LLM。evidence
-目前全留（未來加 TTL）。run loop 走同步 headless 執行；agentpager async
-後端延後。
+**Scope C 限制（後續 sprint 補）：** 無 tier ladder（重派用同一 executor）、無 pager escalation ladder、不接 `--chain`（gated chain 續鏈為獨立層）、無 Stage-2 judgment review 自動化、guidance-AC 一律 SKIPPED_FOR_LLM。evidence 目前全留（未來加 TTL）。run loop 走同步 headless 執行；agentpager async 後端延後。
 
 ## ccs-review
 

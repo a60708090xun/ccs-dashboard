@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccs-dispatch.sh — Session dispatch: ccs-dispatch + ccs-jobs
+# ccs-dispatch.sh — Session dispatch: ccs-dispatch + ccs-jobs + ccs-dispatch-run (review gate + gated task chain)
 # Sourced by ccs-dashboard.sh
 
 # ── Configurable parameters ──
@@ -244,8 +244,9 @@ _ccs_dispatch_resolve_next() {
   esac
 }
 
-# Allocate a fresh chain run dir <runs>/<first-id>-chain-NN. Same atomic
-# count-then-claim strategy as _ccs_dispatch_run_alloc_dir.
+# Allocate a fresh chain run dir <runs>/<first-id>-chain-NN. Seeds NN from the
+# existing count, then claims the dir with a bare `mkdir` (bumping NN on
+# collision) so concurrent chains of the same first task never share a dir.
 _ccs_dispatch_chain_alloc_dir() {
   local first_id="$1" runs seq dir
   runs="$(_ccs_dispatch_runs_dir)"
@@ -386,7 +387,10 @@ ccs-dispatch-run() {
 Usage: ccs-dispatch-run <task.yaml>
   Dispatch a worker, verify its output against the task's acceptance criteria
   (deterministic Stage-1 gate), retry once on FAIL with a machine-fact failure
-  summary, and record structured evidence under the dispatch runs/ tree.
+  summary, and record structured evidence under the dispatch runs/ tree. On a
+  PASS verdict, follow the task's optional next: field to run the next task
+  (synchronous gated chain); the chain stops on non-PASS / empty-next / depth /
+  cycle / next-load failure.
   Exit: 0 accepted / 10 escalated / 11 hard_stop.
 HELP
     [ -z "$task_yaml" ] && return 1 || return 0
