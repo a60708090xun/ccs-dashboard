@@ -397,9 +397,16 @@ HELP
     echo "ccs-dispatch-run: could not load task: $task_yaml" >&2
     return 2
   fi
-  outcome="$(jq -r '.outcome' "$run_dir/final.json" 2>/dev/null)"
   echo "run: $run_dir"
-  echo "outcome: $outcome (see $run_dir/final.json)"
+  local hops sr
+  hops="$(jq -r '.hops | length' "$run_dir/chain.json" 2>/dev/null || echo 1)"
+  outcome="$(jq -r '.outcome' "$run_dir/chain.json" 2>/dev/null)"
+  if [ "$hops" -le 1 ]; then
+    echo "outcome: $outcome (see $run_dir/chain.json)"
+  else
+    sr="$(jq -r '.stop_reason' "$run_dir/chain.json")"
+    echo "chain: $hops hops, outcome=$outcome, stop=$sr (see $run_dir/chain.json)"
+  fi
   return "$rc"
 }
 
