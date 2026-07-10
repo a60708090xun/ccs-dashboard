@@ -96,6 +96,7 @@ _ccs_dispatch_gate_load_task() {
     and (([.acceptance_criteria[].id] | length) ==
          ([.acceptance_criteria[].id] | unique | length))
     and (any(.acceptance_criteria[]; (.verify.cmd // "") != ""))
+    and ((.next == null) or (.next | type == "string" and (length > 0)))
   ' >/dev/null 2>&1 \
     || { echo "gate: task validation failed: $yaml" >&2; return 1; }
   echo "$js"
