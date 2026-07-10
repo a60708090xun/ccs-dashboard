@@ -268,10 +268,19 @@ _ccs_dispatch_chain_alloc_dir() {
 # async backend for the gate loop is deferred (see plan Deferred).
 _ccs_dispatch_run_worker() {
   local cwd="$1" prompt="$2" run_dir="$3" attempt="$4"
-  local timeout_sec="${5:-$CCS_DISPATCH_TIMEOUT}"
+  local timeout_sec="${5:-$CCS_DISPATCH_TIMEOUT}" executor="${6:-claude}"
   local ad="$run_dir/attempt-$(printf '%02d' "$attempt")"
   mkdir -p "$ad"
-  (cd "$cwd" && timeout "$timeout_sec" claude -p "$prompt") \
+  # gemini needs --approval-mode yolo: headless has no tty, so without
+  # auto-approve it cannot run edit tools. The deterministic gate re-runs every
+  # verify.cmd against ground truth, so a yolo false-success is caught (see
+  # docs/case-studies/gemini-yolo-overconfidence.md). claude is the default.
+  local cmd
+  case "$executor" in
+    gemini) cmd=(gemini -p "$prompt" --approval-mode yolo) ;;
+    *)      cmd=(claude -p "$prompt") ;;
+  esac
+  (cd "$cwd" && timeout "$timeout_sec" "${cmd[@]}") \
     > "$ad/executor-output.md" 2>&1 || true
   (cd "$cwd" && git status --porcelain) > "$ad/git-status.txt" 2>/dev/null || true
   (cd "$cwd" && git diff) > "$ad/diff.patch" 2>/dev/null || true
