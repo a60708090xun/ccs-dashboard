@@ -42,14 +42,15 @@ _ccs_dispatch_run_worker() {
 }
 
 echo "=== FAIL then PASS after retry -> accepted, 2 attempts ==="
-run_dir="$(_ccs_dispatch_run "$task_yaml")"; rc=$?
+chain_dir="$(_ccs_dispatch_run "$task_yaml")"; rc=$?
+hop="$chain_dir/hop-01-loop-x"
 assert_eq "exit 0 accepted" "0" "$rc"
-assert_eq "final outcome accepted" "accepted" "$(jq -r '.outcome' "$run_dir/final.json")"
-assert_eq "two attempts" "2" "$(jq -r '.attempts' "$run_dir/final.json")"
-assert_eq "attempt1 gate RETRY" "RETRY" "$(jq -r '.verdict' "$run_dir/attempt-01/gate/verdict.json")"
-assert_eq "attempt2 gate PASS" "PASS" "$(jq -r '.verdict' "$run_dir/attempt-02/gate/verdict.json")"
-assert_contains "attempt2 prompt carries feedback" "$(cat "$run_dir/attempt-02/prompt.md")" "AC1 FAIL"
-assert_eq "task frozen" "loop-x" "$(_ccs_dispatch_gate_load_task "$run_dir/task.yaml" | jq -r '.id')"
+assert_eq "hop outcome accepted" "accepted" "$(jq -r '.outcome' "$hop/final.json")"
+assert_eq "two attempts" "2" "$(jq -r '.attempts' "$hop/final.json")"
+assert_eq "attempt1 gate RETRY" "RETRY" "$(jq -r '.verdict' "$hop/attempt-01/gate/verdict.json")"
+assert_eq "attempt2 gate PASS" "PASS" "$(jq -r '.verdict' "$hop/attempt-02/gate/verdict.json")"
+assert_contains "attempt2 prompt carries feedback" "$(cat "$hop/attempt-02/prompt.md")" "AC1 FAIL"
+assert_eq "task frozen" "loop-x" "$(_ccs_dispatch_gate_load_task "$hop/task.yaml" | jq -r '.id')"
 
 echo "=== persistent FAIL -> escalated, exit 10 ==="
 _ccs_dispatch_run_worker() {
@@ -60,8 +61,9 @@ _ccs_dispatch_run_worker() {
   return 0
 }
 rm -f "$WORK/repo/greeter.py"
-run_dir2="$(_ccs_dispatch_run "$task_yaml")"; rc2=$?
+chain_dir2="$(_ccs_dispatch_run "$task_yaml")"; rc2=$?
 assert_eq "exit 10 escalated" "10" "$rc2"
-assert_eq "final outcome escalated" "escalated" "$(jq -r '.outcome' "$run_dir2/final.json")"
+assert_eq "hop outcome escalated" "escalated" \
+  "$(jq -r '.outcome' "$chain_dir2/hop-01-loop-x/final.json")"
 
 test_summary

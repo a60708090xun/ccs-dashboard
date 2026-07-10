@@ -229,22 +229,6 @@ _ccs_dispatch_runs_dir() {
   local d; d="$(_ccs_dispatch_dir)/runs"; mkdir -p "$d"; echo "$d"
 }
 
-# Allocate a fresh run dir <runs>/<task-id>-<NN>. Seeds NN from the existing
-# count, then claims the dir with a bare `mkdir` (fails if it exists) so two
-# concurrent runs of the same task never share a run dir; on collision it bumps
-# NN and retries.
-_ccs_dispatch_run_alloc_dir() {
-  local task_id="$1" runs seq dir
-  runs="$(_ccs_dispatch_runs_dir)"
-  seq=$(( $(find "$runs" -maxdepth 1 -type d -name "${task_id}-*" 2>/dev/null | wc -l) + 1 ))
-  dir="$runs/${task_id}-$(printf '%02d' "$seq")"
-  while ! mkdir "$dir" 2>/dev/null; do
-    seq=$((seq + 1))
-    dir="$runs/${task_id}-$(printf '%02d' "$seq")"
-  done
-  echo "$dir"
-}
-
 # Normalize a path to absolute (does not require existence; `-m`).
 _ccs_dispatch_abspath() { realpath -m "$1"; }
 
@@ -291,43 +275,43 @@ _ccs_dispatch_run_worker() {
   return 0
 }
 
-# Scope-C loop driver: freeze task -> for each attempt, build prompt (attempt 1
+# Run ONE task through the attempt loop into <hop_dir>: build prompt (attempt 1
 # = goal; >=2 = §6 feedback + goal), spawn worker, run gate, branch on verdict.
-# Writes final.json (§4.3). Echoes the run dir; rc 0 accepted / 10 escalated /
-# 11 hard_stop / 2 task-load error.
-_ccs_dispatch_run() {
-  local task_yaml="$1"
-  local task; task="$(_ccs_dispatch_gate_load_task "$task_yaml")" || return 2
-  local task_id cwd budget goal timeout_sec
-  task_id="$(echo "$task" | jq -r '.id')"
+# <task> is the already-loaded+validated task JSON; <task_yaml> is its source
+# path (frozen into hop_dir). Writes attempt-NN evidence + final.json. Echoes
+# the terminal verdict word; rc 0 accepted / 10 escalated / 11 hard_stop.
+_ccs_dispatch_run_one() {
+  local task="$1" task_yaml="$2" hop_dir="$3"
+  local cwd budget goal timeout_sec
   cwd="$(echo "$task" | jq -r '.scope.cwd // "."')"
   budget="$(echo "$task" | jq -r ".execution_policy.loop_budget // $CCS_DISPATCH_GATE_LOOP_BUDGET")"
   goal="$(echo "$task" | jq -r '.goal')"
   timeout_sec="$(echo "$task" | jq -r '.execution_policy.timeout_sec // empty')"
   [ -z "$timeout_sec" ] && timeout_sec="$CCS_DISPATCH_TIMEOUT"
 
-  local run_dir; run_dir="$(_ccs_dispatch_run_alloc_dir "$task_id")"
-  cp "$task_yaml" "$run_dir/task.yaml"   # freeze (§1)
+  mkdir -p "$hop_dir"
+  cp "$task_yaml" "$hop_dir/task.yaml"   # freeze (§1)
 
-  local attempt=1 verdict outcome="escalated" rc=10 ad prev prompt fb
+  local attempt=1 verdict outcome="escalated" rc=10 term="ESCALATE"
+  local ad prev prompt fb
   while [ "$attempt" -le $(( budget + 1 )) ]; do
-    ad="$run_dir/attempt-$(printf '%02d' "$attempt")"
+    ad="$hop_dir/attempt-$(printf '%02d' "$attempt")"
     mkdir -p "$ad"
     prompt="Task: $goal"
     if [ "$attempt" -gt 1 ]; then
-      prev="$run_dir/attempt-$(printf '%02d' $((attempt - 1)))"
+      prev="$hop_dir/attempt-$(printf '%02d' $((attempt - 1)))"
       fb="$(_ccs_dispatch_gate_feedback "$prev" $((attempt - 1)))"
       prompt="${fb}"$'\n'"Task: $goal"
     fi
     printf '%s' "$prompt" > "$ad/prompt.md"
 
-    _ccs_dispatch_run_worker "$cwd" "$prompt" "$run_dir" "$attempt" "$timeout_sec"
+    _ccs_dispatch_run_worker "$cwd" "$prompt" "$hop_dir" "$attempt" "$timeout_sec"
     verdict="$(_ccs_dispatch_gate_run "$cwd" "$task" "$ad" "$attempt" "$budget")"
 
     case "$verdict" in
-      PASS)      outcome="accepted";  rc=0;  break ;;
-      HARD_STOP) outcome="hard_stop"; rc=11; break ;;
-      ESCALATE)  outcome="escalated"; rc=10; break ;;
+      PASS)      outcome="accepted";  rc=0;  term="PASS";      break ;;
+      HARD_STOP) outcome="hard_stop"; rc=11; term="HARD_STOP"; break ;;
+      ESCALATE)  outcome="escalated"; rc=10; term="ESCALATE";  break ;;
       RETRY)     : ;;   # loop again
     esac
     attempt=$((attempt + 1))
@@ -336,8 +320,31 @@ _ccs_dispatch_run() {
   jq -n --arg o "$outcome" --argjson n "$attempt" \
     '{outcome:$o, attempts:$n, stage2:null,
       escalation:(if $o=="escalated" then {reason:"gate"} else null end)}' \
-    > "$run_dir/final.json"
-  echo "$run_dir"
+    > "$hop_dir/final.json"
+  echo "$term"
+  return "$rc"
+}
+
+# Chain driver: run the first task, and (Task 4) follow `next:` on PASS.
+# Echoes the chain run dir; rc 0 accepted / 10 escalated / 11 hard_stop of the
+# terminal hop, or 2 on first-task load error (before any dir alloc).
+_ccs_dispatch_run() {
+  local first_yaml="$1"
+  local cur; cur="$(_ccs_dispatch_abspath "$first_yaml")"
+  local task; task="$(_ccs_dispatch_gate_load_task "$cur")" || return 2
+  local first_id; first_id="$(echo "$task" | jq -r '.id')"
+
+  local chain_dir; chain_dir="$(_ccs_dispatch_chain_alloc_dir "$first_id")"
+
+  local hop_id hop_dir term rc
+  hop_id="$(echo "$task" | jq -r '.id')"
+  hop_dir="$chain_dir/hop-01-${hop_id}"
+  term="$(_ccs_dispatch_run_one "$task" "$cur" "$hop_dir")"; rc=$?
+
+  jq -n --arg cid "$(basename "$chain_dir")" \
+    --arg o "$(jq -r '.outcome' "$hop_dir/final.json")" \
+    '{chain_id:$cid, outcome:$o}' > "$chain_dir/chain.json"
+  echo "$chain_dir"
   return "$rc"
 }
 
