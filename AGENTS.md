@@ -72,7 +72,7 @@ Phase 1 規劃時，spec/plan 寫在 `internal/` 或 worktree 的 `internal/`，
 
 ## Worktree 與 Branch
 
-- **目錄位置：** 專案同層級，如 `<project-root>-<name>`
+- **目錄位置：** repo 內 `.worktrees/<name>`（已 gitignore，不進版控）
 - **Branch prefix：** `feat/`（新功能）、`fix/`（修復）、`refactor/`（重構）、`docs/`（文件）
 
 ## GitHub Issue 語言規則
