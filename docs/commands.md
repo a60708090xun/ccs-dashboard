@@ -619,6 +619,7 @@ id: task-x                      # slug，也是 run-id 前綴
 goal: "新增 greeter 並被 CLI 呼叫"
 scope:
   cwd: "/abs/path/to/project"   # worker 執行與 gate 驗收的目錄
+executor: gemini                # 可選：claude(預設) | gemini。gemini 以 `gemini -p ... --approval-mode yolo` 跑（headless 無 tty，需 auto-approve；gate 為信任邊界，見 §8.4）
 next: "task-y.yaml"             # 可選：下一個要自動執行與驗收的任務路徑（相對於此 yaml）
 execution_policy:
   loop_budget: 1                # 重派上限（預設 1 = 共 2 attempts）
