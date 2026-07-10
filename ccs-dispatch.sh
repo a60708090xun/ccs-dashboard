@@ -325,7 +325,7 @@ _ccs_dispatch_run_one() {
   return "$rc"
 }
 
-# Chain driver: run the first task, and (Task 4) follow `next:` on PASS.
+# Chain driver: run the first task, and follow `next:` on PASS.
 # Echoes the chain run dir; rc 0 accepted / 10 escalated / 11 hard_stop of the
 # terminal hop, or 2 on first-task load error (before any dir alloc).
 _ccs_dispatch_run() {
@@ -335,15 +335,45 @@ _ccs_dispatch_run() {
   local first_id; first_id="$(echo "$task" | jq -r '.id')"
 
   local chain_dir; chain_dir="$(_ccs_dispatch_chain_alloc_dir "$first_id")"
+  local max="$CCS_DISPATCH_CHAIN_MAX_DEPTH"
 
-  local hop_id hop_dir term rc
-  hop_id="$(echo "$task" | jq -r '.id')"
-  hop_dir="$chain_dir/hop-01-${hop_id}"
-  term="$(_ccs_dispatch_run_one "$task" "$cur" "$hop_dir")"; rc=$?
+  local depth=0 hop_n=1 visited=" $cur " hops='[]'
+  local term rc=0 stop_reason="" chain_outcome="accepted"
+  local hop_id hop_dir attempts hop_outcome next nxt ntask
+  while : ; do
+    hop_id="$(echo "$task" | jq -r '.id')"
+    hop_dir="$chain_dir/hop-$(printf '%02d' "$hop_n")-${hop_id}"
+    term="$(_ccs_dispatch_run_one "$task" "$cur" "$hop_dir")"; rc=$?
+    attempts="$(jq -r '.attempts' "$hop_dir/final.json")"
+    hop_outcome="$(jq -r '.outcome' "$hop_dir/final.json")"
+    hops="$(jq -n --argjson h "$hops" --argjson n "$hop_n" \
+      --arg id "$hop_id" --arg o "$hop_outcome" --argjson a "$attempts" \
+      --arg d "$hop_dir" \
+      '$h + [{hop:$n, task_id:$id, outcome:$o, attempts:$a, dir:$d}]')"
 
-  jq -n --arg cid "$(basename "$chain_dir")" \
-    --arg o "$(jq -r '.outcome' "$hop_dir/final.json")" \
-    '{chain_id:$cid, outcome:$o}' > "$chain_dir/chain.json"
+    if [ "$term" != "PASS" ]; then          # ESCALATE / HARD_STOP
+      chain_outcome="$hop_outcome"; stop_reason="$term"; break
+    fi
+
+    next="$(echo "$task" | jq -r '.next // empty')"
+    stop_reason="$(_ccs_dispatch_chain_stop_reason \
+      "handoff-ready" "done" "$next" "$depth" "$max")"
+    [ -n "$stop_reason" ] && break          # empty-next (complete) / depth
+
+    nxt="$(_ccs_dispatch_resolve_next "$cur" "$next")"
+    case "$visited" in *" $nxt "*) stop_reason="cycle"; break ;; esac
+    if ! ntask="$(_ccs_dispatch_gate_load_task "$nxt" 2>/dev/null)"; then
+      stop_reason="failed"; break
+    fi
+    visited="$visited$nxt "
+    task="$ntask"; cur="$nxt"; depth=$((depth + 1)); hop_n=$((hop_n + 1))
+  done
+
+  jq -n --arg cid "$(basename "$chain_dir")" --argjson hops "$hops" \
+    --arg sr "$stop_reason" --arg o "$chain_outcome" --argjson d "$depth" \
+    '{chain_id:$cid, hops:$hops, stopped_at_hop:($hops|length),
+      stop_reason:$sr, outcome:$o, depth:$d}' \
+    > "$chain_dir/chain.json"
   echo "$chain_dir"
   return "$rc"
 }
