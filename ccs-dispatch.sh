@@ -294,10 +294,11 @@ _ccs_dispatch_run_worker() {
 # the terminal verdict word; rc 0 accepted / 10 escalated / 11 hard_stop.
 _ccs_dispatch_run_one() {
   local task="$1" task_yaml="$2" hop_dir="$3"
-  local cwd budget goal timeout_sec
+  local cwd budget goal timeout_sec executor
   cwd="$(echo "$task" | jq -r '.scope.cwd // "."')"
   budget="$(echo "$task" | jq -r ".execution_policy.loop_budget // $CCS_DISPATCH_GATE_LOOP_BUDGET")"
   goal="$(echo "$task" | jq -r '.goal')"
+  executor="$(echo "$task" | jq -r '.executor // "claude"')"
   timeout_sec="$(echo "$task" | jq -r '.execution_policy.timeout_sec // empty')"
   [ -z "$timeout_sec" ] && timeout_sec="$CCS_DISPATCH_TIMEOUT"
 
@@ -317,7 +318,7 @@ _ccs_dispatch_run_one() {
     fi
     printf '%s' "$prompt" > "$ad/prompt.md"
 
-    _ccs_dispatch_run_worker "$cwd" "$prompt" "$hop_dir" "$attempt" "$timeout_sec"
+    _ccs_dispatch_run_worker "$cwd" "$prompt" "$hop_dir" "$attempt" "$timeout_sec" "$executor"
     verdict="$(_ccs_dispatch_gate_run "$cwd" "$task" "$ad" "$attempt" "$budget")"
 
     case "$verdict" in
