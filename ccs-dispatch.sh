@@ -500,6 +500,41 @@ HELP
   return "$rc"
 }
 
+# Public entry: expand a chain-spec YAML into a next:-linked set of task.yaml
+# files (deterministic; no execution). Print the entry task path to stdout so it
+# composes: ccs-dispatch-run "$(ccs-dispatch-plan spec.yaml)". Two-step by design:
+# the human inspects the generated chain before dispatching.
+ccs-dispatch-plan() {
+  local spec="${1:-}" out=""
+  if [ -z "$spec" ] || [ "$spec" = "-h" ] || [ "$spec" = "--help" ]; then
+    cat <<'HELP'
+Usage: ccs-dispatch-plan <chain-spec.yaml> [--out <dir>]
+  Expand a structured chain-spec into a next:-linked set of task.yaml files
+  (deterministic; does NOT dispatch). Prints the entry task path to stdout.
+  Then inspect the files and run:  ccs-dispatch-run <entry-path>
+  Default out dir: <dir-of-spec>/chain
+HELP
+    [ -z "$spec" ] && return 1 || return 0
+  fi
+  shift
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --out)
+        [ $# -ge 2 ] || { echo "ccs-dispatch-plan: --out needs a value" >&2; return 1; }
+        out="$2"; shift 2 ;;
+      *) echo "ccs-dispatch-plan: unknown arg: $1" >&2; return 1 ;;
+    esac
+  done
+  [ -f "$spec" ] || { echo "ccs-dispatch-plan: spec not found: $spec" >&2; return 1; }
+  [ -z "$out" ] && out="$(dirname "$(_ccs_dispatch_abspath "$spec")")/chain"
+  local entry
+  entry="$(_ccs_dispatch_plan_generate "$spec" "$out")" || return 1
+  local -a _hops=("$out"/hop-*.task.yaml); local n="${#_hops[@]}"
+  echo "ccs-dispatch-plan: generated $n hop(s) -> $out" >&2
+  echo "ccs-dispatch-plan: dispatch with: ccs-dispatch-run $entry" >&2
+  echo "$entry"
+}
+
 # ── Job ID: d-YYYYMMDD-HHMMSS-XXXX ──
 _ccs_dispatch_job_id() {
   printf 'd-%s-%s' \
