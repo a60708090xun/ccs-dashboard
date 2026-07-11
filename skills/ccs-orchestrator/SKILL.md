@@ -55,6 +55,7 @@ description: "MANDATORY for any ccs-* command execution. Never run ccs-* command
 | dispatch [dir] "task" | dp | `ccs-dispatch --project <dir> "task"` — 派工到新 session |
 | jobs | j | `ccs-jobs` — dispatch 任務歷史 |
 | job <id> | | `ccs-jobs <id>` — 單筆結果（精簡：summary + artifact 路徑；`--full` 看完整輸出） |
+| dispatch-plan <spec.yaml> | dpp | `ccs-dispatch-plan <spec.yaml>` — 把 chain-spec 展開成 next:-linked task.yaml 鏈（只產檔、不派工） |
 | dispatch-run <task.yaml> | dpr | `ccs-dispatch-run <task.yaml>` — 帶 review gate + 鏈結派工 (gated task chain) |
 | review [sid] | rv | `ccs-review [sid]` — session review 報告 |
 | review html [sid] | | `ccs-review [sid] --format html -o <path>` — HTML 報告 |

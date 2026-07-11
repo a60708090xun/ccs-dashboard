@@ -80,6 +80,7 @@ ccs-dashboard 分兩層：
 | `ccs-health` | Session 健康偵測 — 偵測注意力退化信號 |
 | `ccs-dispatch` | 派發任務到新的 Claude Code session（async 或 sync） |
 | `ccs-jobs` | 查看 dispatch 任務歷史與結果 |
+| `ccs-dispatch-plan` | 把 chain-spec 展開成 next:-linked task.yaml 鏈（只產檔、不派工） |
 | `ccs-dispatch-run` | 帶 review gate + 鏈結派工（gated task-list chaining，task.yaml） |
 | `ccs-review` | Session 回顧報告 — 統計、對話、LLM 摘要（md/html/pdf） |
 | `ccs-project` | 專案層級洞察報告 — 成本、進度、節奏、程式碼變動（md/html） |
