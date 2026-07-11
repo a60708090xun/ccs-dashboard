@@ -627,6 +627,10 @@ hops:
 
 ## ccs-dispatch-run
 
+> Agent 呼叫端協定（何時用、四步流程、Stage 2 紀律）見
+> `skills/ccs-dispatch-run/SKILL.md`；task.yaml 契約見其
+> `references/task-yaml.md`。
+
 Deterministic review-gate dispatch（review-gate：gate + 鏈結派工）。把「派工 → 以現實驗收 → 失敗重派一次」包成一個前景指令，且支援**同步 gated task-list 鏈結（gated task-list chain）**：當前任務驗收 PASS 後，會跟隨 `next:` 欄位自動執行並驗收下一個任務。這與非驗收的、非同步的 `--chain`（agentpager 快速通道）是完全獨立的兩層。
 
 ```bash
@@ -663,7 +667,7 @@ id: task-x                      # slug，也是 run-id 前綴
 goal: "新增 greeter 並被 CLI 呼叫"
 scope:
   cwd: "/abs/path/to/project"   # worker 執行與 gate 驗收的目錄
-executor: gemini                # 可選：claude(預設) | gemini。gemini 以 `gemini -p ... --approval-mode yolo` 跑（headless 無 tty，需 auto-approve；gate 為信任邊界，見 §8.4）
+executor: gemini                # 可選：claude(預設) | gemini。兩者皆 auto-approve 跑 headless（claude `--permission-mode bypassPermissions`、gemini `--approval-mode yolo`）— 無 tty 下權限 prompt 會卡到 timeout；gate 為信任邊界，見 §8.4
 next: "task-y.yaml"             # 可選：下一個要自動執行與驗收的任務路徑（相對於此 yaml）
 execution_policy:
   loop_budget: 1                # 重派上限（預設 1 = 共 2 attempts）
