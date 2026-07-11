@@ -581,6 +581,50 @@ ccs-jobs <job-id> --full  # 單筆詳情並內嵌完整 .md 輸出
 - **handoff-ready 提示**：單筆 view 對 `handoff-ready` job 會提示 `.handoff` 路徑與接力
   `ccs-dispatch` 範本（auto-chain 為 v2）。
 
+## ccs-dispatch-plan
+
+把一份結構化的 **chain-spec** YAML 確定性展開為一組 `next:`-linked 的 `task.yaml`，
+讓「Claude 定案的計畫」不必逐檔手寫就能交給 `ccs-dispatch-run`。此指令**只產檔、不派工**
+（兩步設計：產檔後由人檢查展開結果，再另跑 `ccs-dispatch-run`）。
+
+```bash
+ccs-dispatch-plan <chain-spec.yaml> [--out <dir>]
+```
+
+**chain-spec 格式（單一檔案）：**
+
+```yaml
+defaults:                          # 所有 hop 共用，逐 hop 可覆寫
+  scope: { cwd: "/abs/project" }
+  executor: gemini                 # 選用；omitted => claude
+  execution_policy: { loop_budget: 1 }   # 選用
+hops:
+  - id: hop1
+    goal: "建立 hello.txt 內容 hello"
+    acceptance_criteria:
+      - { id: AC1, text: "檔案存在", verify: { cmd: "test -f hello.txt" } }
+  - id: hop2
+    goal: "附加第二行 world"
+    executor: claude               # 覆寫此 hop 的 executor
+    acceptance_criteria:
+      - { id: AC1, text: "第二行為 world", verify: { cmd: "test \"$(sed -n 2p hello.txt)\" = world" } }
+```
+
+**展開規則（確定性）：**
+
+- 每 hop → `<out>/hop-NN-<id>.task.yaml`（1-based、zero-padded）。
+- `defaults` 併入每個 hop；hop 層級同名 key 覆寫整個該 key。
+- 依 hops 順序自動串 `next:`（下一 hop 的檔名）；最後一 hop 無 `next:`。
+- out dir 預設 `<spec 所在目錄>/chain`，可 `--out` 覆寫。
+- 每份產出立即以 gate 自身的 task loader 驗證（≥1 AC、≥1 `verify.cmd`、
+  executor ∈ {claude,gemini}、AC id 唯一）。任一 hop 不合法 → 不產出任何檔、非零 exit。
+- 成功時 entry path（`hop-01-*`）印到 stdout，可直接組合：
+  `ccs-dispatch-run "$(ccs-dispatch-plan spec.yaml)"`。
+
+> **命名注意：** 產出的來源檔 `hop-NN-<id>.task.yaml` 與 `ccs-dispatch-run` 執行時
+> 凍結的證據目錄 `hop-NN-<id>/` 名稱相近但**不同東西**：前者是可供人檢查的鏈結來源，
+> 後者是每次執行凍結的副本＋gate 證據（在 `.../dispatch/runs/` 下）。
+
 ## ccs-dispatch-run
 
 Deterministic review-gate dispatch（review-gate：gate + 鏈結派工）。把「派工 → 以現實驗收 → 失敗重派一次」包成一個前景指令，且支援**同步 gated task-list 鏈結（gated task-list chain）**：當前任務驗收 PASS 後，會跟隨 `next:` 欄位自動執行並驗收下一個任務。這與非驗收的、非同步的 `--chain`（agentpager 快速通道）是完全獨立的兩層。
