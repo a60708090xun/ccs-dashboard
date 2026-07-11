@@ -32,8 +32,9 @@ cd ~/tools/ccs-dashboard
 # 在 .bashrc 加入：
 source ~/tools/ccs-dashboard/ccs-dashboard.sh
 
-# Skill symlink（選用）：
+# Skill symlinks（選用）：
 ln -s ~/tools/ccs-dashboard/skills/ccs-orchestrator ~/.claude/skills/ccs-orchestrator
+ln -s ~/tools/ccs-dashboard/skills/ccs-dispatch-run ~/.claude/skills/ccs-dispatch-run
 ```
 
 接著直接問 Claude：

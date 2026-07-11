@@ -32,8 +32,9 @@ Or wire it up manually:
 # Add to .bashrc:
 source ~/tools/ccs-dashboard/ccs-dashboard.sh
 
-# Skill symlink (optional):
+# Skill symlinks (optional):
 ln -s ~/tools/ccs-dashboard/skills/ccs-orchestrator ~/.claude/skills/ccs-orchestrator
+ln -s ~/tools/ccs-dashboard/skills/ccs-dispatch-run ~/.claude/skills/ccs-dispatch-run
 ```
 
 Then just ask Claude:
