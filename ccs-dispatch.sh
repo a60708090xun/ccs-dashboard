@@ -345,14 +345,16 @@ _ccs_dispatch_run_worker() {
   local timeout_sec="${5:-$CCS_DISPATCH_TIMEOUT}" executor="${6:-claude}"
   local ad="$run_dir/attempt-$(printf '%02d' "$attempt")"
   mkdir -p "$ad"
-  # gemini needs --approval-mode yolo: headless has no tty, so without
-  # auto-approve it cannot run edit tools. The deterministic gate re-runs every
-  # verify.cmd against ground truth, so a yolo false-success is caught (see
+  # Both executors need auto-approve: headless has no tty, so a permission
+  # prompt hangs until the wall-clock timeout (claude -p without a permission
+  # mode stalls on the first edit tool and produces zero output/changes). The
+  # deterministic gate re-runs every verify.cmd against ground truth, so an
+  # auto-approved false-success is caught (see
   # docs/case-studies/gemini-yolo-overconfidence.md). claude is the default.
   local cmd
   case "$executor" in
     gemini) cmd=(gemini -p "$prompt" --approval-mode yolo) ;;
-    *)      cmd=(claude -p "$prompt") ;;
+    *)      cmd=(claude -p "$prompt" --permission-mode bypassPermissions) ;;
   esac
   (cd "$cwd" && timeout "$timeout_sec" "${cmd[@]}") \
     > "$ad/executor-output.md" 2>&1 || true
