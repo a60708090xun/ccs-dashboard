@@ -190,6 +190,7 @@ do_install() {
   echo "  ccs-health          — session health detection"
   echo "  ccs-dispatch        — dispatch task to Code CLI (Claude Code)"
   echo "  ccs-jobs            — view dispatch job history"
+  echo "  ccs-dispatch-plan   — expand a chain-spec into a next:-linked task.yaml chain (no dispatch)"
   echo "  ccs-dispatch-run    — dispatch with review gate + gated task-list chaining (task.yaml)"
   echo "  ccs-review          — session review report (md/html/pdf)"
   echo "  ccs-project         — per-project insight report (md/html)"
