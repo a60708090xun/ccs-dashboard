@@ -104,6 +104,80 @@ _ccs_dispatch_gate_load_task() {
   echo "$js"
 }
 
+# Deterministically expand a chain-spec YAML into per-hop task.yaml files in
+# <dest_dir>. Merges spec.defaults into each hop (hop keys override), wires next:
+# in hops order (last hop has none), names files hop-NN-<id>.task.yaml. Echoes the
+# entry filename (basename of hop-01). rc 1 on unparseable spec / no hops / hop
+# missing id. Does NOT validate AC/executor -- that is delegated to load_task by the
+# caller. python3+pyyaml here so emitted YAML round-trips through load_task's parser.
+_ccs_dispatch_plan_expand() {
+  local spec="$1" dest="$2"
+  [ -f "$spec" ] || { echo "plan: spec not found: $spec" >&2; return 1; }
+  mkdir -p "$dest" || return 1
+  python3 - "$spec" "$dest" <<'PY'
+import sys, os, re, yaml
+spec_path, dest = sys.argv[1], sys.argv[2]
+try:
+    spec = yaml.safe_load(open(spec_path)) or {}
+except Exception as e:
+    sys.stderr.write("plan: spec YAML parse failed: %s\n" % e); sys.exit(1)
+defaults = spec.get("defaults") or {}
+hops = spec.get("hops")
+if not isinstance(hops, list) or not hops:
+    sys.stderr.write("plan: spec has no non-empty 'hops' list\n"); sys.exit(1)
+# precompute filenames (need next hop's name for next: wiring). hop id becomes a
+# filename, so require the same token set the gate enforces on AC ids.
+names = []
+for i, hop in enumerate(hops):
+    if not isinstance(hop, dict):
+        sys.stderr.write("plan: hop %d is not a mapping\n" % (i + 1)); sys.exit(1)
+    hid = hop.get("id")
+    if not isinstance(hid, str) or not re.match(r"^[A-Za-z0-9_.-]+$", hid):
+        sys.stderr.write("plan: hop %d has missing or invalid 'id' "
+                         "(need ^[A-Za-z0-9_.-]+$)\n" % (i + 1)); sys.exit(1)
+    names.append("hop-%02d-%s.task.yaml" % (i + 1, hid))
+for i, hop in enumerate(hops):
+    merged = dict(defaults)      # shallow: hop keys override defaults keys
+    merged.update(hop)
+    if i + 1 < len(hops):
+        merged["next"] = names[i + 1]
+    else:
+        merged.pop("next", None)
+    with open(os.path.join(dest, names[i]), "w") as f:
+        yaml.safe_dump(merged, f, sort_keys=True, default_flow_style=False)
+sys.stdout.write(names[0])
+PY
+}
+
+# Expand a chain-spec into <out_dir> ONLY if every emitted hop passes the gate's
+# own task loader (reusing _ccs_dispatch_gate_load_task = the single source of
+# validation truth: >=1 AC, >=1 cmd-track AC, executor whitelist, next: type,
+# unique AC ids). Atomic: expand to a staging dir, validate all, move into place
+# on full success; on any failure remove staging and leave <out_dir> untouched.
+# Echoes the absolute entry task path on success.
+_ccs_dispatch_plan_generate() {
+  local spec="$1" out="$2"
+  local stage="${out%/}.staging.$$"
+  rm -rf "$stage"
+  local entry
+  entry="$(_ccs_dispatch_plan_expand "$spec" "$stage")" || { rm -rf "$stage"; return 1; }
+  local f
+  for f in "$stage"/hop-*.task.yaml; do
+    if ! _ccs_dispatch_gate_load_task "$f" >/dev/null 2>&1; then
+      echo "plan: generated task failed gate validation: $(basename "$f")" >&2
+      rm -rf "$stage"; return 1
+    fi
+  done
+  mkdir -p "$out" || { rm -rf "$stage"; return 1; }
+  # Refresh: drop hop-*.task.yaml from a prior generation so a shorter/renamed
+  # chain does not leave orphan hops behind (only our own pattern; unrelated
+  # files in <out> are left alone). Validation already passed, so this is safe.
+  rm -f "$out"/hop-*.task.yaml
+  mv "$stage"/hop-*.task.yaml "$out"/ || { rm -rf "$stage"; return 1; }
+  rm -rf "$stage"
+  echo "$(_ccs_dispatch_abspath "$out/$entry")"
+}
+
 # Run one acceptance criterion against ground truth. cmd track: `bash -c <cmd>`
 # with cwd=<cwd>, bounded by <timeout_sec> (0 = unbounded), exit 0 = PASS /
 # non-zero = FAIL (a timeout returns 124 -> FAIL). guidance track: no execution,
