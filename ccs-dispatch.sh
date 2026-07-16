@@ -98,7 +98,11 @@ _ccs_dispatch_gate_load_task() {
     and (any(.acceptance_criteria[]; (.verify.cmd // "") != ""))
     and ((.next == null) or (.next | type == "string" and (length > 0)))
     and ((.executor == null) or
-         (.executor | type == "string" and (. == "claude" or . == "gemini")))
+         (.executor | type == "string"
+          and (. == "claude" or . == "gemini" or . == "wingman")))
+    and (if .executor == "wingman"
+         then (.plan | type == "string" and (length > 0))
+         else (.plan == null) end)
   ' >/dev/null 2>&1 \
     || { echo "gate: task validation failed: $yaml" >&2; return 1; }
   echo "$js"
@@ -343,21 +347,31 @@ _ccs_dispatch_chain_alloc_dir() {
 _ccs_dispatch_run_worker() {
   local cwd="$1" prompt="$2" run_dir="$3" attempt="$4"
   local timeout_sec="${5:-$CCS_DISPATCH_TIMEOUT}" executor="${6:-claude}"
+  local plan_abs="${7:-}"
   local ad="$run_dir/attempt-$(printf '%02d' "$attempt")"
   mkdir -p "$ad"
-  # Both executors need auto-approve: headless has no tty, so a permission
+  # claude/gemini need auto-approve: headless has no tty, so a permission
   # prompt hangs until the wall-clock timeout (claude -p without a permission
   # mode stalls on the first edit tool and produces zero output/changes). The
   # deterministic gate re-runs every verify.cmd against ground truth, so an
   # auto-approved false-success is caught (see
   # docs/case-studies/gemini-yolo-overconfidence.md). claude is the default.
+  # wingman is file-driven (plan.md in, .wingman/result.md out) and ignores
+  # the prompt; --exit-status maps overall_status to the exit code, which is
+  # recorded as evidence only -- the gate stays the sole verdict source.
   local cmd
   case "$executor" in
-    gemini) cmd=(gemini -p "$prompt" --approval-mode yolo) ;;
-    *)      cmd=(claude -p "$prompt" --permission-mode bypassPermissions) ;;
+    gemini)  cmd=(gemini -p "$prompt" --approval-mode yolo) ;;
+    wingman) cmd=(wingman execute --plan "$plan_abs" --exit-status) ;;
+    *)       cmd=(claude -p "$prompt" --permission-mode bypassPermissions) ;;
   esac
+  local wrc=0
   (cd "$cwd" && timeout "$timeout_sec" "${cmd[@]}") \
-    > "$ad/executor-output.md" 2>&1 || true
+    > "$ad/executor-output.md" 2>&1 || wrc=$?
+  if [ "$executor" = "wingman" ]; then
+    echo "$wrc" > "$ad/executor-exit-code"
+    cp "$cwd/.wingman/result.md" "$ad/wingman-result.md" 2>/dev/null || true
+  fi
   (cd "$cwd" && git status --porcelain) > "$ad/git-status.txt" 2>/dev/null || true
   (cd "$cwd" && git diff) > "$ad/diff.patch" 2>/dev/null || true
   return 0
@@ -370,13 +384,21 @@ _ccs_dispatch_run_worker() {
 # the terminal verdict word; rc 0 accepted / 10 escalated / 11 hard_stop.
 _ccs_dispatch_run_one() {
   local task="$1" task_yaml="$2" hop_dir="$3"
-  local cwd budget goal timeout_sec executor
+  local cwd budget goal timeout_sec executor plan plan_abs=""
   cwd="$(echo "$task" | jq -r '.scope.cwd // "."')"
   budget="$(echo "$task" | jq -r ".execution_policy.loop_budget // $CCS_DISPATCH_GATE_LOOP_BUDGET")"
   goal="$(echo "$task" | jq -r '.goal')"
   executor="$(echo "$task" | jq -r '.executor // "claude"')"
   timeout_sec="$(echo "$task" | jq -r '.execution_policy.timeout_sec // empty')"
   [ -z "$timeout_sec" ] && timeout_sec="$CCS_DISPATCH_TIMEOUT"
+  plan="$(echo "$task" | jq -r '.plan // empty')"
+  # plan: resolves like next: -- against the ORIGINAL task file's directory,
+  # then passed absolute (the worker runs in scope.cwd, not here).
+  [ -n "$plan" ] && plan_abs="$(_ccs_dispatch_resolve_next "$task_yaml" "$plan")"
+  # RETRY feedback is prompt-prefixed, which wingman (file-driven) cannot
+  # consume; first version does not retry -- a gate FAIL escalates directly.
+  # Feedback via .wingman/feedback.md is a tracked followup.
+  [ "$executor" = "wingman" ] && budget=0
 
   mkdir -p "$hop_dir"
   cp "$task_yaml" "$hop_dir/task.yaml"   # freeze (§1)
@@ -394,7 +416,7 @@ _ccs_dispatch_run_one() {
     fi
     printf '%s' "$prompt" > "$ad/prompt.md"
 
-    _ccs_dispatch_run_worker "$cwd" "$prompt" "$hop_dir" "$attempt" "$timeout_sec" "$executor"
+    _ccs_dispatch_run_worker "$cwd" "$prompt" "$hop_dir" "$attempt" "$timeout_sec" "$executor" "$plan_abs"
     verdict="$(_ccs_dispatch_gate_run "$cwd" "$task" "$ad" "$attempt" "$budget")"
 
     case "$verdict" in
@@ -475,7 +497,8 @@ ccs-dispatch-run() {
 Usage: ccs-dispatch-run <task.yaml>
   Dispatch a worker, verify its output against the task's acceptance criteria
   (deterministic Stage-1 gate), retry once on FAIL with a machine-fact failure
-  summary, and record structured evidence under the dispatch runs/ tree. On a
+  summary (executor: wingman never retries -- a FAIL escalates directly), and
+  record structured evidence under the dispatch runs/ tree. On a
   PASS verdict, follow the task's optional next: field to run the next task
   (synchronous gated chain); the chain stops on non-PASS / empty-next / depth /
   cycle / next-load failure.
