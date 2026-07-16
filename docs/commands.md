@@ -615,9 +615,12 @@ hops:
 - 每 hop → `<out>/hop-NN-<id>.task.yaml`（1-based、zero-padded）。
 - `defaults` 併入每個 hop；hop 層級同名 key 覆寫整個該 key。
 - 依 hops 順序自動串 `next:`（下一 hop 的檔名）；最後一 hop 無 `next:`。
+- wingman hop 的 `plan:` 建議寫**絕對路徑**：hop 檔產出在 out dir（預設
+  `<spec 所在目錄>/chain/`），相對 `plan:` 會以 out dir 為基準解析，
+  以 spec 位置為心智模型寫相對路徑會 silently 錯位。
 - out dir 預設 `<spec 所在目錄>/chain`，可 `--out` 覆寫。
 - 每份產出立即以 gate 自身的 task loader 驗證（≥1 AC、≥1 `verify.cmd`、
-  executor ∈ {claude,gemini}、AC id 唯一）。任一 hop 不合法 → 不產出任何檔、非零 exit。
+  executor ∈ {claude,gemini,wingman}、AC id 唯一）。任一 hop 不合法 → 不產出任何檔、非零 exit。
 - 成功時 entry path（`hop-01-*`）印到 stdout，可直接組合：
   `ccs-dispatch-run "$(ccs-dispatch-plan spec.yaml)"`。
 
@@ -641,7 +644,7 @@ ccs-dispatch-run <task.yaml>
 
 1. **Dispatch：** 讀取並凍結 `task.yaml`（複製到鏈目錄下 `hop-NN-<task-id>/task.yaml`），依 `goal` 派 worker 到 `scope.cwd`。
 2. **Gate（Stage 1，零 LLM）：** 對 worker 改動後的 worktree 重跑每條 AC 的 `verify.cmd`（exit 0 = PASS，非零 = FAIL），寫結構化 evidence。裁決一律以重跑結果為準，不看 worker 自述。
-3. **單次重派：** gate 判 RETRY（有 FAIL 且 loop_budget 未耗盡）時，帶「上一輪失敗的 machine 事實摘要」重派一次；再失敗即 ESCALATE。
+3. **單次重派：** gate 判 RETRY（有 FAIL 且 loop_budget 未耗盡）時，帶「上一輪失敗的 machine 事實摘要」重派一次；再失敗即 ESCALATE。例外：`executor: wingman` 不重派（loop_budget 視同 0，gate FAIL 直接 ESCALATE）— 重派摘要走 prompt 前綴，檔案驅動的 wingman 吃不到；feedback 迴圈為 tracked followup。
 
 **同步鏈結迴圈（gated task-list chaining）：**
 當一個任務獲得 `PASS` 裁決後：
@@ -667,7 +670,8 @@ id: task-x                      # slug，也是 run-id 前綴
 goal: "新增 greeter 並被 CLI 呼叫"
 scope:
   cwd: "/abs/path/to/project"   # worker 執行與 gate 驗收的目錄
-executor: gemini                # 可選：claude(預設) | gemini。兩者皆 auto-approve 跑 headless（claude `--permission-mode bypassPermissions`、gemini `--approval-mode yolo`）— 無 tty 下權限 prompt 會卡到 timeout；gate 為信任邊界，見 §8.4
+executor: gemini                # 可選：claude(預設) | gemini | wingman。claude/gemini 皆 auto-approve 跑 headless（claude `--permission-mode bypassPermissions`、gemini `--approval-mode yolo`）— 無 tty 下權限 prompt 會卡到 timeout；gate 為信任邊界，見 §8.4
+plan: "plan.md"                 # 僅 executor: wingman（互為充要）：wingman plan.md 路徑，相對本檔所在目錄解析（同 next:）；由主 session 依 wingman plan-template 撰寫
 next: "task-y.yaml"             # 可選：下一個要自動執行與驗收的任務路徑（相對於此 yaml）
 execution_policy:
   loop_budget: 1                # 重派上限（預設 1 = 共 2 attempts）
@@ -696,6 +700,8 @@ ${XDG_DATA_HOME:-~/.local/share}/ccs-dashboard/dispatch/runs/<first-task-id>-cha
       executor-output.md # worker 原始輸出
       git-status.txt     # gate 當下 git status --porcelain
       diff.patch         # git diff
+      wingman-result.md  # 僅 wingman executor：scope.cwd/.wingman/result.md 凍結副本
+      executor-exit-code # 僅 wingman executor：wingman process exit code（純 evidence，不參與 verdict）
       gate/AC<n>.json    # per-AC 紀錄（verdict/exit/stdout tail…）
       gate/verdict.json  # gate verdict
     attempt-02/          # 重派時遞增；prompt.md 含前輪 FAIL 摘要
