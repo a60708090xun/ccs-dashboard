@@ -36,10 +36,14 @@ assert_eq "omitted rc 0" "0" "$rc2"
 assert_eq "omitted executor null" "null" "$(echo "$js2" | jq -r '.executor // "null"')"
 
 echo "=== unknown executor -> rc 1 ==="
-_ccs_dispatch_gate_load_task "$(mk bogus.yaml 'executor: wingman')" >/dev/null 2>&1
+_ccs_dispatch_gate_load_task "$(mk bogus.yaml 'executor: codex')" >/dev/null 2>&1
 assert_eq "unknown -> rc 1" "1" "$?"
 _ccs_dispatch_gate_load_task "$(mk typo.yaml 'executor: gemeni')" >/dev/null 2>&1
 assert_eq "typo -> rc 1" "1" "$?"
+
+echo "=== executor: wingman needs plan (full coverage in test-gate-wingman.sh) ==="
+_ccs_dispatch_gate_load_task "$(mk w.yaml 'executor: wingman')" >/dev/null 2>&1
+assert_eq "wingman without plan -> rc 1" "1" "$?"
 
 echo "=== non-string executor -> rc 1 ==="
 _ccs_dispatch_gate_load_task "$(mk numeric.yaml 'executor: 123')" >/dev/null 2>&1
