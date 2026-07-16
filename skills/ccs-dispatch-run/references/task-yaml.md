@@ -11,9 +11,10 @@
 | `id` | Yes | 非空字串；同時是 run 目錄名前綴 |
 | `goal` | Yes | 非空字串；worker 收到的任務描述全文 |
 | `scope.cwd` | No | worker 執行與 gate 驗收目錄；預設 `.`（呼叫時的 cwd）；建議寫絕對路徑 |
-| `executor` | No | `claude`（預設）\| `gemini`；頂層字串欄位。兩者皆以 auto-approve 跑 headless（gate 為信任邊界，見 SKILL.md § 邊界） |
+| `executor` | No | `claude`（預設）\| `gemini` \| `wingman`；頂層字串欄位。claude/gemini 以 auto-approve 跑 headless（gate 為信任邊界，見 SKILL.md § 邊界）；wingman 為本地 LLM 檔案驅動，需 `plan:` |
+| `plan` | 僅 wingman | 與 `executor: wingman` 互為充要（缺一驗證失敗）；wingman plan.md 路徑，相對**本檔所在目錄**解析（同 `next:`），執行時轉絕對路徑傳給 `wingman execute --plan`。plan 依 wingman plan-template 紀律由派工者撰寫 |
 | `next` | No | 下一個 task.yaml 路徑；相對路徑以**本檔所在目錄**解析 |
-| `execution_policy.loop_budget` | No | 重派上限；預設 1（共 2 attempts）；0 = 不重派 |
+| `execution_policy.loop_budget` | No | 重派上限；預設 1（共 2 attempts）；0 = 不重派。`executor: wingman` 一律視同 0（重派摘要走 prompt 前綴，wingman 吃不到；feedback 迴圈為 followup） |
 | `execution_policy.timeout_sec` | No | worker 與單條 AC 的 timeout；預設取 `CCS_DISPATCH_TIMEOUT`（600） |
 | `acceptance_criteria[]` | Yes | 非空陣列；規則見下 |
 

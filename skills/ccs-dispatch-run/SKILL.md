@@ -103,11 +103,19 @@ PASS 後自動跟 `next:`（相對於當前 task.yaml 所在目錄解析）。
 ## 邊界（現行實作 = Scope C）
 
 - gate + 單次重派；無 tier ladder（重派同 executor）
-- executor 僅 `claude`（預設）/ `gemini`；兩者皆以 auto-approve 跑
-  headless（claude `--permission-mode bypassPermissions`、gemini
+- executor 為 `claude`（預設）/ `gemini` / `wingman`；claude 與
+  gemini 以 auto-approve 跑 headless（claude
+  `--permission-mode bypassPermissions`、gemini
   `--approval-mode yolo`）— **gate 為信任邊界**：worker 全權限執行
   於 `scope.cwd`，假成功由 gate 重驗現實攔下；task 應只來自你自己
   的規劃，勿餵不受信任的 goal
+- `executor: wingman`（本地 LLM，免 quota）為檔案驅動：task 需帶
+  `plan:`（wingman plan.md 路徑，由你依 wingman plan-template 紀律
+  撰寫，plan 品質不由 dispatch-run 把關）。wingman 不吃 prompt 前綴
+  的重派摘要 → **不重派**（loop_budget 視同 0，gate FAIL 直接
+  ESCALATE）；wingman 的 `--exit-status` exit code 與
+  `.wingman/result.md` 凍結進 attempt evidence 供診斷，**不參與
+  verdict**（gate 是唯一裁決來源，worker 自述樂觀或悲觀皆不信）
 - `scope.allowed_paths` / `forbidden_paths` 未實作（僅 `scope.cwd`
   生效），worker 無路徑硬限制
 - worker 同步 headless 執行；agentpager async backend 未接入 gate 迴圈
