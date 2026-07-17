@@ -32,6 +32,9 @@
 
 ## AC 撰寫紀律
 
+- **反假陽性基線驗證**：count / pattern 類 AC 的門檻，先對
+  pre-change 基線跑過同一 predicate、確認改動前為 FAIL 再凍結——
+  否則 AC 可能改動前即 PASS，gate 對該面向失去裁決力
 - integration 類：驗「元件被呼叫」不只「檔案存在」
   （例：`grep -q 'from .greeter import' src/cli.py`）
 - 涉及 credential 的 task：加一條
