@@ -55,7 +55,10 @@ ccs-dispatch-run <task.yaml>
 - 鏈結時注意：exit `0` 只代表**已執行的 hops** 皆 PASS —
   `stop_reason` 為 `failed` / `depth` 時也回 0，是否完整跑完
   要查 `chain.json.stop_reason`
-- stdout 印 `run: <run-dir>` 與 outcome 摘要
+- stdout 印 `run: <run-dir>` 與 outcome 摘要，末尾附一行 advisory
+  `suggested trailer: X-Executor: <executor>/<model> (ccs-dispatch-run)`
+  （dispatched work 收尾 commit 時 copy 用；`model` 缺省則 executor-only，
+  詳 `references/task-yaml.md`）
 
 ### 3. 讀結果
 

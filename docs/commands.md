@@ -663,6 +663,8 @@ ccs-dispatch-run <task.yaml>
 - `ESCALATE` — budget 耗盡、或任一 AC ERROR
 - `HARD_STOP` — 破壞性操作（判定函式已支援）
 
+**收尾輸出（stdout）：** 除了 `run: <run-dir>` 與 `outcome:`／`chain:` 摘要，收尾另印一行 **advisory** commit trailer 供收尾 commit 的人 copy：`suggested trailer: X-Executor: <executor>/<model> (ccs-dispatch-run)`（`model` 缺省時退化為 executor-only、無斜線）。對所有終態皆印、chain 內每個 distinct `executor[/model]` 各印一行。純建議：dispatch-run 不 commit、不強制，語意與 `Co-Authored-By`（orchestrator 署名）正交。詳 `skills/ccs-dispatch-run/references/task-yaml.md`。
+
 **Task 檔案格式（`task.yaml`）：**
 
 ```yaml
@@ -671,6 +673,7 @@ goal: "新增 greeter 並被 CLI 呼叫"
 scope:
   cwd: "/abs/path/to/project"   # worker 執行與 gate 驗收的目錄
 executor: gemini                # 可選：claude(預設) | gemini | wingman。claude/gemini 皆 auto-approve 跑 headless（claude `--permission-mode bypassPermissions`、gemini `--approval-mode yolo`）— 無 tty 下權限 prompt 會卡到 timeout；gate 為信任邊界，見 §8.4
+model: "local-chat-35b"         # 可選（advisory）：本次執行的 model，供收尾 X-Executor provenance trailer 的 <model> 段；缺省則 trailer 退化為 executor-only。不影響派工行為
 plan: "plan.md"                 # 僅 executor: wingman（互為充要）：wingman plan.md 路徑，相對本檔所在目錄解析（同 next:）；由主 session 依 wingman plan-template 撰寫
 next: "task-y.yaml"             # 可選：下一個要自動執行與驗收的任務路徑（相對於此 yaml）
 execution_policy:
