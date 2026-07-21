@@ -100,6 +100,7 @@ _ccs_dispatch_gate_load_task() {
     and ((.executor == null) or
          (.executor | type == "string"
           and (. == "claude" or . == "gemini" or . == "wingman")))
+    and ((.model == null) or (.model | type == "string" and (length > 0)))
     and (if .executor == "wingman"
          then (.plan | type == "string" and (length > 0))
          else (.plan == null) end)
@@ -450,17 +451,23 @@ _ccs_dispatch_run() {
 
   local depth=0 hop_n=1 visited=" $cur " hops='[]'
   local term rc=0 stop_reason="" chain_outcome="accepted"
-  local hop_id hop_dir attempts hop_outcome next nxt ntask
+  local hop_id hop_dir attempts hop_outcome next nxt ntask hop_executor hop_model
   while : ; do
     hop_id="$(echo "$task" | jq -r '.id')"
     hop_dir="$chain_dir/hop-$(printf '%02d' "$hop_n")-${hop_id}"
     term="$(_ccs_dispatch_run_one "$task" "$cur" "$hop_dir")"; rc=$?
     attempts="$(jq -r '.attempts' "$hop_dir/final.json")"
     hop_outcome="$(jq -r '.outcome' "$hop_dir/final.json")"
+    # executor/model come from the hop's task (same source _ccs_dispatch_run_one
+    # reads); recording them in hops[] lets the summary suggest a provenance
+    # trailer without a YAML re-parse. model is "" when the task omits it.
+    hop_executor="$(echo "$task" | jq -r '.executor // "claude"')"
+    hop_model="$(echo "$task" | jq -r '.model // empty')"
     hops="$(jq -n --argjson h "$hops" --argjson n "$hop_n" \
       --arg id "$hop_id" --arg o "$hop_outcome" --argjson a "$attempts" \
-      --arg d "$hop_dir" \
-      '$h + [{hop:$n, task_id:$id, outcome:$o, attempts:$a, dir:$d}]')"
+      --arg d "$hop_dir" --arg ex "$hop_executor" --arg ml "$hop_model" \
+      '$h + [{hop:$n, task_id:$id, outcome:$o, attempts:$a, dir:$d,
+              executor:$ex, model:$ml}]')"
 
     if [ "$term" != "PASS" ]; then          # ESCALATE / HARD_STOP
       chain_outcome="$hop_outcome"; stop_reason="$term"; break
@@ -522,6 +529,16 @@ HELP
     sr="$(jq -r '.stop_reason' "$run_dir/chain.json")"
     echo "chain: $hops hops, outcome=$outcome, stop=$sr (see $run_dir/chain.json)"
   fi
+  # Advisory provenance: a copy-ready commit trailer attributing the dispatched
+  # executor (plus model when the task declared one). dispatch-run never commits
+  # -- this only suggests. One line per distinct executor[/model] across hops.
+  local combos c
+  combos="$(jq -r '.hops[]
+    | .executor + (if (.model // "") != "" then "/" + .model else "" end)' \
+    "$run_dir/chain.json" 2>/dev/null | sort -u)"
+  while IFS= read -r c; do
+    [ -n "$c" ] && echo "suggested trailer: X-Executor: $c (ccs-dispatch-run)"
+  done <<< "$combos"
   return "$rc"
 }
 

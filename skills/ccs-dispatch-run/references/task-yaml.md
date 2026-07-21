@@ -12,6 +12,7 @@
 | `goal` | Yes | 非空字串；worker 收到的任務描述全文 |
 | `scope.cwd` | No | worker 執行與 gate 驗收目錄；預設 `.`（呼叫時的 cwd）；建議寫絕對路徑 |
 | `executor` | No | `claude`（預設）\| `gemini` \| `wingman`；頂層字串欄位。claude/gemini 以 auto-approve 跑 headless（gate 為信任邊界，見 SKILL.md § 邊界）；wingman 為本地 LLM 檔案驅動，需 `plan:` |
+| `model` | No | 頂層字串欄位（advisory）；派工者宣告本次執行用的 model（如 wingman 的 `local-chat-35b`），供收尾 auto-suggest 的 `X-Executor` provenance trailer 填 `<model>` 段。缺省時 trailer 退化為 executor-only。不影響派工行為（script 不據此帶 `--model`） |
 | `plan` | 僅 wingman | 與 `executor: wingman` 互為充要（缺一驗證失敗）；wingman plan.md 路徑，相對**本檔所在目錄**解析（同 `next:`），執行時轉絕對路徑傳給 `wingman execute --plan`。plan 依 wingman plan-template 紀律由派工者撰寫 |
 | `next` | No | 下一個 task.yaml 路徑；相對路徑以**本檔所在目錄**解析 |
 | `execution_policy.loop_budget` | No | 重派上限；預設 1（共 2 attempts）；0 = 不重派。`executor: wingman` 一律視同 0（重派摘要走 prompt 前綴，wingman 吃不到；feedback 迴圈為 followup） |
@@ -101,3 +102,24 @@ hops:
 
 產出 `hop-01-step-one.task.yaml`、`hop-02-step-two.task.yaml`
 （自動 wire `next:`，末 hop 無），每檔皆過載入驗證才落地。
+`model` 走一般 dict merge（可放 `defaults` 或個別 hop），照常存活。
+
+## Executor provenance trailer（收尾 auto-suggest）
+
+`ccs-dispatch-run` 收尾時，除了 `run:` / `outcome:` 摘要，另印一行
+**advisory** commit trailer，供收尾 commit 的人直接 copy：
+
+```
+suggested trailer: X-Executor: <executor>/<model> (ccs-dispatch-run)
+```
+
+- `<executor>` 取自 task 的 `executor`（省略時為 `claude`）；`<model>`
+  取自 task 的 `model`，缺省時退化為 `X-Executor: <executor>
+  (ccs-dispatch-run)`（無斜線）。
+- 對所有終態（accepted / escalated / hard_stop）皆印——慣例涵蓋
+  escalate 後由 orchestrator 收尾 commit 的情形。
+- chain 內出現多個不同 executor 時，每個 distinct 的 `executor[/model]`
+  各印一行。
+- 純 advisory：dispatch-run 不 commit、不強制。此 trailer 與
+  `Co-Authored-By`（orchestrator 署名）語意正交，表「實作由哪個
+  dispatched executor 產出」；慣例只往前生效，不追改既有 commit。
