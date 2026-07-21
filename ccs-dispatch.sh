@@ -104,6 +104,12 @@ _ccs_dispatch_gate_load_task() {
     and (if .executor == "wingman"
          then (.plan | type == "string" and (length > 0))
          else (.plan == null) end)
+    and ((.backend == null) or
+         (.backend | type == "string"
+          and (. == "headless" or . == "agentpager")))
+    and (if .backend == "agentpager"
+         then (.executor != "wingman")
+         else true end)
   ' >/dev/null 2>&1 \
     || { echo "gate: task validation failed: $yaml" >&2; return 1; }
   echo "$js"
@@ -348,7 +354,16 @@ _ccs_dispatch_chain_alloc_dir() {
 _ccs_dispatch_run_worker() {
   local cwd="$1" prompt="$2" run_dir="$3" attempt="$4"
   local timeout_sec="${5:-$CCS_DISPATCH_TIMEOUT}" executor="${6:-claude}"
-  local plan_abs="${7:-}"
+  local plan_abs="${7:-}" backend="${8:-headless}"
+  # backend=agentpager routes the worker through the interactive local channel
+  # (foreground blocking spawn+wait), so a gate-run can BOTH verify+retry AND run
+  # its worker in a monitorable/interruptible tmux session (issue #91). The gate
+  # stays the sole verdict source; this only changes HOW the worker is spawned.
+  if [ "$backend" = "agentpager" ]; then
+    _ccs_dispatch_run_worker_agentpager \
+      "$cwd" "$prompt" "$run_dir" "$attempt" "$timeout_sec" "$executor"
+    return 0
+  fi
   local ad="$run_dir/attempt-$(printf '%02d' "$attempt")"
   mkdir -p "$ad"
   # claude/gemini need auto-approve: headless has no tty, so a permission
@@ -385,11 +400,14 @@ _ccs_dispatch_run_worker() {
 # the terminal verdict word; rc 0 accepted / 10 escalated / 11 hard_stop.
 _ccs_dispatch_run_one() {
   local task="$1" task_yaml="$2" hop_dir="$3"
-  local cwd budget goal timeout_sec executor plan plan_abs=""
+  local cwd budget goal timeout_sec executor backend plan plan_abs=""
   cwd="$(echo "$task" | jq -r '.scope.cwd // "."')"
   budget="$(echo "$task" | jq -r ".execution_policy.loop_budget // $CCS_DISPATCH_GATE_LOOP_BUDGET")"
   goal="$(echo "$task" | jq -r '.goal')"
   executor="$(echo "$task" | jq -r '.executor // "claude"')"
+  # backend: headless (default, synchronous headless CLI) or agentpager (the
+  # interactive local-channel worker, run in the foreground under the gate).
+  backend="$(echo "$task" | jq -r '.backend // "headless"')"
   timeout_sec="$(echo "$task" | jq -r '.execution_policy.timeout_sec // empty')"
   [ -z "$timeout_sec" ] && timeout_sec="$CCS_DISPATCH_TIMEOUT"
   plan="$(echo "$task" | jq -r '.plan // empty')"
@@ -417,7 +435,7 @@ _ccs_dispatch_run_one() {
     fi
     printf '%s' "$prompt" > "$ad/prompt.md"
 
-    _ccs_dispatch_run_worker "$cwd" "$prompt" "$hop_dir" "$attempt" "$timeout_sec" "$executor" "$plan_abs"
+    _ccs_dispatch_run_worker "$cwd" "$prompt" "$hop_dir" "$attempt" "$timeout_sec" "$executor" "$plan_abs" "$backend"
     verdict="$(_ccs_dispatch_gate_run "$cwd" "$task" "$ad" "$attempt" "$budget")"
 
     case "$verdict" in
@@ -1362,6 +1380,160 @@ _ccs_dispatch_spawn_agentpager() {
     echo $! > "$dispatch_dir/pids/${job_id}.pid"
     disown
   fi
+  return 0
+}
+
+# Foreground blocking wait for an agentpager worker under the gate loop (#91).
+# Unlike the async monitor, this runs inline (no nohup) and does NOT touch the
+# job board (jobs.jsonl): the gate verifies ground truth, so this only needs to
+# (1) wait for the worker to signal done via its handoff file, (2) reclaim the
+# single per-user seat, and (3) collect the worker's stream frames as evidence.
+# Bounded by <timeout> -- the gate path is autonomous, so a stuck worker must
+# not hang the run; the jobs path's D2 "no wall-clock kill" governs the attended
+# backend, a different entry point. rc 0 = handoff observed (clean completion);
+# rc 1 = timeout / worker gone with no handoff / session never appeared. The seat
+# is reclaimed on any still-alive exit (retry-once, mirroring the async monitor).
+_ccs_dispatch_agentpager_wait_and_collect() {
+  local key="$1" pager_dir="$2" handoff_src="$3" sig="$4" stream="$5"
+  local start_offset="$6" dest="$7"
+  local startup="${8:-${CCS_DISPATCH_AGENTPAGER_STARTUP:-60}}"
+  local timeout="${9:-$CCS_DISPATCH_TIMEOUT}"
+  local tmux_session="agent-pager-$key"
+  local poll="${CCS_DISPATCH_AGENTPAGER_POLL:-3}"
+  [ "$poll" -ge 1 ] 2>/dev/null || poll=1   # a 0/invalid poll would spin forever
+  local stop_wait="${CCS_DISPATCH_AGENTPAGER_STOP_WAIT:-30}"
+  local state_json="$pager_dir/state/sessions/$key.json"
+  local rc=1 waited=0
+
+  # Phase A -- startup grace: the daemon starts the worker's tmux session a few
+  # seconds after the launch is written, so wait for it to appear (or an ultra-
+  # fast worker to have already dropped the handoff) before the completion loop.
+  while [ "$waited" -lt "$startup" ]; do
+    _ccs_dispatch_agentpager_session_alive "$tmux_session" && break
+    [ -f "$handoff_src" ] && break
+    sleep 1; waited=$((waited + 1))
+  done
+
+  # Re-resolve the handoff path against the cwd agent-pager ACTUALLY ran the
+  # worker in (its state json is the authority), so a proj-map / whitelist cwd
+  # mismatch cannot make us watch the wrong path (parity with the async monitor).
+  if [ -r "$state_json" ]; then
+    local real_cwd
+    real_cwd="$(jq -r '.cwd // empty' "$state_json" 2>/dev/null)"
+    [ -n "$real_cwd" ] && [ -d "$real_cwd" ] && \
+      handoff_src="$real_cwd/tmp/handoff-${sig}.md"
+  fi
+
+  # Phase B -- bounded completion: handoff appears, the wait times out, or the
+  # worker ends its own session.
+  waited=0
+  while _ccs_dispatch_agentpager_session_alive "$tmux_session"; do
+    [ -f "$handoff_src" ] && break
+    [ "$waited" -ge "$timeout" ] && break
+    sleep "$poll"; waited=$((waited + poll))
+  done
+
+  if [ -f "$handoff_src" ]; then
+    # Let the worker's turn-end frames flush before stopping (an eager stop
+    # truncates the captured output), copy the handoff as evidence (from the
+    # re-resolved path), then mark clean completion.
+    _ccs_dispatch_agentpager_wait_settle "$stream"
+    cp "$handoff_src" "$(dirname "$dest")/handoff.md" 2>/dev/null || true
+    rc=0
+  fi
+
+  # Reclaim the single per-user seat if the worker is still up (timeout, or a
+  # handoff written mid-turn without self-exit). Retry once; if it still will
+  # not die, leave an operator note (parity with the async monitor) so the
+  # orphaned seat is reclaimed manually rather than silently blocking retries.
+  if _ccs_dispatch_agentpager_session_alive "$tmux_session"; then
+    _ccs_dispatch_agentpager_stop_file "$key" "$pager_dir" >/dev/null
+    _ccs_dispatch_agentpager_wait_gone "$tmux_session" "$stop_wait"
+    if _ccs_dispatch_agentpager_session_alive "$tmux_session"; then
+      _ccs_dispatch_agentpager_stop_file "$key" "$pager_dir" >/dev/null
+      _ccs_dispatch_agentpager_wait_gone "$tmux_session" "$stop_wait"
+      _ccs_dispatch_agentpager_session_alive "$tmux_session" && \
+        printf 'worker session did not stop; reclaim manually (tmux %s)\n' \
+          "$tmux_session" > "$(dirname "$dest")/agentpager-reclaim-note.txt"
+    fi
+  fi
+
+  _ccs_dispatch_agentpager_collect "$stream" "$start_offset" "$dest"
+  return "$rc"
+}
+
+# SPAWN SEAM agentpager branch (#91): spawn the worker on the interactive local
+# channel and BLOCK in the foreground until it signals done, capturing evidence
+# into attempt-NN/ (mirrors the headless seam). Reuses the async backend's
+# low-level helpers but not its async monitor / job-board finalize. Each gate
+# attempt calls this fresh with the (feedback-prefixed) prompt, so retry == a
+# fresh interactive hop (Option B). The worker's rc is evidence only; the
+# deterministic gate that runs next is the sole verdict source.
+_ccs_dispatch_run_worker_agentpager() {
+  local cwd="$1" prompt="$2" run_dir="$3" attempt="$4"
+  local timeout_sec="${5:-$CCS_DISPATCH_TIMEOUT}" cli="${6:-claude}"
+  local ad="$run_dir/attempt-$(printf '%02d' "$attempt")"
+  mkdir -p "$ad"
+
+  # Fast-fail if the daemon is not available: without it no worker ever starts,
+  # so waiting out the startup grace per attempt only delays the inevitable gate
+  # FAIL. No fallback to headless -- an explicit backend request is honored or
+  # escalated, not degraded.
+  if ! _ccs_dispatch_agentpager_available; then
+    printf 'agent-pager backend not available (daemon down or spool missing)\n' \
+      > "$ad/agentpager-error.txt"
+    return 0
+  fi
+
+  # Resolve the proj KEY agent-pager maps to a cwd (its RCE whitelist). No entry
+  # / seat busy -> record why and return; the worker never ran, so the gate FAILs
+  # against ground truth (same terminal path as a no-op headless worker). No
+  # silent fallback to headless: an explicit backend request is honored or
+  # escalated, not degraded.
+  local proj
+  if ! proj="$(_ccs_dispatch_resolve_proj_from_dir "$cwd")"; then
+    printf 'no proj-map entry for %s\n' "$cwd" > "$ad/agentpager-error.txt"
+    return 0
+  fi
+  local pager_dir="${AGENT_PAGER_DIR:-$HOME/.agent-pager}"
+  local key; key="local-$(id -un)"
+  if _ccs_dispatch_agentpager_session_alive "agent-pager-$key"; then
+    printf 'a local agent-pager worker (agent-pager-%s) is already running\n' \
+      "$key" > "$ad/agentpager-error.txt"
+    return 0
+  fi
+
+  # Per-attempt completion signal, so a retry's wait cannot read the previous
+  # attempt's stale handoff. Clear any pre-existing one (belt-and-suspenders).
+  local sig; sig="$(basename "$run_dir")-a$(printf '%02d' "$attempt")"
+  local handoff_src="$cwd/tmp/handoff-${sig}.md"
+  rm -f "$handoff_src" 2>/dev/null || true
+
+  local stream="$pager_dir/channels/$key/out.stream"
+  local start_offset=0
+  [ -f "$stream" ] && start_offset="$(stat -c %s "$stream" 2>/dev/null || echo 0)"
+
+  # Wrap the attempt prompt with the handoff-gating rule so the worker writes
+  # tmp/handoff-<sig>.md as its done-signal (the prompt already carries the §6
+  # feedback for attempt >= 2).
+  local worker_prompt
+  worker_prompt="$(_ccs_dispatch_agentpager_prompt "$sig" "$prompt")"
+  if ! _ccs_dispatch_agentpager_launch_file \
+        "$sig" "$proj" "$key" "$worker_prompt" "$pager_dir" "$cli" \
+        > "$ad/launch-file.txt" 2>/dev/null; then
+    printf 'failed to write agent-pager launch\n' > "$ad/agentpager-error.txt"
+    return 0
+  fi
+
+  local wrc=0
+  _ccs_dispatch_agentpager_wait_and_collect "$key" "$pager_dir" "$handoff_src" \
+    "$sig" "$stream" "$start_offset" "$ad/executor-output.md" \
+    "${CCS_DISPATCH_AGENTPAGER_STARTUP:-60}" "$timeout_sec" || wrc=$?
+  printf '%s\n' "$wrc" > "$ad/agentpager-wait-rc"
+
+  # Ground-truth evidence (mirrors the headless seam).
+  (cd "$cwd" && git status --porcelain) > "$ad/git-status.txt" 2>/dev/null || true
+  (cd "$cwd" && git diff) > "$ad/diff.patch" 2>/dev/null || true
   return 0
 }
 
