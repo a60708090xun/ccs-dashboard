@@ -210,4 +210,42 @@ printf '# md\n' > "$DD/results/d-plain.md"
 po="$(ccs-jobs d-plain 2>/dev/null)"
 assert_not_contains "no Chain line for a plain job" "$po" "**Chain:**"
 
+echo "=== chain hop inherits the cli selector (AC4: gemini stays gemini) ==="
+reset_jobs
+acli_proj="$SCRIPT_DIR/tmp/test-chain-cli-proj"; mkdir -p "$acli_proj/tmp"
+acli_map="$SCRIPT_DIR/tmp/test-chain-cli-map"
+printf 'ccs-dashboard = %s\n' "$acli_proj" > "$acli_map"
+acli_pager="$SCRIPT_DIR/tmp/test-chain-cli-pager"; mkdir -p "$acli_pager/inbound"
+acli_cap="$SCRIPT_DIR/tmp/test-chain-cli.cap"; : > "$acli_cap"
+PAR="d-chain-cli-head"
+_ccs_dispatch_jsonl_append "$(jq -nc --arg jid "$PAR" --arg ca "$(date -Iseconds)" \
+  '{job_id:$jid,project:"ccs-dashboard",backend:"agentpager",created_at:$ca,
+    status:"handoff-ready",chain:true,chain_depth:0,chain_max:5}')"
+printf -- '---\noutcome: done\nnext: second step\n---\nbody\n' > "$DD/results/${PAR}.handoff"
+# Capture the cli arg (slot 6) the hop's launch receives; no-op the monitor re-entry.
+_ccs_dispatch_agentpager_launch_file() { printf '%s' "${6:-}" > "$acli_cap"; printf 'stub\n'; }
+_ccs_dispatch_agentpager_monitor() { :; }
+CCS_DISPATCH_PROJ_MAP="$acli_map" AGENT_PAGER_DIR="$acli_pager" CCS_DISPATCH_NOTIFY=0 \
+  _ccs_dispatch_chain_next "$PAR" "local-tester" "$acli_proj" "$acli_pager" 0 5 gemini
+assert_eq "hop launch inherits cli=gemini" "gemini" "$(cat "$acli_cap")"
+hopid=$(jq -rs 'map(select(.chain_parent=="'"$PAR"'"))|last|.job_id' "$JOBS")
+assert_eq "hop record records cli=gemini" "gemini" \
+  "$(_ccs_dispatch_jsonl_latest "$hopid" | jq -r '.cli')"
+rm -rf "$acli_proj" "$acli_map" "$acli_pager"; rm -f "$acli_cap"
+
+echo "=== agentpager->headless runtime fallback records cli=claude (honesty) ==="
+reset_jobs
+export CCS_DISPATCH_BACKEND=agentpager
+hbin="$SCRIPT_DIR/tmp/test-chain-honesty-bin"; mkdir -p "$hbin"
+printf '#!/bin/bash\necho "mock: $*"\n' > "$hbin/claude"; chmod +x "$hbin/claude"
+hproj="$SCRIPT_DIR/tmp/test-chain-honesty-proj"; mkdir -p "$hproj"
+# --sync makes the agentpager backend return 2 -> real fallback to headless-claude.
+PATH="$hbin:$PATH" ccs-dispatch --sync --cli gemini --project "$hproj" --yes "t" >/dev/null 2>&1
+hid=$(jq -rs 'map(.job_id)|last' "$JOBS")
+assert_eq "runtime fallback records cli=claude, not gemini" "claude" \
+  "$(_ccs_dispatch_jsonl_latest "$hid" | jq -r '.cli')"
+assert_eq "and records the headless fallback backend" "headless" \
+  "$(_ccs_dispatch_jsonl_latest "$hid" | jq -r '.backend')"
+rm -rf "$hbin" "$hproj"; unset CCS_DISPATCH_BACKEND
+
 test_summary

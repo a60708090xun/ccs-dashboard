@@ -477,6 +477,8 @@ ccs-dispatch --timeout 300 \
 --chain        (agentpager only) 自動接力：worker 回報 outcome:done + next 時，
                在同一專案內自動派出下一個 worker，不再逐跳詢問（鏈首一次核准）
 --max-depth <n> 最大接力跳數（預設 5），防跑飛硬上限
+--cli <name>   agentpager 後端的 worker CLI：claude（預設）或 gemini；env 預設
+               CCS_DISPATCH_CLI。headless 後端忽略（會警告並用 claude）
 ```
 
 **拍板流程（operator sign-off）**：人直接操作時 `--preview` 會互動確認；
@@ -493,6 +495,7 @@ CCS_DISPATCH_TIMEOUT=600          # async 預設 timeout
 CCS_DISPATCH_RESULT_TTL_DAYS=7    # 結果檔保留天數
 CCS_DISPATCH_MAX_CONCURRENT_WARN=3  # 並行 job 警告閾值
 CCS_DISPATCH_BACKEND=auto         # auto | agentpager | headless
+CCS_DISPATCH_CLI=claude           # agentpager worker CLI: claude | gemini
 CCS_DISPATCH_PREVIEW_TIMEOUT=60   # --preview 確認等待秒數
 CCS_DISPATCH_PREVIEW_MAX_CHARS=1500  # preview prompt 折疊長度
 CCS_DISPATCH_CHAIN_MAX_DEPTH=5    # --chain 預設最大接力跳數
@@ -527,6 +530,9 @@ ccs-dispatch 有兩個執行後端，由 `CCS_DISPATCH_BACKEND` 選擇（預設 
 **agentpager 行為：**
 
 - **async only**：`--sync` 會 fallback 回 headless（互動 worker 可能長跑）。
+- **worker CLI 可選**：`--cli gemini`（或 `CCS_DISPATCH_CLI=gemini`）讓互動 worker
+  跑 gemini 而非 claude；claude 為預設。僅 agentpager 後端支援——headless 一律
+  claude，指定 gemini 會警告並退回 claude。gemini chain 各 hop 沿用同一 cli。
 - **完成判定**：worker 完成時把交接寫到 `tmp/handoff-<job-id>.md`（開場 prompt 已注入
   此規則）；ccs 偵測到即收席位、把交接存到 `results/<job-id>.handoff`，狀態記為
   `handoff-ready`。無交接但 session 自行結束 → `completed`；session 從未起來 → `failed`。

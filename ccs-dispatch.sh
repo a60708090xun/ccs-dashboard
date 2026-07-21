@@ -862,7 +862,7 @@ _ccs_dispatch_chain_stop_reason() {
 # proj KEY only — agent-pager resolves it to a path from its own whitelist (the
 # RCE boundary). Echoes the file path; rc 1 on write failure.
 _ccs_dispatch_agentpager_launch_file() {
-  local job_id="$1" proj="$2" key="$3" prompt="$4" pager_dir="$5"
+  local job_id="$1" proj="$2" key="$3" prompt="$4" pager_dir="$5" cli="${6:-claude}"
   local inbound="$pager_dir/inbound"
   mkdir -p "$inbound" || return 1
   local f="$inbound/$(date +%s)-${job_id}.md"
@@ -871,7 +871,7 @@ _ccs_dispatch_agentpager_launch_file() {
     printf 'kind: launch\n'
     printf 'slot: %s\n' "$key"
     printf 'proj: %s\n' "$proj"
-    printf 'cli: claude\n'
+    printf 'cli: %s\n' "$cli"
     printf -- '---\n'
     printf '%s\n' "$prompt"
   } > "$f" || return 1
@@ -1108,7 +1108,7 @@ _ccs_dispatch_chain_notify() {
 # project_dir and re-resolves the SAME proj key (no cross-project branch).
 _ccs_dispatch_chain_next() {
   local job_id="$1" key="$2" project_dir="$3" pager_dir="$4"
-  local chain_depth="$5" max_depth="$6"
+  local chain_depth="$5" max_depth="$6" cli="${7:-claude}"
   local dispatch_dir
   dispatch_dir="$(_ccs_dispatch_dir)"
   local handoff_dst="$dispatch_dir/results/${job_id}.handoff"
@@ -1152,9 +1152,10 @@ _ccs_dispatch_chain_next() {
     --arg be "agentpager" \
     --arg ca "$(date -Iseconds)" \
     --arg cp "$job_id" \
+    --arg cli "$cli" \
     --argjson cd "$next_depth" \
     --argjson cm "$max_depth" \
-    '{job_id:$jid, project:$proj, task:$t, backend:$be, status:"running",
+    '{job_id:$jid, project:$proj, task:$t, backend:$be, cli:$cli, status:"running",
       created_at:$ca, chain:true, chain_parent:$cp, chain_depth:$cd,
       chain_max:$cm}')"
   printf '%s' "$next_task" > "$dispatch_dir/results/${next_job_id}.prompt"
@@ -1173,7 +1174,7 @@ _ccs_dispatch_chain_next() {
   [ -f "$stream" ] && start_offset="$(stat -c %s "$stream" 2>/dev/null || echo 0)"
 
   if ! _ccs_dispatch_agentpager_launch_file \
-        "$next_job_id" "$proj" "$key" "$worker_prompt" "$pager_dir" >/dev/null; then
+        "$next_job_id" "$proj" "$key" "$worker_prompt" "$pager_dir" "$cli" >/dev/null; then
     _ccs_dispatch_jsonl_append "$(jq -nc --arg jid "$next_job_id" \
       '{job_id:$jid, status:"failed", chain_stopped:"failed",
         note:"chain: launch write failed"}')"
@@ -1185,7 +1186,7 @@ _ccs_dispatch_chain_next() {
   # the new hop so ccs-jobs sync defers to the live monitor, then re-enter.
   echo $$ > "$dispatch_dir/pids/${next_job_id}.pid"
   _ccs_dispatch_agentpager_monitor "$next_job_id" "$key" "$project_dir" \
-    "$start_offset" "$pager_dir" 1 "$next_depth" "$max_depth" "$job_id"
+    "$start_offset" "$pager_dir" 1 "$next_depth" "$max_depth" "$job_id" "$cli"
 }
 
 # Background monitor for one agent-pager job. Runs under nohup from spawn. Polls
@@ -1198,6 +1199,7 @@ _ccs_dispatch_agentpager_monitor() {
   # Slot 9 (chain_parent) is accepted for call-site symmetry but not read here:
   # chain_next derives the parent from the finished job_id it is handed.
   local _chain_parent="${9:-}"
+  local cli="${10:-claude}"
   local tmux_session="agent-pager-$key"
   local stream="$pager_dir/channels/$key/out.stream"
   local state_json="$pager_dir/state/sessions/$key.json"
@@ -1267,7 +1269,7 @@ _ccs_dispatch_agentpager_monitor() {
   # enters the monitor for the next hop (bounded by max_depth). (spec §3)
   [ "$chain_enabled" = 1 ] || return 0
   _ccs_dispatch_chain_next "$job_id" "$key" "$project_dir" "$pager_dir" \
-    "$chain_depth" "$max_depth"
+    "$chain_depth" "$max_depth" "$cli"
 }
 
 # Poll until the tmux session is gone or $2 seconds elapse. Extracted so the
@@ -1303,7 +1305,7 @@ _ccs_dispatch_agentpager_wait_settle() {
 # headless) for --sync, an unresolvable proj key, or an inbound write failure.
 _ccs_dispatch_spawn_agentpager() {
   local job_id="$1" project_dir="$2" prompt="$3" timeout_secs="$4" mode="$5"
-  local chain_enabled="${6:-0}" max_depth="${7:-5}"
+  local chain_enabled="${6:-0}" max_depth="${7:-5}" cli="${8:-claude}"
 
   if [ "$mode" = "sync" ]; then
     echo "ccs-dispatch: agent-pager backend is async-only;" \
@@ -1339,7 +1341,7 @@ _ccs_dispatch_spawn_agentpager() {
   local worker_prompt launch_file
   worker_prompt="$(_ccs_dispatch_agentpager_prompt "$job_id" "$prompt")"
   if ! launch_file="$(_ccs_dispatch_agentpager_launch_file \
-        "$job_id" "$proj" "$key" "$worker_prompt" "$pager_dir")"; then
+        "$job_id" "$proj" "$key" "$worker_prompt" "$pager_dir" "$cli")"; then
     echo "ccs-dispatch: failed to write agent-pager launch;" \
          "falling back to headless" >&2
     return 2
@@ -1353,9 +1355,9 @@ _ccs_dispatch_spawn_agentpager() {
   if [ "${CCS_DISPATCH_AGENTPAGER_MONITOR:-1}" = "1" ]; then
     nohup bash -c '
       source "$6/ccs-dashboard.sh"
-      _ccs_dispatch_agentpager_monitor "$1" "$2" "$3" "$4" "$5" "$7" 0 "$8" ""
+      _ccs_dispatch_agentpager_monitor "$1" "$2" "$3" "$4" "$5" "$7" 0 "$8" "" "$9"
     ' _ "$job_id" "$key" "$project_dir" "$start_offset" "$pager_dir" "$script_dir" \
-      "$chain_enabled" "$max_depth" \
+      "$chain_enabled" "$max_depth" "$cli" \
       > /dev/null 2>&1 &
     echo $! > "$dispatch_dir/pids/${job_id}.pid"
     disown
@@ -1412,13 +1414,13 @@ _ccs_dispatch_spawn() {
   local job_id="$1" project_dir="$2" prompt="$3"
   local timeout_secs="$4" mode="$5"
   local backend="${6:-$(_ccs_dispatch_resolve_backend)}"
-  local chain_enabled="${7:-0}" max_depth="${8:-5}"
+  local chain_enabled="${7:-0}" max_depth="${8:-5}" cli="${9:-claude}"
 
   _CCS_DISPATCH_LAST_BACKEND="$backend"
   if [ "$backend" = "agentpager" ]; then
     if _ccs_dispatch_spawn_agentpager \
          "$job_id" "$project_dir" "$prompt" "$timeout_secs" "$mode" \
-         "$chain_enabled" "$max_depth"; then
+         "$chain_enabled" "$max_depth" "$cli"; then
       return 0
     fi
     _CCS_DISPATCH_LAST_BACKEND="headless"  # agent-pager failed -> fell back
@@ -1558,6 +1560,9 @@ Options:
                    reports outcome:done + next, launch the next worker in the
                    same project without asking again. Approved once up front.
   --max-depth <n>  Max chained hops (default 5); a runaway ceiling.
+  --cli <name>     Worker CLI for the agentpager backend: claude (default) or
+                   gemini. Env default: CCS_DISPATCH_CLI. Ignored (with a
+                   warning) by the headless backend, which always runs claude.
 HELP
     return 0
   fi
@@ -1567,6 +1572,7 @@ HELP
   local mode="async" context=false preview=false assume_yes=false
   local timeout_secs="" project="" task=""
   local chain=false max_depth="$CCS_DISPATCH_CHAIN_MAX_DEPTH"
+  local cli="${CCS_DISPATCH_CLI:-claude}"
   while [ $# -gt 0 ]; do
     case "$1" in
       --sync) mode="sync"; shift ;;
@@ -1583,6 +1589,7 @@ HELP
             return 1 ;;
         esac
         max_depth="$2"; shift 2 ;;
+      --cli) cli="$2"; shift 2 ;;
       *) task="$1"; shift ;;
     esac
   done
@@ -1596,6 +1603,11 @@ HELP
   if [ ! -d "$project" ]; then
     echo "Error: $project not found" >&2; return 1
   fi
+  case "$cli" in
+    claude|gemini) ;;
+    *) echo "ccs-dispatch: --cli must be 'claude' or 'gemini' (got: $cli)" >&2
+       return 1 ;;
+  esac
 
   project="$(cd "$project" && pwd)"
 
@@ -1634,6 +1646,15 @@ HELP
   fi
   local chain_enabled=0; $chain && chain_enabled=1
 
+  # --cli selects the worker CLI for the agentpager (interactive) backend only.
+  # The headless backend always runs claude; warn + downgrade so the job record
+  # is honest about what actually ran. (mirrors the --chain downgrade above)
+  if [ "$cli" != "claude" ] && [ "$backend" != "agentpager" ]; then
+    echo "ccs-dispatch: --cli $cli only affects the agentpager backend;" \
+         "dispatching with claude on $backend" >&2
+    cli="claude"
+  fi
+
   # Sign-off gate (#75): before the first side effect, so a rejection leaves
   # no job record and no worker. --yes keeps automation non-interactive.
   if $preview; then
@@ -1655,21 +1676,25 @@ HELP
     --arg m "$mode" \
     --arg be "$backend" \
     --arg ca "$(date -Iseconds)" \
+    --arg cli "$cli" \
     --argjson ce "$chain_enabled" \
     --argjson md "$max_depth" \
-    '{job_id:$jid, project:$proj, task:$t, context_injected:$ctx, mode:$m, backend:$be, status:"running", created_at:$ca}
+    '{job_id:$jid, project:$proj, task:$t, context_injected:$ctx, mode:$m, backend:$be, cli:$cli, status:"running", created_at:$ca}
      + (if $ce == 1 then {chain:true, chain_depth:0, chain_max:$md} else {} end)'
   )"
 
   local spawn_rc=0
   _ccs_dispatch_spawn "$job_id" "$project" "$prompt" \
-    "$timeout_secs" "$mode" "$backend" "$chain_enabled" "$max_depth" || spawn_rc=$?
+    "$timeout_secs" "$mode" "$backend" "$chain_enabled" "$max_depth" "$cli" || spawn_rc=$?
 
   if [ "${_CCS_DISPATCH_LAST_BACKEND:-$backend}" != "$backend" ]; then
+    # A fallback always lands on headless, which runs claude. Correct the record's
+    # cli too, so a gemini request that silently fell back is not misrecorded as
+    # gemini (the pre-spawn record may carry cli:gemini when backend=agentpager).
     _ccs_dispatch_jsonl_append "$(jq -nc \
       --arg jid "$job_id" \
       --arg be "$_CCS_DISPATCH_LAST_BACKEND" \
-      '{job_id:$jid, backend:$be, fallback:true}')"
+      '{job_id:$jid, backend:$be, cli:"claude", fallback:true}')"
   fi
 
   if [ "$mode" = "sync" ]; then

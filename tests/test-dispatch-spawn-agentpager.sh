@@ -39,6 +39,12 @@ assert_eq "kind is launch" "launch" "$kind"
 assert_eq "slot is the local key" "local-tester" "$slot"
 assert_eq "proj is the resolved key" "ccs-dashboard" "$projk"
 assert_contains "body carries the worker prompt" "$body" "hello worker body"
+assert_eq "cli defaults to claude" "claude" "$(sed -n 's/^cli: //p' "$lf" | head -1)"
+
+echo "=== launch file honors cli selector (gemini) ==="
+lfg="$(_ccs_dispatch_agentpager_launch_file "d-test-gem" "ccs-dashboard" "local-tester" "gem worker body" "$tmproot" gemini)"
+assert_eq "cli is gemini when selected" "gemini" "$(sed -n 's/^cli: //p' "$lfg" | head -1)"
+assert_eq "gemini launch kind still launch" "launch" "$(sed -n 's/^kind: //p' "$lfg" | head -1)"
 
 echo "=== stop file targets the local key ==="
 sf="$(_ccs_dispatch_agentpager_stop_file "local-tester" "$tmproot")"
@@ -120,6 +126,20 @@ assert_contains "inbound is a launch" "$(cat "$found" 2>/dev/null)" "kind: launc
 assert_contains "inbound carries the worker prompt" "$(cat "$found" 2>/dev/null)" "the prompt body"
 assert_contains "inbound carries handoff-gating invariant" "$(cat "$found" 2>/dev/null)" "tmp/handoff-d-ok.md"
 rm -rf "$projdir" "$pmap" "$pager"
+
+echo "=== spawn (async) threads cli=gemini into the launch inbound ==="
+_ccs_dispatch_agentpager_session_alive() { return 1; }  # no live seat -> guard passes
+gprojdir="$SCRIPT_DIR/tmp/test-spawn-ap-gem-proj"; mkdir -p "$gprojdir"
+gpmap="$SCRIPT_DIR/tmp/test-spawn-ap-gem-map"
+printf 'ccs-dashboard = %s\n' "$gprojdir" > "$gpmap"
+gpager="$SCRIPT_DIR/tmp/test-spawn-ap-gem-pager"; mkdir -p "$gpager/inbound"
+CCS_DISPATCH_PROJ_MAP="$gpmap" AGENT_PAGER_DIR="$gpager" CCS_DISPATCH_AGENTPAGER_MONITOR=0 \
+  _ccs_dispatch_spawn_agentpager "d-gem-ok" "$gprojdir" "gem prompt body" 60 async 0 5 gemini \
+  >/dev/null 2>&1
+gfound=$(ls "$gpager/inbound/"*-d-gem-ok.md 2>/dev/null | head -1)
+assert_eq "gemini spawn wrote an inbound" "yes" "$([ -n "$gfound" ] && echo yes)"
+assert_contains "spawned inbound selects gemini" "$(cat "$gfound" 2>/dev/null)" "cli: gemini"
+rm -rf "$gprojdir" "$gpmap" "$gpager"
 
 echo "=== last-activity reflects the out.stream mtime ==="
 la_root="$SCRIPT_DIR/tmp/test-spawn-ap-la"
