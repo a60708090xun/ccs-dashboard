@@ -12,6 +12,7 @@
 | `goal` | Yes | 非空字串；worker 收到的任務描述全文 |
 | `scope.cwd` | No | worker 執行與 gate 驗收目錄；預設 `.`（呼叫時的 cwd）；建議寫絕對路徑 |
 | `executor` | No | `claude`（預設）\| `gemini` \| `wingman`；頂層字串欄位。claude/gemini 以 auto-approve 跑 headless（gate 為信任邊界，見 SKILL.md § 邊界）；wingman 為本地 LLM 檔案驅動，需 `plan:` |
+| `backend` | No | `headless`（預設）\| `agentpager`；頂層字串欄位。`agentpager` 讓 gate worker 跑在 agent-pager 互動 local channel（tmux、可監看/接管），gate 以前景阻塞式 spawn+wait 等 per-attempt handoff 檔為完成訊號，回來後照常對現實驗收（gate 仍是唯一裁決來源）；bounded wait（逾 `timeout_sec` 收回 seat）。`executor` 映射為互動 worker CLI（claude\|gemini）；`agentpager` + `wingman` 不合法 |
 | `model` | No | 頂層字串欄位（advisory）；派工者宣告本次執行用的 model（如 wingman 的 `local-chat-35b`），供收尾 auto-suggest 的 `X-Executor` provenance trailer 填 `<model>` 段。缺省時 trailer 退化為 executor-only。不影響派工行為（script 不據此帶 `--model`） |
 | `plan` | 僅 wingman | 與 `executor: wingman` 互為充要（缺一驗證失敗）；wingman plan.md 路徑，相對**本檔所在目錄**解析（同 `next:`），執行時轉絕對路徑傳給 `wingman execute --plan`。plan 依 wingman plan-template 紀律由派工者撰寫 |
 | `next` | No | 下一個 task.yaml 路徑；相對路徑以**本檔所在目錄**解析 |

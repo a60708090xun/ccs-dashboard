@@ -13,8 +13,9 @@ review。迴圈邏輯在 CLI 內，不要自己重新實作。
 
 - **用**：任務目標明確、驗收條件可寫成 shell 指令（exit 0 = PASS）、
   希望結果由現實（git diff / test / grep）裁決而非 worker 自述
-- **不用**：開放式探索或需要互動接管 → `ccs-dispatch`（agentpager
-  backend）；同 context 的小任務 → in-harness subagent
+- **不用**：開放式探索、驗收條件無法寫成 shell 指令 → `ccs-dispatch`
+  （agentpager backend，無 gate）；同 context 的小任務 → in-harness
+  subagent。（有 AC 但想要互動監看／接管 → 用本指令 `backend: agentpager`）
 - 與 `ccs-dispatch --chain`（agentpager 快速通道，無驗收）是兩層
   獨立機制，不可混用
 
@@ -121,5 +122,7 @@ PASS 後自動跟 `next:`（相對於當前 task.yaml 所在目錄解析）。
   verdict**（gate 是唯一裁決來源，worker 自述樂觀或悲觀皆不信）
 - `scope.allowed_paths` / `forbidden_paths` 未實作（僅 `scope.cwd`
   生效），worker 無路徑硬限制
-- worker 同步 headless 執行；agentpager async backend 未接入 gate 迴圈
+- worker 預設同步 headless；`backend: agentpager` 改跑互動 local channel
+  （前景阻塞式 spawn+wait、bounded by timeout、失敗不 fallback headless），
+  詳 commands.md「backend: agentpager」
 - Stage 2 無自動化（`final.json.stage2` 恆為 null，由你人工執行）
