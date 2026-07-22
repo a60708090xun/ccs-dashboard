@@ -912,6 +912,82 @@ _ccs_dispatch_agentpager_stop_file() {
   printf '%s\n' "$f"
 }
 
+# ── orchestrator-wake (#93) ─────────────────────────────────────────────────
+# Resolve the wake target (the dispatching "orchestrator" session's slot) from
+# its env, or empty when not wake-eligible. Captured at dispatch time into the
+# job record; the finalize / chain-end hooks read it back to wake that session
+# via the agent-pager input relay (do_input). CCS_DISPATCH_WAKE=0 opts out
+# (mirrors CCS_DISPATCH_NOTIFY). A pager-launched session carries a local channel
+# (AGENT_PAGER_CHANNEL=local + AGENT_PAGER_LOCAL_USER) or a numeric telegram slot
+# (AGENT_PAGER_BOT_SLOT); a non-pager (local terminal / headless) session has
+# neither -> empty -> no wake (case b: falls back to the ccs-jobs pull).
+_ccs_dispatch_resolve_wake_slot() {
+  [ "${CCS_DISPATCH_WAKE:-1}" != "0" ] || return 0
+  if [ "${AGENT_PAGER_CHANNEL:-}" = "local" ] && [ -n "${AGENT_PAGER_LOCAL_USER:-}" ]; then
+    printf '%s\n' "local-${AGENT_PAGER_LOCAL_USER}"
+  elif [ -n "${AGENT_PAGER_BOT_SLOT:-}" ]; then
+    printf '%s\n' "${AGENT_PAGER_BOT_SLOT}"
+  fi
+}
+
+# Write a kind:input inbound that wakes the dispatching session. Sibling of
+# _ccs_dispatch_agentpager_launch_file, but atomic (dotfile temp + mv): a partial
+# read of this loop signal would drop the wake, and the systemd .path *.md glob
+# never matches the dot-prefixed .tmp. Echoes the path; rc 1 on write failure.
+_ccs_dispatch_agentpager_wake_file() {  # $1=wake_slot $2=pager_dir $3=body
+  local slot="$1" pager_dir="$2" body="$3"
+  local inbound="$pager_dir/inbound"
+  mkdir -p "$inbound" || return 1
+  local name tmp final
+  name="$(date +%s%N)-${slot}-wake.md"
+  tmp="$inbound/.${name}.tmp"
+  final="$inbound/$name"
+  {
+    printf -- '---\n'
+    printf 'kind: input\n'
+    printf 'slot: %s\n' "$slot"
+    printf -- '---\n'
+    printf '%s\n' "$body"
+  } > "$tmp" || return 1
+  mv "$tmp" "$final" || return 1
+  printf '%s\n' "$final"
+}
+
+# Thin-pointer wake payload: a pointer into the conversation; the evidence stays
+# on disk (results/<id>.md) for the orchestrator to Read on demand (the board
+# carries pointers, disk carries evidence -- context-economy).
+_ccs_dispatch_wake_body() {  # $1=job_id $2=status $3=summary
+  printf '[ccs-wake] job %s %s\n' "$1" "$2"
+  [ -n "$3" ] && printf 'summary: %s\n' "$3"
+  printf 'artifact: results/%s.md\n' "$1"
+  printf '%s\n' "你派的 job 回來了——讀 artifact 後決定下一步（接鏈 / 收尾 / 再派）"
+}
+
+# Chain-termination wake payload: the chain unit is done -> the orchestrator's
+# turn. Names the last job + its artifact; intermediate hops never wake (item 11).
+_ccs_dispatch_chain_wake_body() {  # $1=last_job_id $2=reason $3=verb $4=artifact(optional)
+  printf '[ccs-wake] chain %s: %s\n' "$3" "$2"
+  printf 'last job: %s\n' "$1"
+  # Only point at an artifact that exists: a launch-failed terminal hop never
+  # produced results/<id>.md, so emitting the line would dangle (#93 review M1).
+  [ -n "$4" ] && printf 'artifact: %s\n' "$4"
+  printf '%s\n' "你派的 chain 跑完了——讀 last job 的 artifact / 狀態後決定下一步"
+}
+
+# Best-effort wake fire: write a kind:input inbound for wake_slot, or no-op when
+# wake_slot is empty or CCS_DISPATCH_WAKE=0. Never fails the caller (mirrors
+# _ccs_dispatch_notify_completion): the wake is fire-and-forget and does not
+# depend on do_input's delivery ack.
+_ccs_dispatch_wake_fire() {  # $1=wake_slot $2=body
+  local wake_slot="$1" body="$2"
+  [ -n "$wake_slot" ] || return 0
+  [ "${CCS_DISPATCH_WAKE:-1}" != "0" ] || return 0
+  local pager_dir="${AGENT_PAGER_DIR:-$HOME/.agent-pager}"
+  _ccs_dispatch_agentpager_wake_file "$wake_slot" "$pager_dir" "$body" \
+    >/dev/null 2>&1 || true
+  return 0
+}
+
 # Decode only this job's frames from the per-user out.stream. The stream is
 # append-only and persists across jobs, so we read from the byte offset captured
 # at launch, not the whole file.
@@ -1092,6 +1168,16 @@ _ccs_dispatch_finish_agentpager() {
   [ "$handoff_flag" = true ] && notify_handoff="$handoff_dst"
   _ccs_dispatch_notify_completion "$job_id" "$status" "$project" \
     "$notify_handoff" "$note"
+
+  # orchestrator-wake (#93): a non-chain job wakes the dispatching session here.
+  # A chain job wakes only at termination (_ccs_dispatch_chain_notify), so an
+  # intermediate hop's finalize stays silent -- item 11: intermediate chain
+  # decisions do not surface to the orchestrator's context.
+  local wake_slot is_chain
+  wake_slot=$(echo "$initial" | jq -r '.wake_slot // empty')
+  is_chain=$(echo "$initial" | jq -r 'if .chain == true then 1 else 0 end')
+  [ "$is_chain" = "1" ] || _ccs_dispatch_wake_fire "$wake_slot" \
+    "$(_ccs_dispatch_wake_body "$job_id" "$status" "$summary")"
 }
 
 # Best-effort chain-termination pager notify (spec §7): one short message with
@@ -1099,13 +1185,26 @@ _ccs_dispatch_finish_agentpager() {
 # depth), "stopped" otherwise. Never fails the caller. CCS_DISPATCH_NOTIFY=0
 # opts out (shared with the per-job completion notify).
 _ccs_dispatch_chain_notify() {
-  [ "${CCS_DISPATCH_NOTIFY:-1}" != "0" ] || return 0
   local job_id="$1" reason="$2" project="$3" depth="$4"
+  local verb="stopped"
+  case "$reason" in empty-next|depth) verb="complete" ;; esac
+
+  # orchestrator-wake (#93): chain termination wakes the dispatching session (the
+  # chain unit is done -> the orchestrator's turn). Placed before the notify gate
+  # below: wake has its own CCS_DISPATCH_WAKE gate, so a pager-notify opt-out must
+  # not also suppress the wake.
+  local wake_slot wake_art wake_dd
+  wake_slot=$(_ccs_dispatch_jsonl_latest "$job_id" | jq -r '.wake_slot // empty')
+  wake_dd="$(_ccs_dispatch_dir)"
+  wake_art=""
+  [ -f "$wake_dd/results/${job_id}.md" ] && wake_art="results/${job_id}.md"
+  _ccs_dispatch_wake_fire "$wake_slot" \
+    "$(_ccs_dispatch_chain_wake_body "$job_id" "$reason" "$verb" "$wake_art")"
+
+  [ "${CCS_DISPATCH_NOTIFY:-1}" != "0" ] || return 0
   local sender
   sender="$(_ccs_dispatch_notify_sender)"
   [ -n "$sender" ] && [ -x "$sender" ] || return 0
-  local verb="stopped"
-  case "$reason" in empty-next|depth) verb="complete" ;; esac
   {
     echo "chain ${verb}: ${reason}"
     echo "last job: ${job_id} (depth ${depth})"
@@ -1173,9 +1272,11 @@ _ccs_dispatch_chain_next() {
     --arg cli "$cli" \
     --argjson cd "$next_depth" \
     --argjson cm "$max_depth" \
+    --arg ws "$(_ccs_dispatch_jsonl_latest "$job_id" | jq -r '.wake_slot // empty')" \
     '{job_id:$jid, project:$proj, task:$t, backend:$be, cli:$cli, status:"running",
       created_at:$ca, chain:true, chain_parent:$cp, chain_depth:$cd,
-      chain_max:$cm}')"
+      chain_max:$cm}
+     + (if $ws == "" then {} else {wake_slot:$ws} end)')"
   printf '%s' "$next_task" > "$dispatch_dir/results/${next_job_id}.prompt"
 
   # Build the next worker prompt: parent context bridge + verification rule +
@@ -1851,8 +1952,10 @@ HELP
     --arg cli "$cli" \
     --argjson ce "$chain_enabled" \
     --argjson md "$max_depth" \
+    --arg ws "$(_ccs_dispatch_resolve_wake_slot)" \
     '{job_id:$jid, project:$proj, task:$t, context_injected:$ctx, mode:$m, backend:$be, cli:$cli, status:"running", created_at:$ca}
-     + (if $ce == 1 then {chain:true, chain_depth:0, chain_max:$md} else {} end)'
+     + (if $ce == 1 then {chain:true, chain_depth:0, chain_max:$md} else {} end)
+     + (if ($ws == "" or $be != "agentpager") then {} else {wake_slot:$ws} end)'
   )"
 
   local spawn_rc=0
