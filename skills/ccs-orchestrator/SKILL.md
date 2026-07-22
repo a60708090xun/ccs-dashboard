@@ -155,18 +155,31 @@ handoff 全文）是隨工作量線性膨脹的大 payload，一旦灌進指揮�
 
 ## Worker 完成的喚醒（orchestrator-wake）
 
-dispatched worker 完成時如何回到指揮席，取決於指揮席自己的啟動方式：
+dispatched worker 完成時，指揮席會被**自動 wake**（回灌一則 thin-pointer turn）
+**當且僅當兩條件同時成立**（兩軸正交——backend 選擇看 agent-pager 可用性，wake 看
+指揮席身份 + backend）：
 
-- **指揮席為 pager-launched session**（env 帶 `AGENT_PAGER_BOT_SLOT`，或
-  `AGENT_PAGER_CHANNEL=local` + `AGENT_PAGER_LOCAL_USER`）：ccs-dispatch 在 job 進
-  終態時**自動回灌**一則 thin-pointer turn（job id / 狀態 / summary /
-  `results/<id>.md`）到指揮席自己的 slot，喚醒對話 loop（重用 agent-pager input
-  relay；`CCS_DISPATCH_WAKE=0` 可關）。非 chain job 於 finalize wake、chain 只在
-  終點 wake（中繼 hop 不 wake）。**收到 wake turn 後依上方 Context Discipline 按需
-  Read artifact，不整檔灌入。**
-- **指揮席為本地 terminal / headless（非 pager-launched）**：無回灌管道（case b）。
-  指揮席在等待 dispatched job 期間，用 `ccs-jobs` **pull** 週期性檢查終態（poll，
-  非 push）；這是紀律而非機件——此情境不會自動醒來，須主動查看板。
+1. **指揮席自己是 pager-launched session**（env 帶 `AGENT_PAGER_BOT_SLOT`，或
+   `AGENT_PAGER_CHANNEL=local` + `AGENT_PAGER_LOCAL_USER`）；**且**
+2. **worker 跑 agentpager backend**（headless 不 wake——其 job record 不帶
+   `wake_slot`、`_ccs_dispatch_finish` 也無 wake 接線）。
+
+兩者皆成立 → ccs-dispatch 在 job 進終態時重用 agent-pager input relay，把一則 turn
+（job id / 狀態 / summary / `results/<id>.md`）回灌指揮席自己的 slot（`CCS_DISPATCH_WAKE=0`
+可關）。非 chain job 於 finalize wake、chain 只在終點 wake（中繼 hop 不 wake）。
+**收到 wake turn 後依上方 Context Discipline 按需 Read artifact，不整檔灌入。**
+
+**否則一律回退到 `ccs-jobs` pull（poll，非 push）紀律**——涵蓋**所有**不 wake 的情境，
+不只「指揮席非 pager-launched」：
+
+- 指揮席為本地 terminal / headless（無 slot 可 target）
+- worker fell back to / 明確用 headless backend（agent-pager daemon 掛、single-seat
+  被佔、`--sync`、或 `CCS_DISPATCH_BACKEND=headless`）
+- monitor 在 finalize 前死掉（`ccs-jobs` sync 補帳不 wake）
+- `CCS_DISPATCH_WAKE=0`
+
+**判斷自己屬哪種**：看 job record 的 `backend` 欄位——`agentpager` + 指揮席是
+pager-launched → 等 wake；否則主動 poll `ccs-jobs`，不要空等一個不會來的 turn。
 
 ## Agent Behavior
 
