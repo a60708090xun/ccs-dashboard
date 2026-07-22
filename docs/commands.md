@@ -496,6 +496,7 @@ CCS_DISPATCH_RESULT_TTL_DAYS=7    # 結果檔保留天數
 CCS_DISPATCH_MAX_CONCURRENT_WARN=3  # 並行 job 警告閾值
 CCS_DISPATCH_BACKEND=auto         # auto | agentpager | headless
 CCS_DISPATCH_CLI=claude           # agentpager worker CLI: claude | gemini
+CCS_DISPATCH_WAKE=1               # 派工主 session 為 pager-launched 時完成回灌一個 turn；0 關閉
 CCS_DISPATCH_PREVIEW_TIMEOUT=60   # --preview 確認等待秒數
 CCS_DISPATCH_PREVIEW_MAX_CHARS=1500  # preview prompt 折疊長度
 CCS_DISPATCH_CHAIN_MAX_DEPTH=5    # --chain 預設最大接力跳數
@@ -548,6 +549,17 @@ ccs-dispatch 有兩個執行後端，由 `CCS_DISPATCH_BACKEND` 選擇（預設 
   混進互動對話串（slot role 的原生支援由 agent-pager 端追蹤——internal GitLab
   issue #76，落地後此預設會改為查詢保留 slot）。注意：只有 monitor 的
   即時 finalize 會通知；`ccs-jobs` sync 的事後補帳（stale 對帳）不通知。
+- **orchestrator-wake（回灌派工 session）**：若派工的主 session 本身也是 pager-launched
+  的 tmux session（env 帶 `AGENT_PAGER_BOT_SLOT`，或 `AGENT_PAGER_CHANNEL=local` +
+  `AGENT_PAGER_LOCAL_USER`），job 進終態時除了上述 operator 通知外，另寫一個
+  `kind: input` inbound 把一則 thin-pointer turn（job id / 狀態 / summary /
+  `results/<id>.md`）回灌主 session 自己的 slot，喚醒其對話 loop。重用 agent-pager 既有
+  input relay（agent-pager 端零改動）。Best-effort / fire-and-forget（寫檔即返回，不依賴
+  送達 ack）。`CCS_DISPATCH_WAKE=0` 可關閉。非 chain job 於 finalize 時 wake；chain 只在
+  **終點** wake（中繼 hop 不 wake，遵守鏈鎖「中繼不進 lead context」原則）。主 session 若
+  非 pager-launched（本地 terminal / headless）則無此管道，改用 `ccs-jobs` pull 追蹤。
+  同 notify：只有 live finalize 會 wake；monitor 若在 finalize 前死掉，`ccs-jobs` sync
+  的事後補帳不 wake（回退 pull）。
 
 **鏈鎖模式（`--chain`）：**
 
@@ -558,7 +570,8 @@ ccs-dispatch 有兩個執行後端，由 `CCS_DISPATCH_BACKEND` 選擇（預設 
   未達 max-depth 時，monitor 讀 `next:` 自動組下一跳（含前一跳 handoff 的
   context 橋接 + HANDOFF RULE + 自主性指令），繼承同一專案 proj key。
 - 停鏈原因：`partial` / `blocked` / `failed` / `empty-next` / `depth`，記入
-  `chain_stopped`，並發一則鏈終止 pager 通知。
+  `chain_stopped`，並發一則鏈終止 pager 通知；派工主 session 為 pager-launched 時，
+  另回灌一則 chain-end wake turn（見上方 orchestrator-wake）。
 - `ccs-jobs <job-id>` 顯示 `Chain: depth N/max, parent=…, stopped: …` 血緣。
 - 自主性指令套用**所有** agentpager 派工（不限鏈鎖）：worker 不問澄清問題、
   卡住時設 `outcome: blocked`（→ 停鏈浮回指揮席），不等終端輸入。

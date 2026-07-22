@@ -153,6 +153,21 @@ handoff 全文）是隨工作量線性膨脹的大 payload，一旦灌進指揮�
 此紀律依據內部 context-economy 設計理念文件（§4 可操作設計原則）；核心是
 「看板只裝指標，證據留磁碟，compact 是 fallback 不是主策略」。
 
+## Worker 完成的喚醒（orchestrator-wake）
+
+dispatched worker 完成時如何回到指揮席，取決於指揮席自己的啟動方式：
+
+- **指揮席為 pager-launched session**（env 帶 `AGENT_PAGER_BOT_SLOT`，或
+  `AGENT_PAGER_CHANNEL=local` + `AGENT_PAGER_LOCAL_USER`）：ccs-dispatch 在 job 進
+  終態時**自動回灌**一則 thin-pointer turn（job id / 狀態 / summary /
+  `results/<id>.md`）到指揮席自己的 slot，喚醒對話 loop（重用 agent-pager input
+  relay；`CCS_DISPATCH_WAKE=0` 可關）。非 chain job 於 finalize wake、chain 只在
+  終點 wake（中繼 hop 不 wake）。**收到 wake turn 後依上方 Context Discipline 按需
+  Read artifact，不整檔灌入。**
+- **指揮席為本地 terminal / headless（非 pager-launched）**：無回灌管道（case b）。
+  指揮席在等待 dispatched job 期間，用 `ccs-jobs` **pull** 週期性檢查終態（poll，
+  非 push）；這是紀律而非機件——此情境不會自動醒來，須主動查看板。
+
 ## Agent Behavior
 
 1. **先 JSON 後呈現：** 內部先跑 `--json` 做判斷（需要哪些 options、有無殭屍等），再跑 `--md` 取人讀格式呈現。如果 `--md` 已包含所需資訊，可省略 `--json` 步驟。
