@@ -62,13 +62,27 @@ Phase 3 收尾: （worktree）→ 整理 → review → merge → 清理
 
 ## 內部文件規則
 
-以下文件放 `internal/`（已 gitignore），**禁止 commit 進 repo**：
-- 交接文件（handoff）
-- 設計 spec（`*-design.md`）
-- 實作計畫（`*-plan.md`）
-- brainstorming / superpowers 產出
+專案文件依「durable 與否」分兩落點：
 
-Phase 1 規劃時，spec/plan 寫在 `internal/` 或 worktree 的 `internal/`，不加入 git。
+**Durable dev-facing 架構文件 → committed `docs/internal/`（進版控）：**
+- 跨函式才看得出的架構不變量、狀態檔生命週期、orchestration 設計等，對後續
+  developer / agent 有長期參考價值者。
+- 例：`docs/internal/architecture-invariants.md`、`docs/internal/state-file-lifecycle.md`。
+- 這類文件是**蒸餾**產物（synthesized、對 code 逐條驗證後才寫），不是把 per-sprint
+  草稿直接搬進版控。
+- ⚠ 本 repo 為 **public**：commit 前必須脫敏——無個人 path、內網 hostname / IP、
+  credential（per cross-repo-docs 紀律）。
+
+**Ephemeral 開發產出 → `internal/`（已 gitignore），禁止 commit：**
+- 交接文件（handoff）
+- per-sprint 設計 spec（`*-design.md`）、實作計畫（`*-plan.md`）
+- brainstorming / superpowers 產出
+- per-sprint worklog 放 worktree `tmp/sprint/worklog.md`（隨 worktree 刪除閉合）
+
+Phase 1 規劃時，per-sprint spec/plan 寫在 `internal/`（gitignore，不進 git）。某設計
+成熟、對後續有 durable 價值時，再蒸餾成 committed `docs/internal/` 架構文件。
+（`.gitignore` 用 `/internal/` anchor repo root，只 ignore 頂層 `internal/`，不影響
+committed `docs/internal/`。）
 
 ## Worktree 與 Branch
 
