@@ -5,8 +5,10 @@ tmp/
 *~
 .worktrees/
 
-# Agent internal documents (AGENTS.md rules)
-internal/
+# Ephemeral agent scratch: handoffs, per-sprint design/plan drafts (AGENTS.md
+# rules). Leading slash anchors to repo root so it does NOT match the committed
+# docs/internal/ dev-facing architecture docs.
+/internal/
 
 # Debug artifacts
 *.log
