@@ -45,6 +45,17 @@ echo "=== launch file honors cli selector (gemini) ==="
 lfg="$(_ccs_dispatch_agentpager_launch_file "d-test-gem" "ccs-dashboard" "local-tester" "gem worker body" "$tmproot" gemini)"
 assert_eq "cli is gemini when selected" "gemini" "$(sed -n 's/^cli: //p' "$lfg" | head -1)"
 assert_eq "gemini launch kind still launch" "launch" "$(sed -n 's/^kind: //p' "$lfg" | head -1)"
+assert_eq "no model line when the task declares none" "" \
+  "$(sed -n 's/^model: //p' "$lfg" | head -1)"
+
+echo "=== launch file carries the declared model ==="
+# the launcher resolves this alias against its own registry, so the field must
+# arrive verbatim; omitting it left the worker on whatever default its CLI saved
+lfm="$(_ccs_dispatch_agentpager_launch_file "d-test-mdl" "ccs-dashboard" "local-tester" "mdl worker body" "$tmproot" gemini "gemini-3.5-flash")"
+assert_eq "model is written when declared" "gemini-3.5-flash" \
+  "$(sed -n 's/^model: //p' "$lfm" | head -1)"
+assert_eq "model does not disturb cli" "gemini" "$(sed -n 's/^cli: //p' "$lfm" | head -1)"
+assert_contains "model does not disturb the body" "$(sed -n '/^---$/,$p' "$lfm" | sed -n '/^---$/,$p')" "mdl worker body"
 
 echo "=== stop file targets the local key ==="
 sf="$(_ccs_dispatch_agentpager_stop_file "local-tester" "$tmproot")"

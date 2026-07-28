@@ -354,14 +354,14 @@ _ccs_dispatch_chain_alloc_dir() {
 _ccs_dispatch_run_worker() {
   local cwd="$1" prompt="$2" run_dir="$3" attempt="$4"
   local timeout_sec="${5:-$CCS_DISPATCH_TIMEOUT}" executor="${6:-claude}"
-  local plan_abs="${7:-}" backend="${8:-headless}"
+  local plan_abs="${7:-}" backend="${8:-headless}" model="${9:-}"
   # backend=agentpager routes the worker through the interactive local channel
   # (foreground blocking spawn+wait), so a gate-run can BOTH verify+retry AND run
   # its worker in a monitorable/interruptible tmux session (issue #91). The gate
   # stays the sole verdict source; this only changes HOW the worker is spawned.
   if [ "$backend" = "agentpager" ]; then
     _ccs_dispatch_run_worker_agentpager \
-      "$cwd" "$prompt" "$run_dir" "$attempt" "$timeout_sec" "$executor"
+      "$cwd" "$prompt" "$run_dir" "$attempt" "$timeout_sec" "$executor" "$model"
     return 0
   fi
   local ad="$run_dir/attempt-$(printf '%02d' "$attempt")"
@@ -375,11 +375,16 @@ _ccs_dispatch_run_worker() {
   # wingman is file-driven (plan.md in, .wingman/result.md out) and ignores
   # the prompt; --exit-status maps overall_status to the exit code, which is
   # recorded as evidence only -- the gate stays the sole verdict source.
+  # A declared model is pinned per CLI (the flags differ and are not
+  # interchangeable); omitting it keeps the CLI's own saved default. wingman is
+  # file-driven and has no model flag, so it ignores the field.
   local cmd
   case "$executor" in
-    gemini)  cmd=(gemini -p "$prompt" --approval-mode yolo) ;;
+    gemini)  cmd=(gemini -p "$prompt" --approval-mode yolo)
+             [ -n "$model" ] && cmd+=(-m "$model") ;;
     wingman) cmd=(wingman execute --plan "$plan_abs" --exit-status) ;;
-    *)       cmd=(claude -p "$prompt" --permission-mode bypassPermissions) ;;
+    *)       cmd=(claude -p "$prompt" --permission-mode bypassPermissions)
+             [ -n "$model" ] && cmd+=(--model "$model") ;;
   esac
   local wrc=0
   (cd "$cwd" && timeout "$timeout_sec" "${cmd[@]}") \
@@ -400,7 +405,7 @@ _ccs_dispatch_run_worker() {
 # the terminal verdict word; rc 0 accepted / 10 escalated / 11 hard_stop.
 _ccs_dispatch_run_one() {
   local task="$1" task_yaml="$2" hop_dir="$3"
-  local cwd budget goal timeout_sec executor backend plan plan_abs=""
+  local cwd budget goal timeout_sec executor backend plan plan_abs="" model
   cwd="$(echo "$task" | jq -r '.scope.cwd // "."')"
   budget="$(echo "$task" | jq -r ".execution_policy.loop_budget // $CCS_DISPATCH_GATE_LOOP_BUDGET")"
   goal="$(echo "$task" | jq -r '.goal')"
@@ -408,6 +413,8 @@ _ccs_dispatch_run_one() {
   # backend: headless (default, synchronous headless CLI) or agentpager (the
   # interactive local-channel worker, run in the foreground under the gate).
   backend="$(echo "$task" | jq -r '.backend // "headless"')"
+  # Optional; empty means "whatever default the worker CLI has saved".
+  model="$(echo "$task" | jq -r '.model // empty')"
   timeout_sec="$(echo "$task" | jq -r '.execution_policy.timeout_sec // empty')"
   [ -z "$timeout_sec" ] && timeout_sec="$CCS_DISPATCH_TIMEOUT"
   plan="$(echo "$task" | jq -r '.plan // empty')"
@@ -435,7 +442,7 @@ _ccs_dispatch_run_one() {
     fi
     printf '%s' "$prompt" > "$ad/prompt.md"
 
-    _ccs_dispatch_run_worker "$cwd" "$prompt" "$hop_dir" "$attempt" "$timeout_sec" "$executor" "$plan_abs" "$backend"
+    _ccs_dispatch_run_worker "$cwd" "$prompt" "$hop_dir" "$attempt" "$timeout_sec" "$executor" "$plan_abs" "$backend" "$model"
     verdict="$(_ccs_dispatch_gate_run "$cwd" "$task" "$ad" "$attempt" "$budget")"
 
     case "$verdict" in
@@ -881,6 +888,7 @@ _ccs_dispatch_chain_stop_reason() {
 # RCE boundary). Echoes the file path; rc 1 on write failure.
 _ccs_dispatch_agentpager_launch_file() {
   local job_id="$1" proj="$2" key="$3" prompt="$4" pager_dir="$5" cli="${6:-claude}"
+  local model="${7:-}"
   local inbound="$pager_dir/inbound"
   mkdir -p "$inbound" || return 1
   local f="$inbound/$(date +%s)-${job_id}.md"
@@ -890,6 +898,10 @@ _ccs_dispatch_agentpager_launch_file() {
     printf 'slot: %s\n' "$key"
     printf 'proj: %s\n' "$proj"
     printf 'cli: %s\n' "$cli"
+    # Omitted when the task declares no model, so the worker keeps whatever
+    # default its CLI has saved -- writing an empty field would instead hand the
+    # launcher a blank --model value.
+    [ -n "$model" ] && printf 'model: %s\n' "$model"
     printf -- '---\n'
     printf '%s\n' "$prompt"
   } > "$f" || return 1
@@ -1572,7 +1584,7 @@ _ccs_dispatch_agentpager_wait_and_collect() {
 # deterministic gate that runs next is the sole verdict source.
 _ccs_dispatch_run_worker_agentpager() {
   local cwd="$1" prompt="$2" run_dir="$3" attempt="$4"
-  local timeout_sec="${5:-$CCS_DISPATCH_TIMEOUT}" cli="${6:-claude}"
+  local timeout_sec="${5:-$CCS_DISPATCH_TIMEOUT}" cli="${6:-claude}" model="${7:-}"
   local ad="$run_dir/attempt-$(printf '%02d' "$attempt")"
   mkdir -p "$ad"
 
@@ -1620,7 +1632,7 @@ _ccs_dispatch_run_worker_agentpager() {
   local worker_prompt
   worker_prompt="$(_ccs_dispatch_agentpager_prompt "$sig" "$prompt")"
   if ! _ccs_dispatch_agentpager_launch_file \
-        "$sig" "$proj" "$key" "$worker_prompt" "$pager_dir" "$cli" \
+        "$sig" "$proj" "$key" "$worker_prompt" "$pager_dir" "$cli" "$model" \
         > "$ad/launch-file.txt" 2>/dev/null; then
     printf 'failed to write agent-pager launch\n' > "$ad/agentpager-error.txt"
     return 0

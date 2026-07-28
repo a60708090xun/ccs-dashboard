@@ -38,3 +38,25 @@ _ccs_dispatch_run_worker "$CWD" "do Y" "$RUN" 2 60
 log2="$(cat "$WORK/argv.log")"
 assert_contains "claude binary invoked" "$log2" "claude -p do Y"
 assert_not_contains "claude default did not call gemini" "$log2" "gemini -p"
+
+echo "=== declared model is pinned per CLI (headless) ==="
+: > "$WORK/argv.log"
+_ccs_dispatch_run_worker "$CWD" "do Z" "$RUN" 1 60 gemini "" headless "gemini-3.5-flash"
+log_gm="$(cat "$WORK/argv.log")"
+assert_contains "gemini gets -m" "$log_gm" "-m gemini-3.5-flash"
+
+: > "$WORK/argv.log"
+_ccs_dispatch_run_worker "$CWD" "do Z" "$RUN" 1 60 claude "" headless "haiku"
+log_cm="$(cat "$WORK/argv.log")"
+assert_contains "claude gets --model" "$log_cm" "--model haiku"
+assert_not_contains "claude does not get gemini's flag" "$log_cm" "-m haiku"
+
+echo "=== no model declared -> no model flag ==="
+: > "$WORK/argv.log"
+_ccs_dispatch_run_worker "$CWD" "do W" "$RUN" 1 60 gemini
+log_nom="$(cat "$WORK/argv.log")"
+assert_not_contains "gemini keeps its own default" "$log_nom" " -m "
+: > "$WORK/argv.log"
+_ccs_dispatch_run_worker "$CWD" "do W" "$RUN" 1 60 claude
+assert_not_contains "claude keeps its own default" "$(cat "$WORK/argv.log")" "--model"
+
