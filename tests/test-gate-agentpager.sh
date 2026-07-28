@@ -133,6 +133,60 @@ assert_eq "PASS term" "PASS" "$term"
 assert_eq "PASS rc 0" "0" "$rc"
 assert_eq "PASS outcome" "accepted" "$(jq -r '.outcome' "$hop/final.json")"
 
+echo "=== integration: task model reaches the launch file ==="
+# end-to-end seam: run_one reads .model -> run_worker -> agentpager launch file.
+# Without it the worker silently ran on whatever default its CLI had saved, and
+# the launcher's alias resolution was unreachable from a dispatch.
+cat > "$WORK/model.yaml" <<YAML
+id: gm
+goal: "make m"
+backend: agentpager
+executor: gemini
+model: gemini-3.5-flash
+scope: { cwd: "$WORK/repo" }
+acceptance_criteria:
+  - id: AC1
+    text: "m exists"
+    verify: { cmd: "test -f m.txt" }
+YAML
+MODELLOG="$WORK/modellog"
+: > "$MODELLOG"; rm -f "$WORK/seat" "$WORK/repo/m.txt"; rm -f "$WORK/repo/tmp"/handoff-*.md
+_ccs_dispatch_agentpager_launch_file() {
+  local sig="$1"; local model="${7:-}"
+  mkdir -p "$WORK/repo/tmp"; : > "$WORK/seat"; : > "$WORK/repo/m.txt"
+  printf -- '---\nsummary: s\noutcome: done\n---\n' > "$WORK/repo/tmp/handoff-${sig}.md"
+  printf '%s\n' "$model" >> "$MODELLOG"; echo "$WORK/inbound-${sig}"
+}
+task_json="$(_ccs_dispatch_gate_load_task "$WORK/model.yaml")"
+term="$(_ccs_dispatch_run_one "$task_json" "$WORK/model.yaml" "$WORK/hop-model")"
+assert_eq "model PASS term" "PASS" "$term"
+assert_eq "declared model reaches the launch writer" "gemini-3.5-flash" \
+  "$(head -1 "$MODELLOG")"
+
+echo "=== integration: no model declared -> launch writer gets none ==="
+cat > "$WORK/nomodel.yaml" <<YAML
+id: gm2
+goal: "make x"
+backend: agentpager
+executor: gemini
+scope: { cwd: "$WORK/repo" }
+acceptance_criteria:
+  - id: AC1
+    text: "x exists"
+    verify: { cmd: "test -f x.txt" }
+YAML
+: > "$MODELLOG"; rm -f "$WORK/seat" "$WORK/repo/x.txt"; rm -f "$WORK/repo/tmp"/handoff-*.md
+_ccs_dispatch_agentpager_launch_file() {
+  local sig="$1"; local model="${7:-}"
+  mkdir -p "$WORK/repo/tmp"; : > "$WORK/seat"; : > "$WORK/repo/x.txt"
+  printf -- '---\nsummary: s\noutcome: done\n---\n' > "$WORK/repo/tmp/handoff-${sig}.md"
+  printf '%s\n' "$model" >> "$MODELLOG"; echo "$WORK/inbound-${sig}"
+}
+task_json="$(_ccs_dispatch_gate_load_task "$WORK/nomodel.yaml")"
+term="$(_ccs_dispatch_run_one "$task_json" "$WORK/nomodel.yaml" "$WORK/hop-nomodel")"
+assert_eq "no-model PASS term" "PASS" "$term"
+assert_eq "launch writer gets empty model" "" "$(head -1 "$MODELLOG")"
+
 echo "=== integration: attempt1 FAIL -> retry -> attempt2 PASS (Option B) ==="
 cat > "$WORK/retry.yaml" <<YAML
 id: gr
