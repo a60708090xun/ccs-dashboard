@@ -693,7 +693,7 @@ scope:
   cwd: "/abs/path/to/project"   # worker 執行與 gate 驗收的目錄
 executor: gemini                # 可選：claude(預設) | gemini | wingman。claude/gemini 皆 auto-approve 跑 headless（claude `--permission-mode bypassPermissions`、gemini `--approval-mode yolo`）— 無 tty 下權限 prompt 會卡到 timeout；gate 為信任邊界，見 §8.4
 backend: agentpager             # 可選：headless(預設) | agentpager。agentpager 讓 gate worker 跑在 agent-pager 互動 local channel（tmux、可監看/接管），gate 以前景阻塞式 spawn+wait 等 worker 的 per-attempt handoff 檔為完成訊號，回來後照常對現實驗收（gate 仍是唯一裁決來源）。executor 映射為互動 worker CLI（claude|gemini）；`agentpager` + `executor: wingman` 不合法（wingman 非可互動 launch 的 CLI）。見下方「backend: agentpager」
-model: "local-chat-35b"         # 可選（advisory）：本次執行的 model，供收尾 X-Executor provenance trailer 的 <model> 段；缺省則 trailer 退化為 executor-only。不影響派工行為
+model: "local-chat-35b"         # 可選：本次執行的 model。headless 帶 -m/--model、agentpager 寫進 launch 檔的 model: 欄；缺省 = 沿用 CLI 自己的預設。wingman 無 model 旗標，僅作 provenance。同時供收尾 X-Executor trailer 的 <model> 段
 plan: "plan.md"                 # 僅 executor: wingman（互為充要）：wingman plan.md 路徑，相對本檔所在目錄解析（同 next:）；由主 session 依 wingman plan-template 撰寫
 next: "task-y.yaml"             # 可選：下一個要自動執行與驗收的任務路徑（相對於此 yaml）
 execution_policy:
