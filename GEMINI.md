@@ -1,6 +1,6 @@
 # ccs-dashboard — Gemini CLI 規則
 
-> 請先讀 `AGENTS.md` 載入共通規則（開發流程、release、模組架構等）。
+@./AGENTS.md
 
 ## 硬性阻斷規則 (Hard Gates)
 
