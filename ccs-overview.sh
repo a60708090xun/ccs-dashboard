@@ -279,8 +279,6 @@ _ccs_overview_md() {
   fi
 
   # Zombie processes (count only)
-  local zombie_count
-  zombie_count=$(ps aux 2>/dev/null | grep -c '[c]laude.*--session' || echo 0)
   local stopped_count
   stopped_count=$(ps -u "$(id -u)" -o pid,stat,comm 2>/dev/null | awk '$2 ~ /T/ && $3 ~ /claude/' | wc -l)
   if [ "$stopped_count" -gt 0 ]; then
