@@ -114,7 +114,7 @@ HELP
   <td>${topic}</td>
 </tr>
 "
-  done < <(ps -eo pid,stat,rss,etime,args | awk '$2 ~ /^T/ && /claude/ && !/awk/')
+  done < <(ps -u "$(id -u)" -o pid,stat,rss,etime,args | awk '$2 ~ /^T/ && /claude/ && !/awk/')
 
   # ── Generate HTML ──
   cat > "$html_file" << 'HTMLHEAD'

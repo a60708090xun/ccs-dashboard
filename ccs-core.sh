@@ -652,7 +652,7 @@ HELP
 
     printf "\033[33m  PID %-8s  %4d MB  %-25s  %s → %s\033[0m\n" "$pid" "$mb" "$cwd" "$started" "$last_active"
     printf "\033[33m  %17s Topic: %s\033[0m\n\n" "" "$topic"
-  done < <(ps -eo pid,stat,rss,etime,args | awk '$2 ~ /^T/ && /claude/ && !/awk/')
+  done < <(ps -u "$(id -u)" -o pid,stat,rss,etime,args | awk '$2 ~ /^T/ && /claude/ && !/awk/')
 
   if [ ${#pids[@]} -eq 0 ]; then
     echo "No stopped claude processes found."
@@ -842,7 +842,7 @@ _ccs_resurrect_prompt_archived() {
   local _counts; _counts=$(_ccs_running_cwd_counts)
 
   local _sids=""
-  _sids=$(ps -eo args 2>/dev/null \
+  _sids=$(ps -u "$(id -u)" -o args 2>/dev/null \
     | grep -oP '(?<=--resume )[0-9a-f-]{36}|(?<=--session )[0-9a-f-]{36}' \
     | sort -u || true)
 
@@ -931,7 +931,7 @@ _ccs_detect_crash() {
   # Get running session info (once)
   # Method 1: session IDs from --resume or --session args
   local running_sids=""
-  running_sids=$(ps -eo args 2>/dev/null | grep -oP '(?<=--resume )[0-9a-f-]{36}|(?<=--session )[0-9a-f-]{36}' | sort -u)
+  running_sids=$(ps -u "$(id -u)" -o args 2>/dev/null | grep -oP '(?<=--resume )[0-9a-f-]{36}|(?<=--session )[0-9a-f-]{36}' | sort -u)
   # Method 2: per-(provider,cwd) live entry-process counts.
   # A single session spawns many helper processes (launcher bash, Bash-tool
   # children), so only the comm=claude / comm=gemini entry process is a reliable

@@ -282,10 +282,10 @@ _ccs_overview_md() {
   local zombie_count
   zombie_count=$(ps aux 2>/dev/null | grep -c '[c]laude.*--session' || echo 0)
   local stopped_count
-  stopped_count=$(ps -eo pid,stat,comm 2>/dev/null | awk '$2 ~ /T/ && $3 ~ /claude/' | wc -l)
+  stopped_count=$(ps -u "$(id -u)" -o pid,stat,comm 2>/dev/null | awk '$2 ~ /T/ && $3 ~ /claude/' | wc -l)
   if [ "$stopped_count" -gt 0 ]; then
     local zombie_ram
-    zombie_ram=$(ps -eo stat,rss,comm 2>/dev/null | awk '$1 ~ /T/ && $3 ~ /claude/ {sum+=$2} END {printf "%d", sum/1024}')
+    zombie_ram=$(ps -u "$(id -u)" -o stat,rss,comm 2>/dev/null | awk '$1 ~ /T/ && $3 ~ /claude/ {sum+=$2} END {printf "%d", sum/1024}')
     printf '## Zombie Processes\n\n'
     printf '%d stopped process(es), ~%d MB RAM. Run `ccs-cleanup --dry-run` for details.\n\n' "$stopped_count" "$zombie_ram"
   else
@@ -411,7 +411,7 @@ _ccs_overview_json() {
 
   # Zombie count
   local stopped_count
-  stopped_count=$(ps -eo pid,stat,comm 2>/dev/null | awk '$2 ~ /T/ && $3 ~ /claude/' | wc -l)
+  stopped_count=$(ps -u "$(id -u)" -o pid,stat,comm 2>/dev/null | awk '$2 ~ /T/ && $3 ~ /claude/' | wc -l)
 
   # crash_detected field (4th arg is optional)
   local -a crash_high_sids=()
@@ -923,7 +923,7 @@ _ccs_overview_terminal() {
 
   # Zombie summary
   local stopped_count
-  stopped_count=$(ps -eo pid,stat,comm 2>/dev/null | awk '$2 ~ /T/ && $3 ~ /claude/' | wc -l)
+  stopped_count=$(ps -u "$(id -u)" -o pid,stat,comm 2>/dev/null | awk '$2 ~ /T/ && $3 ~ /claude/' | wc -l)
   if [ "$stopped_count" -gt 0 ]; then
     printf '\n\033[31m⚠ %d zombie process(es)\033[0m — run \033[1mccs-cleanup --dry-run\033[0m\n' "$stopped_count"
   fi
