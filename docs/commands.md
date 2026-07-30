@@ -135,6 +135,8 @@ ccs-pick --md --full 3:9  # 完整展開第 3 個 session 的第 9 個 prompt re
 
 找出 Stopped 狀態（`Tl`/`T`）的 Code CLI process (如 claude) 並終止。
 這些通常是 waveterm `/exit` 後被 SIGTSTP suspend 的殭屍，每個佔 190-500 MB RAM。
+**只掃呼叫者自己的 uid**——共享主機上不會列出、也不會嘗試終止其他帳號的
+process（同樣適用於 `ccs-status` 的 Zombie Processes 區塊與各 overview 的統計）。
 
 ```bash
 ccs-cleanup           # 互動確認後清理

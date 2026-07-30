@@ -201,7 +201,7 @@ HELP
 
     printf "\033[31m  PID %-8s  %4d MB  %-25s  %s → %s\033[0m\n" "$pid" "$mb" "$cwd" "$started" "$last_active"
     printf "\033[31m  %17s Topic: %s\033[0m\n\n" "" "$topic"
-  done < <(ps -eo pid,stat,rss,etime,args | awk '$2 ~ /^T/ && /claude/ && !/awk/')
+  done < <(ps -u "$(id -u)" -o pid,stat,rss,etime,args | awk '$2 ~ /^T/ && /claude/ && !/awk/')
 
   if [ "$zombie_count" -eq 0 ]; then
     printf "  \033[32m(none)\033[0m\n"
@@ -378,7 +378,7 @@ _ccs_status_md() {
       echo "> ${topic}"
       echo
     fi
-  done < <(ps -eo pid,stat,rss,etime,args | awk '$2 ~ /^T/ && /claude/ && !/awk/')
+  done < <(ps -u "$(id -u)" -o pid,stat,rss,etime,args | awk '$2 ~ /^T/ && /claude/ && !/awk/')
 
   if ! $has_zombie; then
     echo "_(none)_ ✓"
