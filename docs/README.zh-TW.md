@@ -21,7 +21,7 @@ Code CLI 工具將對話存放在特定目錄中，但缺乏統一的管理介�
 ```bash
 git clone https://github.com/a60708090xun/ccs-dashboard.git ~/tools/ccs-dashboard
 cd ~/tools/ccs-dashboard
-./install.sh              # 檢查依賴、加 source 行到 ~/.bashrc、建立 skill symlink
+./install.sh              # 檢查依賴、加 source 行到 ~/.bashrc、建立 skill 連結
 ```
 
 `./install.sh --check` 檢查狀態；`./install.sh --uninstall` 移除。
@@ -32,9 +32,8 @@ cd ~/tools/ccs-dashboard
 # 在 .bashrc 加入：
 source ~/tools/ccs-dashboard/ccs-dashboard.sh
 
-# Skill symlinks（選用）：
-ln -s ~/tools/ccs-dashboard/skills/ccs-orchestrator ~/.claude/skills/ccs-orchestrator
-ln -s ~/tools/ccs-dashboard/skills/ccs-dispatch-run ~/.claude/skills/ccs-dispatch-run
+# Skill 連結（選用）——冪等，且會修復不見或斷掉的連結：
+./skills/install.sh
 ```
 
 接著直接問 Claude：
@@ -55,13 +54,13 @@ Claude: (runs /ccs-orchestrator)
 ☐ Write integration tests               (backend-api)
 ```
 
-內建的 [skill](https://docs.anthropic.com/en/docs/claude-code/skills) 會啟動互動式指揮台和 context-aware follow-up options，不用記指令。完整操作流程見 [commands.md](commands.md)。
+內建的 [skill](https://docs.anthropic.com/en/docs/claude-code/skills) 會啟動互動式指揮台和 context-aware follow-up options，不用記指令。完整操作流程見 [commands.md](commands.md)。共兩支，見下方「使用方式」。
 
 ## 使用方式
 
 ccs-dashboard 分兩層：
 
-**1. Claude Code Skill**（`/ccs-orchestrator`）— 主要介面。用自然語言問（「工作狀態」「我在做什麼」），得到互動式指揮台和 context-aware options。唯讀：只讀取和呈現資訊，不控制其他 session。
+**1. Claude Code Skills** — `/ccs-orchestrator` 是主要介面。用自然語言問（「工作狀態」「我在做什麼」），得到互動式指揮台和 context-aware options。唯讀：只讀取和呈現資訊，不控制其他 session。另一支是 `/ccs-dispatch-run`，把一次 dispatch 帶過它的 review gate；同名的 CLI 指令也存在，兩種身分共用一個名字。
 
 **2. CLI 指令** — 可以從 terminal 直接呼叫的 shell function，適合腳本、pipe、快速查詢。
 

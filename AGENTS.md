@@ -117,8 +117,10 @@ diff 命中以下任一面 → 必跑 Change Impact Analysis 並貼為 PR commen
   `skills/ccs-dispatch-run/references/task-yaml.md`）。
 - **outbound chain**：agent-pager 通知路徑（outbound sender 解析、job 完成通知）、
   handoff 續鏈（`--chain`）。
-- **部署面**：`install.sh`（modules array、`~/.bashrc` source line、skill symlink）、
-  `skills/` 下已分發的 skill。
+- **部署面**：`install.sh`（modules array、`~/.bashrc` source line）、
+  `skills/install.sh`（skill 連結的唯一實作處，且被個人 config 層的 sync 在**每次
+  push 收尾**呼叫——改壞它等於讓所有 skill 對 agent 靜默消失）、`skills/` 下已分發
+  的 skill。
 - **上游 CLI 相容面**：`ccs-canary-versions.txt`（`ccs_collect.py` 讀取的 known-good
   claude CLI 版本清單）。注意風險方向：沒有 parsing 邏輯讀這份清單，誤列一筆的後果
   是**消音**「版本未驗證、偵測可能失準」那行警示，讓解析靜默失準。

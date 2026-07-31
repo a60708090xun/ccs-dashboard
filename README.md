@@ -21,7 +21,7 @@ If you use Code CLI Sessions heavily — multiple providers, multiple repos, mul
 ```bash
 git clone https://github.com/a60708090xun/ccs-dashboard.git ~/tools/ccs-dashboard
 cd ~/tools/ccs-dashboard
-./install.sh              # Check deps, add source line to ~/.bashrc, create skill symlink
+./install.sh              # Check deps, add source line to ~/.bashrc, link the skills
 ```
 
 `./install.sh --check` reports status; `./install.sh --uninstall` removes it.
@@ -32,9 +32,8 @@ Or wire it up manually:
 # Add to .bashrc:
 source ~/tools/ccs-dashboard/ccs-dashboard.sh
 
-# Skill symlinks (optional):
-ln -s ~/tools/ccs-dashboard/skills/ccs-orchestrator ~/.claude/skills/ccs-orchestrator
-ln -s ~/tools/ccs-dashboard/skills/ccs-dispatch-run ~/.claude/skills/ccs-dispatch-run
+# Skill links (optional) — idempotent, and repairs a missing or dangling link:
+./skills/install.sh
 ```
 
 Then just ask Claude:
@@ -55,13 +54,13 @@ Claude: (runs /ccs-orchestrator)
 ☐ Write integration tests               (backend-api)
 ```
 
-The bundled [skill](https://docs.anthropic.com/en/docs/claude-code/skills) gives you an interactive orchestrator with context-aware follow-up options — no commands to memorize. See [docs/commands.md](docs/commands.md) for a full walkthrough.
+The bundled [skills](https://docs.anthropic.com/en/docs/claude-code/skills) give you an interactive orchestrator with context-aware follow-up options — no commands to memorize. See [docs/commands.md](docs/commands.md) for a full walkthrough.
 
 ## Usage
 
 ccs-dashboard has two layers:
 
-**1. Claude Code skill** (`/ccs-orchestrator`) — the primary interface. Ask in natural language ("work status", "what am I working on") and get an interactive orchestrator with context-aware options. Read-only: it observes and presents, it does not control other sessions.
+**1. Claude Code skills** — `/ccs-orchestrator` is the primary interface. Ask in natural language ("work status", "what am I working on") and get an interactive orchestrator with context-aware options. Read-only: it observes and presents, it does not control other sessions. `/ccs-dispatch-run` is the second one, driving a dispatch through its review gate; it doubles as a CLI command of the same name.
 
 **2. CLI commands** — shell functions you can call directly from the terminal, for scripting, piping, or quick one-off lookups.
 

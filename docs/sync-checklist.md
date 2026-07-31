@@ -12,6 +12,15 @@ Phase 3 收尾時，確認以下檔案的對應欄位已同步。
 - `skills/ccs-orchestrator/SKILL.md` — Command Palette
 - `docs/commands.md` — 詳細用法與範例
 
+## Skill 清單
+
+新增或移除 `skills/<name>/` 下的 skill 時：
+
+- `skills/install.sh` — `SKILLS` array（連結的唯一實作處）
+- `install.sh` — 安裝完成後的 "Skills installed" 列表
+- `tests/test-skills-install.sh` — `SKILLS` array
+- `README.md` / `docs/README.zh-TW.md` — skill 說明段落
+
 ## 狀態圖示
 
 修改 session 狀態分類時：
