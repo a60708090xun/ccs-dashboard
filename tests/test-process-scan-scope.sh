@@ -59,7 +59,7 @@ assert_eq "detector ignores comments"    "clean"    "$(_probe '# count source (p
 
 # ── 2. No unscoped scan anywhere in the shipped sources ──
 offenders=""
-for f in ccs-*.sh install.sh *.py; do
+for f in ccs-*.sh install.sh skills/install.sh *.py; do
   [ -f "$f" ] || continue
   hits=$(scan_file "$f")
   [ -n "$hits" ] && offenders="${offenders}${f}: ${hits}"$'\n'

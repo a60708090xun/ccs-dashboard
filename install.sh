@@ -152,19 +152,23 @@ do_install() {
     ok "Added to ${BASHRC}"
   fi
 
-  # Install skill symlink (idempotent)
-  local skill_src="${SCRIPT_DIR}/skills/ccs-orchestrator"
-  local skill_dst="$HOME/.claude/skills/ccs-orchestrator"
-  if [ -d "$skill_src" ]; then
-    if [ -L "$skill_dst" ]; then
-      warn "Skill symlink already exists: ${skill_dst}"
-    elif [ -e "$skill_dst" ]; then
-      warn "Skill path exists but is not a symlink: ${skill_dst} — skipping"
+  # Install skill links — delegated to skills/install.sh, which owns this
+  # logic because the config-layer sync re-runs it on every push. Keeping a
+  # second copy here is how the two drift apart.
+  # Tested with -f, not -x: it is invoked as `bash <path>`, so the exec bit is
+  # irrelevant and requiring it would skip a perfectly usable installer.
+  local skills_installer="${SCRIPT_DIR}/skills/install.sh"
+  local skills_ok=true
+  if [ -f "$skills_installer" ]; then
+    if bash "$skills_installer" | sed 's/^/  /'; then
+      ok "Skill links installed"
     else
-      mkdir -p "$HOME/.claude/skills"
-      ln -s "$skill_src" "$skill_dst"
-      ok "Skill symlink: ${skill_dst} → ${skill_src}"
+      warn "Skill links incomplete — see the messages above"
+      skills_ok=false
     fi
+  else
+    warn "${skills_installer} missing — skill links not installed"
+    skills_ok=false
   fi
 
   echo
@@ -195,8 +199,15 @@ do_install() {
   echo "  ccs-review          — session review report (md/html/pdf)"
   echo "  ccs-project         — per-project insight report (md/html)"
   echo
-  echo "Skills installed:"
+  # Heading follows the verdict above: announcing both as installed after a
+  # warning that the links are incomplete would contradict the run's own output.
+  if $skills_ok; then
+    echo "Skills installed:"
+  else
+    echo "Skills (NOT fully linked — see the warning above):"
+  fi
   echo "  ccs-orchestrator    — interactive work orchestrator (Code CLI skill)"
+  echo "  ccs-dispatch-run    — dispatch-with-gate driver (Code CLI skill)"
 }
 
 # ── Uninstall ──
@@ -210,15 +221,16 @@ do_uninstall() {
   sed -i '/# ccs-dashboard/d; /ccs-dashboard\.sh/d' "$BASHRC"
   ok "Removed from ${BASHRC}"
 
-  # Remove skill symlink if it points to us
-  local skill_dst="$HOME/.claude/skills/ccs-orchestrator"
-  if [ -L "$skill_dst" ]; then
-    local target
-    target=$(readlink "$skill_dst")
-    if [[ "$target" == *"ccs-dashboard"* ]]; then
-      rm "$skill_dst"
-      ok "Removed skill symlink: ${skill_dst}"
-    fi
+  # Remove skill links — same delegation as install; that script only removes
+  # links resolving to this checkout, so a second clone's links survive.
+  local skills_installer="${SCRIPT_DIR}/skills/install.sh"
+  if [ -f "$skills_installer" ]; then
+    # The `||` branch is required, not decorative: without it `set -e` would
+    # abort before the data directory is cleaned, leaving uninstall half done.
+    # It reports rather than swallowing — a link that cannot be removed (say a
+    # read-only skills dir) used to exit 0 with nothing said.
+    bash "$skills_installer" --uninstall | sed 's/^/  /' ||
+      warn "Skill links not fully removed — see the messages above"
   fi
 
   # Remove data directory
