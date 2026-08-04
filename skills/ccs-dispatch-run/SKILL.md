@@ -69,10 +69,12 @@ ccs-dispatch-run <task.yaml>
 chain.json                     # 鏈終態：hops[]、stop_reason、outcome
 hop-NN-<task-id>/
 ├── task.yaml                  # dispatch 當下凍結的驗收條件
-├── final.json                 # 本 hop 終態：outcome / attempts
+├── final.json                 # 本 hop 終態：outcome / attempts / worker_rc
 └── attempt-NN/
     ├── prompt.md              # worker 收到的完整 prompt
     ├── executor-output.md     # worker 原始輸出（僅供鑑識，勿當依據）
+    ├── executor-exit-code     # worker process exit code（純 evidence；僅 headless backend）
+    ├── worker-error           # 僅確定性基礎設施故障：故障類別（見 Verdict 語意）
     ├── git-status.txt / diff.patch   # ground truth
     └── gate/
         ├── <AC-id>.json       # per-AC verdict + exit code + output tail
@@ -93,10 +95,21 @@ untracked，**不會**出現在 diff.patch，要靠 `??` 行發現後另行讀�
   等你 Stage 2 裁決，不參與 gate 判定）
 - `RETRY` — 有 FAIL 且 loop_budget 未耗盡；CLI 自動帶「machine 事實
   摘要」（AC id + cmd + exit code，無 worker prose）重派，你不介入
-- `ESCALATE` — budget 耗盡。交給人診斷（讀 evidence 樹），
+- `ESCALATE` — budget 耗盡，或發生 ERROR。交給人診斷（讀 evidence 樹），
   **不是**由你直接重試 — 你帶著 planning 確認偏誤
-- `HARD_STOP` / `ERROR` — 判定函式已支援，目前無 producer
-  （現行 AC 執行只產生 PASS / FAIL / SKIPPED_FOR_LLM）
+- `ERROR` — worker 根本沒起來或沒跑完，且**重派一定不會過**：headless
+  exit 125（timeout 自身失敗）/ 126（CLI 不可執行）/ 127（CLI 不存在），
+  以及 `backend: agentpager` 的 daemon 不在、`cwd` 無 proj-map entry。
+  gate 讀 `attempt-NN/worker-error` 產生，類別記在
+  `verdict.json.worker_error`，終態直接 ESCALATE（不吃 loop_budget），
+  且**即使 cmd-AC 全 PASS 也一樣**（worker 沒跑，AC 過只代表現實剛好符合）。
+  **不含** timeout（124）、一般非零 rc、agentpager 的 seat 被占與 launch
+  檔寫入失敗——那些可能在下一次 attempt 自癒，維持在 FAIL 路徑。
+  診斷：`final.json.worker_rc`（`backend: agentpager` 恆為 null，改看
+  `agentpager-wait-rc`）＋ `escalation.reason`（`gate` / `worker_error`），
+  不必翻 trace。看到 `exit-127` 先確認該 executor CLI 是否在 PATH 上——
+  worker CLI 自己回 127 也會落進這一格
+- `HARD_STOP` — 破壞性操作（判定函式已支援，目前無 producer）
 
 ## 鏈結（gated chain）
 

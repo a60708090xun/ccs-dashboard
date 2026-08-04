@@ -109,15 +109,31 @@ runs/<first_id>-chain-NN/
     ├── attempt-NN/
     │   ├── prompt.md              # attempt 1 = goal; ≥2 = §6 feedback + goal
     │   ├── executor-output.md     # worker stdout+stderr
+    │   ├── executor-exit-code     # worker rc, headless backend only (evidence)
+    │   ├── worker-error           # deterministic infra failure class, if any
     │   ├── git-status.txt         # ground-truth porcelain
     │   ├── diff.patch             # ground-truth diff
     │   └── gate/<ac-id>.json      # per-AC verdict evidence
-    └── final.json                 # {outcome, attempts, escalation}
+    └── final.json                 # {outcome, attempts, worker_rc, escalation}
 ```
 
 `task.yaml` is frozen on entry — acceptance criteria must not change
 mid-run. The gate re-derives ground truth (`git-status.txt` / `diff.patch`)
 independently of the worker's self-report (see I4).
+
+`worker-error` exists only when the worker demonstrably never ran to
+completion and a retry cannot change that (`exit-125` / `exit-126` /
+`exit-127`, `agentpager-daemon-down`, `agentpager-no-proj-map`). Failures
+that a retry might survive — a timeout, a plain non-zero rc, an occupied
+agentpager seat, a launch file that could not be written — deliberately
+do not write it. It is the gate's ERROR input; its class is copied into
+`gate/verdict.json.worker_error`, and `final.json` carries the last
+attempt's `worker_rc` plus `escalation.reason` (`gate` | `worker_error`,
+read back from that verdict) so a reader can separate "judged failed"
+from "never finished" without opening the trace. `worker_rc` comes from
+`executor-exit-code`, which only the headless seam writes — under
+`backend: agentpager` it is always `null` and `agentpager-wait-rc` is the
+corresponding signal.
 
 ## 5. Cleanup
 

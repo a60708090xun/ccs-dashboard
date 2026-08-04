@@ -21,6 +21,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follo
 
 ### Fixed
 
+- **ccs-dispatch-run no longer spends a retry on infrastructure** — the gate loop used to drop the worker's exit code on the headless path, so a crashed worker, a missing CLI and a worker that ran and did nothing were indistinguishable, and a failure that had nothing to do with the task still burned `loop_budget`. Every headless executor now records `attempt-NN/executor-exit-code` as evidence, and the deterministic subset of failures (exit 125/126/127, plus `backend: agentpager`'s daemon-down and no-proj-map) also writes `attempt-NN/worker-error`, which the gate turns into the ERROR verdict its pure judgement function already accepted — escalating on attempt 1 instead of retrying, and outranking a passing AC set. A timeout (124), a plain non-zero rc, an occupied agentpager seat and a failed launch write deliberately stay on the FAIL path, since those can still self-heal on the next attempt. `final.json` gains `worker_rc` and an `escalation.reason` of `gate` | `worker_error`, so the terminal state is readable without opening the worker trace. (#106)
 - `ccs-jobs` status sync is now agent-pager-aware: resolves effective status via the same reduce-merge as the board (fallback markers no longer skip liveness), uses the worker tmux session instead of the monitor pid as the liveness signal, and defers to a live monitor during worker startup to avoid falsely completing a just-dispatched job. (PR #72)
 
 ## [0.3.3] — 2026-04-17

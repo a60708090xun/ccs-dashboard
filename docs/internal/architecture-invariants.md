@@ -168,8 +168,11 @@ falling back would make `auto` less reliable than plain headless.
 
 **Rule:** the deterministic Stage-1 gate (`_ccs_dispatch_gate_run`) is the
 only thing that decides PASS / RETRY / ESCALATE / HARD_STOP. The `backend:`
-choice (headless vs agentpager) changes only how the worker process is
-launched, never the verdict, evidence layout, or retry logic.
+choice (headless vs agentpager) changes how the worker is launched and what
+spawn-side evidence exists (`executor-exit-code` vs `agentpager-wait-rc`);
+it must never influence the *acceptance* judgement. A backend may report
+that the work never happened (see the corollary below) — it may not hold an
+opinion on whether the work is good.
 
 **Why:** the gate re-runs every `verify.cmd` against ground truth, which is
 what catches an auto-approved false success (a headless `claude -p
@@ -180,8 +183,25 @@ carry at least one `cmd`-track AC — each AC declares exactly one of
 `verify.cmd` / `verify.guidance`, and an all-`guidance` task is rejected
 at load (`_ccs_dispatch_gate_load_task`).
 
+**Corollary — worker infra failure does not become a second verdict
+source.** A worker that never started (missing CLI, agentpager daemon
+down, no proj-map entry) writes a one-line class to
+`attempt-NN/worker-error`; the classification lives at the site that
+knows how the spawn failed, never in the gate. The gate reads that single
+signal and appends a synthetic ERROR record to the verdict input, so the
+existing pure `_ccs_dispatch_gate_verdict` still produces the terminal
+word (ERROR -> ESCALATE, no retry spent), and it outranks a fully passing
+AC set — the worker never ran, so a green gate only means reality already
+matched. `_ccs_dispatch_run_one` keeps branching on the gate's output
+only, and reads `escalation.reason` back out of that verdict rather than
+re-deriving it from the evidence file. A failure class that could
+self-heal on a retry (timeout 124, plain non-zero rc, agentpager seat
+busy or launch-file write failure) is deliberately left off that file and
+stays on the FAIL path; a missing file is fail-open.
+
 **Test backstop:** `tests/test-gate-verdict.sh`, `tests/test-gate-run.sh`,
-`tests/test-gate-loop.sh`, `tests/test-gate-ac.sh`.
+`tests/test-gate-loop.sh`, `tests/test-gate-ac.sh`,
+`tests/test-gate-worker-error.sh`.
 
 **Cite:** `_ccs_dispatch_gate_run`, `_ccs_dispatch_gate_verdict`,
 `_ccs_dispatch_gate_load_task` (AC validation) in `ccs-dispatch.sh`;

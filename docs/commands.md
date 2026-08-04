@@ -681,8 +681,31 @@ ccs-dispatch-run <task.yaml>
 
 - `PASS` — 全部 cmd-AC PASS（guidance-AC 記 SKIPPED_FOR_LLM，不參與判定）
 - `RETRY` — 有 FAIL 且 `attempt <= loop_budget` → 重派
-- `ESCALATE` — budget 耗盡、或任一 AC ERROR
-- `HARD_STOP` — 破壞性操作（判定函式已支援）
+- `ESCALATE` — budget 耗盡、或 worker 發生確定性基礎設施故障（ERROR）
+- `HARD_STOP` — 破壞性操作（判定函式已支援，目前無 producer）
+
+**Worker 故障 vs 驗收失敗（ERROR 的來源）：** worker 根本沒起來或沒跑完、且
+重派一定不會過時，gate 產生一筆合成 ERROR 記錄，判定直接走 ESCALATE（不吃
+`loop_budget`）。判定輸入是 `attempt-NN/worker-error` 這個單行類別檔，由**產生
+現場**寫出——headless 的 exit `125`（timeout 自身失敗）/ `126`（CLI 不可執行）/
+`127`（CLI 不存在），以及 `backend: agentpager` 的 daemon 不在、`cwd` 無
+proj-map entry。類別記進 `verdict.json.worker_error`；該記錄刻意不落
+`gate/<id>.json`，因為 AC id 可為任意 `[A-Za-z0-9_.-]+` token、任何檔名都可能
+與使用者的 AC 撞名。
+
+**ERROR 蓋過 AC 結果：** 有 `worker-error` 時即使全部 cmd-AC 都 PASS 也照樣
+ESCALATE。worker 沒跑就不該接受驗收結果——現實可能是前一輪 hop 或既有狀態剛好
+滿足了 AC。
+
+**刻意不算 ERROR 的（都可能在下一次 attempt 自癒，維持在 FAIL 路徑）：**
+`124`（timeout）、一般非零 rc、agentpager 的 seat 被占與 launch 檔寫入失敗。
+註：「FAIL 路徑」在 budget 未耗盡時是 RETRY，耗盡時（或 `executor: wingman`，
+其 budget 被 clamp 成 0）仍是 ESCALATE。
+
+要分辨終態是「gate 判失敗」還是「worker 沒跑完」，讀 `final.json` 的
+`worker_rc`（`backend: agentpager` 恆為 `null`，該 backend 看
+`agentpager-wait-rc`）與 `escalation.reason`（`gate` / `worker_error`），不必翻
+worker trace。無 `worker-error` 檔 = fail-open（行為與未導入前一致）。
 
 **收尾輸出（stdout）：** 除了 `run: <run-dir>` 與 `outcome:`／`chain:` 摘要，收尾另印一行 **advisory** commit trailer 供收尾 commit 的人 copy：`suggested trailer: X-Executor: <executor>/<model> (ccs-dispatch-run)`（`model` 缺省時退化為 executor-only、無斜線）。對所有終態皆印、chain 內每個 distinct `executor[/model]` 各印一行。純建議：dispatch-run 不 commit、不強制，語意與 `Co-Authored-By`（orchestrator 署名）正交。詳 `skills/ccs-dispatch-run/references/task-yaml.md`。
 
@@ -726,14 +749,15 @@ ${XDG_DATA_HOME:-~/.local/share}/ccs-dashboard/dispatch/runs/<first-task-id>-cha
       git-status.txt     # gate 當下 git status --porcelain
       diff.patch         # git diff
       wingman-result.md  # 僅 wingman executor：scope.cwd/.wingman/result.md 凍結副本
-      executor-exit-code # 僅 wingman executor：wingman process exit code（純 evidence，不參與 verdict）
+      executor-exit-code # 僅 headless backend（claude / gemini / wingman 皆落）：worker process exit code（純 evidence，不參與 verdict）。backend: agentpager 沒有 process rc，對應證據是 agentpager-wait-rc
+      worker-error       # 僅確定性基礎設施故障：故障類別單行（exit-125|126|127 / agentpager-daemon-down / agentpager-no-proj-map）；gate 據此發 ERROR
       launch-file.txt    # 僅 backend: agentpager：寫給 agent-pager 的 inbound launch 檔路徑
       handoff.md         # 僅 backend: agentpager：worker per-attempt 完成訊號 handoff 副本
       agentpager-wait-rc # 僅 backend: agentpager：前景 wait 結果（0=handoff / 1=timeout|無 handoff；純 evidence）
       gate/AC<n>.json    # per-AC 紀錄（verdict/exit/stdout tail…）
       gate/verdict.json  # gate verdict
     attempt-02/          # 重派時遞增；prompt.md 含前輪 FAIL 摘要
-    final.json           # 終態 outcome: accepted | escalated | hard_stop
+    final.json           # 終態 outcome: accepted | escalated | hard_stop；worker_rc（最後一輪 exit code，無則 null）；escalation.reason: gate | worker_error
   hop-02-<task-id-2>/
     ...
 ```
