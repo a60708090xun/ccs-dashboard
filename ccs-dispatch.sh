@@ -283,9 +283,25 @@ _ccs_dispatch_gate_run() {
     i=$((i + 1))
   done
 
+  # A deterministic worker infra failure (issue #106) enters the verdict as
+  # a synthetic ERROR record, which the existing pure verdict function maps
+  # to ESCALATE without spending loop_budget. It is deliberately NOT written
+  # as gate/<id>.json: AC ids are any [A-Za-z0-9_.-]+ token, so any such
+  # filename could collide with a user's AC. The reason lands in
+  # verdict.json.worker_error instead. No file = fail-open (unchanged).
+  local werr=""
+  [ -f "$attempt_dir/worker-error" ] \
+    && werr="$(head -n1 "$attempt_dir/worker-error")"
+  if [ -n "$werr" ]; then
+    verdicts="$(jq -n --argjson a "$verdicts" \
+      '$a + [{ac_id:"_worker", track:"infra", verdict:"ERROR"}]')"
+  fi
+
   local verdict_json
   verdict_json="$(_ccs_dispatch_gate_verdict "$verdicts" "$attempt" "$budget" \
-    | jq --arg ts "$(date -Iseconds)" '.timestamp = $ts')"
+    | jq --arg ts "$(date -Iseconds)" --arg we "$werr" \
+        '.timestamp = $ts
+         | .worker_error = (if $we == "" then null else $we end)')"
   echo "$verdict_json" > "$gate_dir/verdict.json"
   echo "$verdict_json" | jq -r '.verdict'
 }
@@ -389,8 +405,18 @@ _ccs_dispatch_run_worker() {
   local wrc=0
   (cd "$cwd" && timeout "$timeout_sec" "${cmd[@]}") \
     > "$ad/executor-output.md" 2>&1 || wrc=$?
+  # Every executor records its rc: a crashed worker, a missing CLI and a
+  # worker that ran and did nothing are otherwise indistinguishable in the
+  # evidence tree. Evidence only -- the gate stays the sole verdict source.
+  echo "$wrc" > "$ad/executor-exit-code"
+  # Deterministic infra failures only, where a retry provably cannot pass:
+  # 125 (timeout itself failed), 126 (CLI not executable), 127 (CLI not
+  # found). 124 (timeout) and a plain non-zero can self-heal on attempt 2,
+  # so they stay on the FAIL -> RETRY path.
+  case "$wrc" in
+    125|126|127) printf 'exit-%s\n' "$wrc" > "$ad/worker-error" ;;
+  esac
   if [ "$executor" = "wingman" ]; then
-    echo "$wrc" > "$ad/executor-exit-code"
     cp "$cwd/.wingman/result.md" "$ad/wingman-result.md" 2>/dev/null || true
   fi
   (cd "$cwd" && git status --porcelain) > "$ad/git-status.txt" 2>/dev/null || true
@@ -430,7 +456,10 @@ _ccs_dispatch_run_one() {
   cp "$task_yaml" "$hop_dir/task.yaml"   # freeze (§1)
 
   local attempt=1 verdict outcome="escalated" rc=10 term="ESCALATE"
-  local ad prev prompt fb
+  # ad is read after the loop; seed it so a budget that makes the loop body
+  # never run (a hand-written negative or non-integer loop_budget) degrades to
+  # "no evidence" instead of an unbound-variable abort under `set -u`.
+  local ad="" prev prompt fb
   while [ "$attempt" -le $(( budget + 1 )) ]; do
     ad="$hop_dir/attempt-$(printf '%02d' "$attempt")"
     mkdir -p "$ad"
@@ -454,9 +483,26 @@ _ccs_dispatch_run_one() {
     attempt=$((attempt + 1))
   done
 
+  # worker_rc + escalation.reason let the orchestrator tell "the gate judged
+  # it failed" from "the worker never finished" without reading the trace.
+  # The reason is read back from the gate's own verdict, not from the evidence
+  # file: the gate is the sole verdict source (I4), so its record of what it
+  # judged must be what final.json reports.
+  local worker_rc=null esc_reason="gate" wrc_line=""
+  [ -s "$ad/executor-exit-code" ] && wrc_line="$(head -n1 "$ad/executor-exit-code")"
+  case "$wrc_line" in
+    ''|*[!0-9]*) : ;;
+    *) worker_rc="$wrc_line" ;;
+  esac
+  if [ -f "$ad/gate/verdict.json" ] \
+     && [ -n "$(jq -r '.worker_error // empty' "$ad/gate/verdict.json" 2>/dev/null)" ]; then
+    esc_reason="worker_error"
+  fi
+
   jq -n --arg o "$outcome" --argjson n "$attempt" \
-    '{outcome:$o, attempts:$n, stage2:null,
-      escalation:(if $o=="escalated" then {reason:"gate"} else null end)}' \
+    --argjson wrc "$worker_rc" --arg er "$esc_reason" \
+    '{outcome:$o, attempts:$n, stage2:null, worker_rc:$wrc,
+      escalation:(if $o=="escalated" then {reason:$er} else null end)}' \
     > "$hop_dir/final.json"
   echo "$term"
   return "$rc"
@@ -1595,6 +1641,7 @@ _ccs_dispatch_run_worker_agentpager() {
   if ! _ccs_dispatch_agentpager_available; then
     printf 'agent-pager backend not available (daemon down or spool missing)\n' \
       > "$ad/agentpager-error.txt"
+    printf 'agentpager-daemon-down\n' > "$ad/worker-error"
     return 0
   fi
 
@@ -1606,6 +1653,7 @@ _ccs_dispatch_run_worker_agentpager() {
   local proj
   if ! proj="$(_ccs_dispatch_resolve_proj_from_dir "$cwd")"; then
     printf 'no proj-map entry for %s\n' "$cwd" > "$ad/agentpager-error.txt"
+    printf 'agentpager-no-proj-map\n' > "$ad/worker-error"
     return 0
   fi
   local pager_dir="${AGENT_PAGER_DIR:-$HOME/.agent-pager}"
