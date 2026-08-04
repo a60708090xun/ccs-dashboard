@@ -234,6 +234,12 @@ assert_eq "daemon-down term ESCALATE" "ESCALATE" "$term3"
 assert_eq "daemon-down rc 10" "10" "$rc3"
 assert_eq "fast-fail error recorded" "yes" \
   "$([ -f "$hop3/attempt-01/agentpager-error.txt" ] && echo yes || echo no)"
+# issue #106: the worker never started, so this escalates on attempt 1 rather
+# than spending the retry budget on infrastructure. Asserting the terminal word
+# alone would not have caught that change of meaning.
+assert_eq "daemon-down spends no retry" "1" "$(jq -r '.attempts' "$hop3/final.json")"
+assert_eq "daemon-down blames the worker" "worker_error" \
+  "$(jq -r '.escalation.reason' "$hop3/final.json")"
 
 unset -f _ccs_dispatch_agentpager_session_alive _ccs_dispatch_agentpager_stop_file \
          _ccs_dispatch_agentpager_launch_file _ccs_dispatch_agentpager_available
