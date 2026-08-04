@@ -49,7 +49,11 @@ older_st=$(printf '%s\n' "$out4" | awk -F'|' '$7=="older001"{print $4}')
 echo ""
 echo "=== e2e: ccs_collect.py → resurrection → non-archived status ==="
 
-TMPDIR_E2E=$(mktemp -d /pool2/chenhsun/tools/ccs-dashboard-fix-issue57/build/e2e-XXXXXX)
+# Repo-relative scratch (tmp/ is gitignored): the previous absolute path was
+# pinned to one machine's since-deleted worktree, so `mktemp -d` failed under
+# `set -e` and this file went red on every host.
+mkdir -p "$SCRIPT_DIR/tmp"
+TMPDIR_E2E=$(mktemp -d "$SCRIPT_DIR/tmp/e2e-XXXXXX")
 SID_E2E="aaaabbbb-cccc-dddd-eeee-ffffffffffff"
 JDIR_E2E="$TMPDIR_E2E/projects/-tmp-ccs-e2e"
 mkdir -p "$JDIR_E2E"

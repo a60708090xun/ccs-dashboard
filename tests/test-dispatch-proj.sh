@@ -16,7 +16,7 @@ bad() { FAIL=$((FAIL+1)); printf 'FAIL: %s\n' "$1"; }
 MAP="$(mktemp "$SCRIPT_DIR/tmp.projmap.XXXXXX")"
 cat > "$MAP" <<'EOF'
 # ccs proj map (key = abspath, mirrors lead whitelist keys)
-demo = /pool2/chenhsun/tools/ccs-dashboard
+demo = /home/x/work/demo
 other = /home/x/work/other
 EOF
 export CCS_DISPATCH_PROJ_MAP="$MAP"
@@ -24,11 +24,11 @@ cleanup() { rm -f "$MAP"; }
 trap cleanup EXIT
 
 test_exact_match() {
-  local got; got="$(_ccs_dispatch_resolve_proj_from_dir /pool2/chenhsun/tools/ccs-dashboard)"
+  local got; got="$(_ccs_dispatch_resolve_proj_from_dir /home/x/work/demo)"
   [ "$got" = "demo" ] && ok "exact path -> key" || bad "exact (got: '$got')"
 }
 test_trailing_slash() {
-  local got; got="$(_ccs_dispatch_resolve_proj_from_dir /pool2/chenhsun/tools/ccs-dashboard/)"
+  local got; got="$(_ccs_dispatch_resolve_proj_from_dir /home/x/work/demo/)"
   [ "$got" = "demo" ] && ok "trailing slash normalized" || bad "trailing slash (got: '$got')"
 }
 test_second_entry() {
@@ -41,7 +41,7 @@ test_no_match() {
 }
 test_missing_map() {
   ( export CCS_DISPATCH_PROJ_MAP=/no/such/map
-    _ccs_dispatch_resolve_proj_from_dir /pool2/chenhsun/tools/ccs-dashboard >/dev/null 2>&1 ) \
+    _ccs_dispatch_resolve_proj_from_dir /home/x/work/demo >/dev/null 2>&1 ) \
     && bad "missing map should fail" || ok "missing map -> rc!=0"
 }
 
