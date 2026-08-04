@@ -40,7 +40,41 @@
 - **負向 AC 碰撞檢查**（wingman plan-passthrough 尤其）：`! grep`
   類 AC 凍結前，對 plan 內給定的代碼**含註解字面**跑同一
   predicate——基線驗證擋不住 plan 自帶的字面碰撞，gate 會 FAIL
-  在正確的實作上
+  在正確的實作上。（下面「負向 AC 只掃 diff 新增行」那條同時緩解本條：
+  掃描範圍縮到新增行後，plan 內既有字面不再命中）
+- **AC 逐字寫在 YAML block scalar，不要先經 markdown table**：table 需要
+  把 pipe 逃脫成 `\|`，而 ERE 的 `\|` 是**字面 pipe、不是 alternation**
+  （實測 `grep -nE '/a/\|/b/'` 對 `/a/x` 回 rc=1，只對含完整字面字串
+  `/a/|/b/` 的行才回 rc=0）——逃脫過的 AC 通常永遠不 match，變成永遠
+  PASS 的橡皮圖章
+- **「沒動到 X」類 AC 錨在派工前的 base commit**，不要用裸 `git diff`：
+  後者比的是 working tree vs index，worker 只要 `git add` 就回 rc=0
+  （實測：改檔後 `git diff --quiet` rc=1、`git add` 之後 rc=0，而同一
+  時點 `git diff HEAD --quiet` 仍 rc=1）→ 該 AC vacuously PASS，而這類
+  AC 往往正是唯一擋住 worker 改動既存檔案的機制。**`git diff HEAD` 與
+  `git status --porcelain` 只擋到這一步**——worker 再 commit 一次，兩者
+  一起變乾淨（實測皆回「無差異」）。派工前記下
+  `BASE=$(git rev-parse HEAD)`，AC 用 `git diff "$BASE" -- <path>`，
+  或另加一條 `test "$(git rev-parse HEAD)" = "<base-sha>"`
+- **負向 AC 只掃 diff 的新增行，不要掃整份檔案**：規則文件常把要禁的
+  pattern 當示例寫在自己內文裡，整檔掃描於是恆紅；而恆紅 AC 對 cheap
+  worker 是「把那條規則刪掉」的誘因。寫法：
+
+  ```
+  ! git diff "$BASE" -U0 --no-color -- <path> \
+    | grep -E '^\+' | grep -vE '^\+\+\+ ' | grep -E '<pattern>' >/dev/null
+  ```
+
+  三個細節都是實測踩出來的：`--no-color`（目標 repo 若設
+  `color.ui = always`，diff 行帶 ANSI escape，`^\+` 全部不匹配 → 整條
+  靜默 PASS）、用 `grep -vE '^\+\+\+ '` 濾檔頭而非 `^\+[^+]`（後者會漏掉
+  內容本身以 `+` 開頭的新增行）、末段 `grep … >/dev/null` 而非 `grep -q`
+  （`-q` 提早退出使上游收 SIGPIPE，在有 `pipefail` 的 shell 下整條反轉成
+  PASS）。**涵蓋範圍：只涵蓋 tracked 檔案的修改**——worker **新建**的檔案
+  不在 `git diff` 裡（實測回 PASS），要納入須先
+  `git add -N -- <path>`，或對該檔改掃整檔。凍結前對一個**故意含
+  pattern** 的暫時 diff 跑一次，確認會 FAIL——路徑打錯或檔案不存在時
+  diff 為空，這條會恆 PASS 而不報錯
 - integration 類：驗「元件被呼叫」不只「檔案存在」
   （例：`grep -q 'from .greeter import' src/cli.py`）
 - 涉及 credential 的 task：加一條
