@@ -49,6 +49,19 @@ assert_contains "prompt keeps the task" "$ap" "Task: do X"
 assert_contains "prompt still names the per-job handoff" "$ap" "tmp/handoff-d-auto-1.md"
 assert_contains "prompt forbids clarifying questions" "$ap" "Do not ask clarifying questions"
 assert_contains "prompt routes blocked to outcome: blocked" "$ap" "outcome: blocked"
+# The dictated frontmatter carries the schema marker, so a worker following the
+# prompt emits the same shape as the structured-handoff contract (issue 112 #4).
+assert_contains "prompt dictates the handoff/v1 schema marker" "$ap" "handoff_schema: handoff/v1"
+# ccs-handoff emits no frontmatter and lands elsewhere; the prompt must scope it
+# to the prose rather than recommend it for the whole file (issue 112 #3).
+assert_contains "prompt scopes ccs-handoff to the prose" "$ap" "draft the PROSE"
+# Flatten first: the pre-fix prompt wrapped this phrase across two lines, so a
+# line-based grep never matched it and the guard passed even on the old text.
+if printf '%s' "$ap" | tr '\n' ' ' | grep -q "use ccs-handoff for the content if helpful"; then
+  printf '  FAIL: prompt still recommends ccs-handoff for the whole file\n'; FAIL=$((FAIL + 1))
+else
+  printf '  PASS: prompt no longer recommends ccs-handoff for the whole file\n'; PASS=$((PASS + 1))
+fi
 
 echo "=== context bridge carries parent summary + body, capped ==="
 bh="$DD/bridge.handoff"
