@@ -164,8 +164,8 @@ The async agent-pager worker signals completion by writing
 `tmp/handoff-<job_id>.md` **in its own project repo** (not the dispatch
 dir). `_ccs_dispatch_agentpager_prompt` injects a non-negotiable handoff
 rule instructing the worker to write that exact path last, with a YAML
-frontmatter block (`summary` / `outcome` / `next`) the dispatcher parses
-for the board. The monitor (`_ccs_dispatch_agentpager_monitor`) polls for
+frontmatter block (`handoff_schema` / `summary` / `outcome` / `next`; the
+dispatcher parses the latter three for the board). The monitor (`_ccs_dispatch_agentpager_monitor`) polls for
 this file; on appearance it stops the seat and finalizes, capturing the
 file to `results/<job_id>.handoff`. There is no wall-clock kill on this
 path (design D2 — see I8).
