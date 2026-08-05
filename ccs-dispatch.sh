@@ -363,6 +363,33 @@ _ccs_dispatch_chain_alloc_dir() {
   echo "$dir"
 }
 
+# Ground-truth evidence for one attempt: git status plus a diff anchored at the
+# hop's base commit (written by run_one before attempt 1).
+#
+# The anchor is the whole point. A bare `git diff` compares the working tree
+# against the INDEX, so a worker that runs `git add` empties it, and one that
+# commits empties `git diff HEAD` too -- leaving "the worker did nothing" and
+# "the worker did the work and staged it" identical in the only material Stage 2
+# is allowed to read. Nothing stops a worker from staging: it runs auto-approved
+# and the protocol never forbids it. The AC transcription rules already say
+# base-anchor instead of bare `git diff` for AC; this seam is the same trap in
+# the evidence path (issue #109).
+_ccs_dispatch_capture_evidence() { # $1=cwd $2=hop_dir $3=attempt_dir
+  local cwd="$1" hop_dir="$2" ad="$3" base=""
+  [ -s "$hop_dir/base-commit" ] && base="$(head -n1 "$hop_dir/base-commit")"
+  (cd "$cwd" && git status --porcelain) > "$ad/git-status.txt" 2>/dev/null || true
+  if [ -n "$base" ]; then
+    (cd "$cwd" && git diff "$base") > "$ad/diff.patch" 2>/dev/null || true
+  else
+    # No usable base (cwd is not a git repo, or a repo with no commit yet).
+    # Keep the old behaviour rather than inventing a substitute: this seam is
+    # fail-soft by design elsewhere too, and a diff that silently means
+    # something different would be worse than a known limit. git-status.txt
+    # still names the touched paths.
+    (cd "$cwd" && git diff) > "$ad/diff.patch" 2>/dev/null || true
+  fi
+}
+
 # SPAWN SEAM. Real impl runs the executor synchronously (headless claude -p) in
 # <cwd> and captures evidence into attempt-NN/. Tests override this to simulate
 # worker edits. Scope C drives synchronous headless execution; the agentpager
@@ -419,8 +446,7 @@ _ccs_dispatch_run_worker() {
   if [ "$executor" = "wingman" ]; then
     cp "$cwd/.wingman/result.md" "$ad/wingman-result.md" 2>/dev/null || true
   fi
-  (cd "$cwd" && git status --porcelain) > "$ad/git-status.txt" 2>/dev/null || true
-  (cd "$cwd" && git diff) > "$ad/diff.patch" 2>/dev/null || true
+  _ccs_dispatch_capture_evidence "$cwd" "$run_dir" "$ad"
   return 0
 }
 
@@ -454,6 +480,11 @@ _ccs_dispatch_run_one() {
 
   mkdir -p "$hop_dir"
   cp "$task_yaml" "$hop_dir/task.yaml"   # freeze (§1)
+  # Evidence anchor, recorded ONCE per hop rather than per attempt: attempt 2's
+  # diff must still show what attempt 1 changed, since a retry inherits the
+  # working tree its predecessor left behind. Empty when cwd has no commit to
+  # anchor to -- capture_evidence degrades explicitly on that.
+  (cd "$cwd" && git rev-parse HEAD 2>/dev/null || true) > "$hop_dir/base-commit"
 
   local attempt=1 verdict outcome="escalated" rc=10 term="ESCALATE"
   # ad is read after the loop; seed it so a budget that makes the loop body
@@ -1693,8 +1724,7 @@ _ccs_dispatch_run_worker_agentpager() {
   printf '%s\n' "$wrc" > "$ad/agentpager-wait-rc"
 
   # Ground-truth evidence (mirrors the headless seam).
-  (cd "$cwd" && git status --porcelain) > "$ad/git-status.txt" 2>/dev/null || true
-  (cd "$cwd" && git diff) > "$ad/diff.patch" 2>/dev/null || true
+  _ccs_dispatch_capture_evidence "$cwd" "$run_dir" "$ad"
   return 0
 }
 
