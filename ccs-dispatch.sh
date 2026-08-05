@@ -932,20 +932,38 @@ _ccs_dispatch_parse_handoff_summary() {
 # summary line plus the handoff body (frontmatter stripped), capped to
 # ~CCS_DISPATCH_CHAIN_BRIDGE_MAX_CHARS bytes (head -c; a soft ceiling that may
 # slice a trailing multibyte char). Empty output when the file is absent.
+#
+# A truncated body carries a marker naming the cap and the parent handoff path.
+# Without it the next hop cannot tell a short handoff from a sliced one, and a
+# structured handoff puts its ruled-out paths early enough that the default cap
+# cuts them — so the hop silently retries a dead end it was meant to inherit.
 _ccs_dispatch_chain_context_bridge() {
   local handoff="$1"
   [ -f "$handoff" ] || return 0
-  local summary body
+  local summary body body_full body_bytes
+  # A non-numeric cap would make head -c drop the body whole and the comparison
+  # below error out -- the exact silent-total-loss this marker exists to expose.
+  local cap="$CCS_DISPATCH_CHAIN_BRIDGE_MAX_CHARS"
+  case "$cap" in ''|*[!0-9]*) cap=4000 ;; esac
   summary="$(_ccs_dispatch_parse_handoff_field "$handoff" summary)"
   # Body = everything after a closed leading frontmatter block; if there is no
   # frontmatter, the whole file is the body.
-  body="$(awk '
+  body_full="$(awk '
     NR==1 && $0 != "---" { print; body=1; next }
     NR==1 { in_fm=1; next }
     in_fm && $0 == "---" { in_fm=0; body=1; next }
     in_fm { next }
     body { print }
-  ' "$handoff" | head -c "$CCS_DISPATCH_CHAIN_BRIDGE_MAX_CHARS")"
+  ' "$handoff")"
+  # Byte count, not ${#body_full}: head -c cuts bytes while ${#...} counts
+  # characters under a UTF-8 locale, and handoffs are CJK-heavy enough for the
+  # two to differ by ~3x -- comparing the wrong one mislabels both directions.
+  body_bytes="$(printf '%s' "$body_full" | wc -c)"
+  body="$(printf '%s' "$body_full" | head -c "$cap")"
+  if [ "$body_bytes" -gt "$cap" ]; then
+    body="${body}
+[context truncated at ${cap} of ${body_bytes} bytes; read ${handoff} for the full handoff]"
+  fi
   printf 'You are continuing a chained task. The previous worker reported:\n'
   [ -n "$summary" ] && printf '  %s\n' "$summary"
   printf '\nIts full handoff (your context) follows:\n'

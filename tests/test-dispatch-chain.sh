@@ -64,12 +64,27 @@ else
 fi
 
 echo "=== context bridge carries parent summary + body, capped ==="
+# Pin both knobs this section depends on. An inherited cap moves every boundary
+# asserted below; and under LC_ALL=C bash's ${#var} counts bytes too, which
+# would silently drain the CJK case at the end of the section of its whole
+# point (it exists to tell the two ways of measuring apart).
+CHAIN_BRIDGE_CAP_SAVED="${CCS_DISPATCH_CHAIN_BRIDGE_MAX_CHARS:-}"
+LC_ALL_SAVED="${LC_ALL:-}"
+CCS_DISPATCH_CHAIN_BRIDGE_MAX_CHARS=4000
+export LC_ALL=C.UTF-8
 bh="$DD/bridge.handoff"
 printf -- '---\nsummary: added the parser\noutcome: done\nnext: add the writer\n---\n\nI added parse_field() in ccs-dispatch.sh.\nKey decision: delegate summary to it.\n' > "$bh"
 br="$(_ccs_dispatch_chain_context_bridge "$bh")"
 assert_contains "bridge includes the parent summary" "$br" "added the parser"
 assert_contains "bridge includes the parent body highlight" "$br" "Key decision: delegate"
 assert_contains "bridge frames it as a continuation" "$br" "previous worker"
+# An intact body must NOT be flagged -- without this the marker assertion below
+# would pass on a function that marks unconditionally.
+if printf '%s' "$br" | grep -q "context truncated"; then
+  printf '  FAIL: short body wrongly flagged as truncated\n'; FAIL=$((FAIL + 1))
+else
+  printf '  PASS: short body carries no truncation marker\n'; PASS=$((PASS + 1))
+fi
 # Absent file -> empty bridge.
 assert_eq "absent handoff -> empty bridge" "" "$(_ccs_dispatch_chain_context_bridge "$DD/nope.handoff")"
 # Cap enforced.
@@ -80,6 +95,33 @@ if [ "$brb" -le 5000 ]; then
 else
   printf '  FAIL: bridge not capped (%s bytes)\n' "$brb"; FAIL=$((FAIL + 1))
 fi
+# A cut body says so, names the cap, and points at the full file: the next hop
+# would otherwise read a sliced handoff as a complete one (issue 112 #2).
+brt="$(_ccs_dispatch_chain_context_bridge "$bh")"
+assert_contains "truncated bridge says it was truncated" "$brt" "context truncated"
+assert_contains "truncated bridge names the cap" "$brt" "at $CCS_DISPATCH_CHAIN_BRIDGE_MAX_CHARS of 9000 bytes"
+assert_contains "truncated bridge points at the parent handoff" "$brt" "$bh"
+# CJK body ~7000 bytes but only ~2500 characters: head -c cuts it, so the marker
+# is required. A ${#var} check counts characters, stays under the cap, and would
+# silently ship a sliced body as if it were whole -- this is the discriminating
+# case between the two ways of measuring.
+{ printf -- '---\nsummary: cjk\n---\n'
+  for _ in $(seq 1 250); do printf '交接內容中文十個字\n'; done; } > "$bh"
+brc="$(_ccs_dispatch_chain_context_bridge "$bh")"
+if printf '%s' "$brc" | grep -q "context truncated"; then
+  printf '  PASS: CJK body measured in bytes, not characters\n'; PASS=$((PASS + 1))
+else
+  printf '  FAIL: CJK body over the byte cap not flagged (character-based check?)\n'; FAIL=$((FAIL + 1))
+fi
+# A cap the shell cannot compare would otherwise drop the body whole, silently.
+CCS_DISPATCH_CHAIN_BRIDGE_MAX_CHARS=notanumber
+brn="$(_ccs_dispatch_chain_context_bridge "$bh" 2>/dev/null)"
+assert_contains "non-numeric cap falls back to the default" "$brn" "at 4000 of"
+CCS_DISPATCH_CHAIN_BRIDGE_MAX_CHARS=4000
+# Restore what this section pinned, so later sections see the caller's values.
+[ -n "$CHAIN_BRIDGE_CAP_SAVED" ] \
+  && CCS_DISPATCH_CHAIN_BRIDGE_MAX_CHARS="$CHAIN_BRIDGE_CAP_SAVED"
+if [ -n "$LC_ALL_SAVED" ]; then export LC_ALL="$LC_ALL_SAVED"; else unset LC_ALL; fi
 
 echo "=== continuation predicate: all branches ==="
 csr() { _ccs_dispatch_chain_stop_reason "$@"; }
