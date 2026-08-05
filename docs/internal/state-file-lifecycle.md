@@ -106,6 +106,7 @@ runs/<first_id>-chain-NN/
 ├── chain.json                     # chain-level summary (hops[], stop_reason, outcome, depth)
 └── hop-NN-<task_id>/
     ├── task.yaml                  # frozen at dispatch (AC immutable — §1 of the gate)
+    ├── base-commit                # cwd HEAD before attempt 1 — the diff anchor
     ├── attempt-NN/
     │   ├── prompt.md              # attempt 1 = goal; ≥2 = §6 feedback + goal
     │   ├── executor-output.md     # worker stdout+stderr
@@ -119,7 +120,10 @@ runs/<first_id>-chain-NN/
 
 `task.yaml` is frozen on entry — acceptance criteria must not change
 mid-run. The gate re-derives ground truth (`git-status.txt` / `diff.patch`)
-independently of the worker's self-report (see I4).
+independently of the worker's self-report (see I4). `diff.patch` is taken
+against `base-commit`, not against the index: a worker is free to stage or
+commit its own edits, and a bare `git diff` would then be empty — making "did
+nothing" and "did the work and staged it" identical in the evidence tree.
 
 `worker-error` exists only when the worker demonstrably never ran to
 completion and a retry cannot change that (`exit-125` / `exit-126` /

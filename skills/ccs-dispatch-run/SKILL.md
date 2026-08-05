@@ -69,6 +69,7 @@ ccs-dispatch-run <task.yaml>
 chain.json                     # 鏈終態：hops[]、stop_reason、outcome
 hop-NN-<task-id>/
 ├── task.yaml                  # dispatch 當下凍結的驗收條件
+├── base-commit                # 派工前的 cwd HEAD，diff.patch 的錨點
 ├── final.json                 # 本 hop 終態：outcome / attempts / worker_rc
 └── attempt-NN/
     ├── prompt.md              # worker 收到的完整 prompt
@@ -83,8 +84,10 @@ hop-NN-<task-id>/
 
 ### 4. Judgment review（Stage 2）
 
-只讀 `diff.patch` + `git-status.txt`（worker 新增的檔案是
-untracked，**不會**出現在 diff.patch，要靠 `??` 行發現後另行讀檔）
+只讀 `diff.patch` + `git-status.txt`（`diff.patch` 錨在 hop 的
+`base-commit`，所以 worker 自行 `git add` / `git commit` 也看得到改動；但
+worker 新增的檔案是 untracked，**不會**出現在 diff.patch，要靠 `??` 行
+發現後另行讀檔）
 + `gate/verdict.json` + guidance-AC 清單，**不要重讀 worker trace**
 （fresh-context 紀律；executor-output.md 只在鑑識時看）。你裁決的是 script 抓不到的：是不是對的解、設計
 好不好、guidance-AC 過不過。
