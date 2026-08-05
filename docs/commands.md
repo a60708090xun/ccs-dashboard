@@ -502,7 +502,7 @@ CCS_DISPATCH_WAKE=1               # 派工主 session 為 pager-launched 時完�
 CCS_DISPATCH_PREVIEW_TIMEOUT=60   # --preview 確認等待秒數
 CCS_DISPATCH_PREVIEW_MAX_CHARS=1500  # preview prompt 折疊長度
 CCS_DISPATCH_CHAIN_MAX_DEPTH=5    # --chain 預設最大接力跳數
-CCS_DISPATCH_CHAIN_BRIDGE_MAX_CHARS=4000  # 鏈鎖 context 橋接上限
+CCS_DISPATCH_CHAIN_BRIDGE_MAX_CHARS=4000  # 鏈鎖 context 橋接上限（實際以 byte 計）
 ```
 
 ### 後端 (Backends)
@@ -571,6 +571,16 @@ ccs-dispatch 有兩個執行後端，由 `CCS_DISPATCH_BACKEND` 選擇（預設 
 - 續鏈判定：worker 的 handoff frontmatter `outcome: done` 且 `next:` 非空且
   未達 max-depth 時，monitor 讀 `next:` 自動組下一跳（含前一跳 handoff 的
   context 橋接 + HANDOFF RULE + 自主性指令），繼承同一專案 proj key。
+- **handoff 的 `next:` 是散文，不是路徑**——與 `task.yaml` 的同名欄位（下一個
+  task 檔路徑）型別不同。這裡讀到什麼就原樣拼進下一 hop 的 prompt，寫成路徑
+  不會報錯，只會讓下一個 worker 收到一行沒有語境的路徑。
+- context 橋接受 `CCS_DISPATCH_CHAIN_BRIDGE_MAX_CHARS`（預設 4000 bytes）上限；
+  超過時橋接尾端補一行截斷標記，帶上上限、實際大小與 parent handoff 路徑，讓
+  下一 hop 知道自己拿到的是殘缺版本、並知道去哪讀全文（標記本身接在截斷後的
+  body 之後，不計入該上限）。
+- HANDOFF RULE 指定的 frontmatter 首欄是 `handoff_schema: handoff/v1`——版本標記，
+  目前零 consumer、不參與續鏈判定，用途是讓這一軌產出的 handoff 與外部
+  structured-handoff 合約形狀一致。
 - 停鏈原因：`partial` / `blocked` / `failed` / `empty-next` / `depth`，記入
   `chain_stopped`，並發一則鏈終止 pager 通知；派工主 session 為 pager-launched 時，
   另回灌一則 chain-end wake turn（見上方 orchestrator-wake）。

@@ -15,7 +15,7 @@
 | `backend` | No | `headless`（預設）\| `agentpager`；頂層字串欄位。`agentpager` 讓 gate worker 跑在 agent-pager 互動 local channel（tmux、可監看/接管），gate 以前景阻塞式 spawn+wait 等 per-attempt handoff 檔為完成訊號，回來後照常對現實驗收（gate 仍是唯一裁決來源）；bounded wait（逾 `timeout_sec` 收回 seat）。`executor` 映射為互動 worker CLI（claude\|gemini）；`agentpager` + `wingman` 不合法 |
 | `model` | No | 頂層字串欄位；派工者宣告本次執行用的 model。**會實際生效**：headless 帶 `-m`（gemini）/ `--model`（claude），`backend: agentpager` 則寫進 launch 檔的 `model:` 欄（由 agent-pager 的 registry 解析 alias）。缺省 = 沿用該 CLI 自己記住的預設。`executor: wingman` 為檔案驅動、無 model 旗標，該欄僅作 provenance。同時供收尾 auto-suggest 的 `X-Executor` trailer 填 `<model>` 段（缺省時退化為 executor-only） |
 | `plan` | 僅 wingman | 與 `executor: wingman` 互為充要（缺一驗證失敗）；wingman plan.md 路徑，相對**本檔所在目錄**解析（同 `next:`），執行時轉絕對路徑傳給 `wingman execute --plan`。plan 依 wingman plan-template 紀律由派工者撰寫 |
-| `next` | No | 下一個 task.yaml 路徑；相對路徑以**本檔所在目錄**解析 |
+| `next` | No | 下一個 task.yaml 路徑；相對路徑以**本檔所在目錄**解析。**與 worker handoff frontmatter 的同名欄位不同型別**：那邊的 `next:` 是散文一行，在 `ccs-dispatch --chain`（非同步鏈）會被原樣拼進下一 hop 的 prompt。**`ccs-dispatch-run` 的 gated chain 只讀本檔的 `next:`，不讀 worker handoff**。在 handoff 寫路徑不會報錯，只會讓非同步鏈的下一個 worker 收到一行沒有語境的路徑 |
 | `execution_policy.loop_budget` | No | 重派上限；預設 1（共 2 attempts）；0 = 不重派。`executor: wingman` 一律視同 0（重派摘要走 prompt 前綴，wingman 吃不到；feedback 迴圈為 followup） |
 | `execution_policy.timeout_sec` | No | worker 與單條 AC 的 timeout；預設取 `CCS_DISPATCH_TIMEOUT`（600） |
 | `acceptance_criteria[]` | Yes | 非空陣列；規則見下 |
