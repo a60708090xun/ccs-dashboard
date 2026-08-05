@@ -743,11 +743,12 @@ ${XDG_DATA_HOME:-~/.local/share}/ccs-dashboard/dispatch/runs/<first-task-id>-cha
   chain.json             # 鏈結執行摘要（包含 hops 陣列、stopped_at_hop、stop_reason、outcome 與 depth 欄位）
   hop-01-<task-id-1>/
     task.yaml            # 凍結副本
+    base-commit          # 派工前的 scope.cwd HEAD（每 hop 記一次，diff 的錨點；非 git repo 或無 commit 時為空）
     attempt-01/
       prompt.md          # 實際送 worker 的 prompt
       executor-output.md # worker 原始輸出
       git-status.txt     # gate 當下 git status --porcelain
-      diff.patch         # git diff
+      diff.patch         # git diff <base-commit>：錨在派工前的 commit，worker `git add` / `git commit` 都不會把它清空（base-commit 為空時退回裸 git diff）
       wingman-result.md  # 僅 wingman executor：scope.cwd/.wingman/result.md 凍結副本
       executor-exit-code # 僅 headless backend（claude / gemini / wingman 皆落）：worker process exit code（純 evidence，不參與 verdict）。backend: agentpager 沒有 process rc，對應證據是 agentpager-wait-rc
       worker-error       # 僅確定性基礎設施故障：故障類別單行（exit-125|126|127 / agentpager-daemon-down / agentpager-no-proj-map）；gate 據此發 ERROR
