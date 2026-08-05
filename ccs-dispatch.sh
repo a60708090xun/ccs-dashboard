@@ -869,11 +869,13 @@ DISPATCH HANDOFF RULE (job ${job_id}, non-negotiable):
 This is a dispatched worker session. When the task above is fully complete (or
 before your context fills), first report a one-line summary of what you did.
 Then, AS YOUR VERY LAST ACTION, write a concise handoff to the file
-tmp/handoff-${job_id}.md (path relative to the project root; use ccs-handoff for
-the content if helpful). Begin that file with a YAML frontmatter block the
-dispatcher parses for the job board — the lead reads this line instead of your
-full transcript, so make it a clean standalone summary:
+tmp/handoff-${job_id}.md (path relative to the project root). You may use
+ccs-handoff to draft the PROSE, but it emits neither the frontmatter below nor
+this file path, so both remain yours to write. Begin that file with a YAML
+frontmatter block the dispatcher parses for the job board — the lead reads this
+line instead of your full transcript, so make it a clean standalone summary:
 ---
+handoff_schema: handoff/v1
 summary: <one line, <=120 chars, what you accomplished>
 outcome: done | partial | blocked
 next: <one line, the next step if any — omit if none>
