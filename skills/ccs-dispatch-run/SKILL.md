@@ -87,7 +87,9 @@ hop-NN-<task-id>/
 只讀 `diff.patch` + `git-status.txt`（`diff.patch` 錨在 hop 的
 `base-commit`，所以 worker 自行 `git add` / `git commit` 也看得到改動；但
 worker 新增的檔案是 untracked，**不會**出現在 diff.patch，要靠 `??` 行
-發現後另行讀檔）
+發現後另行讀檔。**`base-commit` 為空時**——`cwd` 非 git repo、或 repo 尚無
+commit——退回裸 `git diff`，此時 staged 改動看不到，判讀請以
+`git-status.txt` 為主）
 + `gate/verdict.json` + guidance-AC 清單，**不要重讀 worker trace**
 （fresh-context 紀律；executor-output.md 只在鑑識時看）。你裁決的是 script 抓不到的：是不是對的解、設計
 好不好、guidance-AC 過不過。

@@ -125,6 +125,13 @@ against `base-commit`, not against the index: a worker is free to stage or
 commit its own edits, and a bare `git diff` would then be empty — making "did
 nothing" and "did the work and staged it" identical in the evidence tree.
 
+Two limits of the anchor. It is per-hop, so in a chain whose earlier hop left
+its edits uncommitted, a later hop's `diff.patch` also carries them (the bare
+`git diff` behaved the same way; this is not new). And when no anchor can be
+resolved — `cwd` is not a git repo, has no commit yet, or the recorded revision
+no longer exists — capture falls back to the bare `git diff`, where a staged
+edit is again invisible and `git-status.txt` is the reliable material.
+
 `worker-error` exists only when the worker demonstrably never ran to
 completion and a retry cannot change that (`exit-125` / `exit-126` /
 `exit-127`, `agentpager-daemon-down`, `agentpager-no-proj-map`). Failures

@@ -377,6 +377,15 @@ _ccs_dispatch_chain_alloc_dir() {
 _ccs_dispatch_capture_evidence() { # $1=cwd $2=hop_dir $3=attempt_dir
   local cwd="$1" hop_dir="$2" ad="$3" base=""
   [ -s "$hop_dir/base-commit" ] && base="$(head -n1 "$hop_dir/base-commit")"
+  # Re-verify rather than trust the recorded value: a worker is free to gc,
+  # re-init or switch away, and an unresolvable revision would make git diff
+  # fail into an empty patch -- silently indistinguishable from "no changes".
+  # Degrading to the bare diff at least still shows unstaged work.
+  if [ -n "$base" ] \
+     && ! (cd "$cwd" 2>/dev/null \
+           && git rev-parse --verify "$base^{commit}" >/dev/null 2>&1); then
+    base=""
+  fi
   (cd "$cwd" && git status --porcelain) > "$ad/git-status.txt" 2>/dev/null || true
   if [ -n "$base" ]; then
     (cd "$cwd" && git diff "$base") > "$ad/diff.patch" 2>/dev/null || true
@@ -484,7 +493,13 @@ _ccs_dispatch_run_one() {
   # diff must still show what attempt 1 changed, since a retry inherits the
   # working tree its predecessor left behind. Empty when cwd has no commit to
   # anchor to -- capture_evidence degrades explicitly on that.
-  (cd "$cwd" && git rev-parse HEAD 2>/dev/null || true) > "$hop_dir/base-commit"
+  # --verify, not a bare `git rev-parse HEAD`: in a repo with no commit yet the
+  # bare form prints the literal string "HEAD" on stdout (only the fatal goes to
+  # stderr), which would then be handed to git diff as a revision, fail, and be
+  # swallowed into an empty diff -- the exact vacuous evidence this fixes.
+  # --verify prints nothing there, so capture_evidence takes its fallback.
+  (cd "$cwd" 2>/dev/null && git rev-parse --verify HEAD 2>/dev/null || true) \
+    > "$hop_dir/base-commit"
 
   local attempt=1 verdict outcome="escalated" rc=10 term="ESCALATE"
   # ad is read after the loop; seed it so a budget that makes the loop body
