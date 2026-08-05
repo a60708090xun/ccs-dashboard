@@ -104,6 +104,35 @@ assert_contains "unstaged edit still captured without base-commit" \
 assert_eq "evidence files exist rather than aborting" "yes" \
   "$([ -f "$ad/git-status.txt" ] && echo yes || echo no)"
 
+echo "=== a repo with no commit yet: still shows the work (found by review) ==="
+# `git rev-parse HEAD` prints the literal string "HEAD" on stdout in a repo with
+# no commit -- only the fatal goes to stderr. Recording that as the base fed an
+# invalid revision to git diff, which failed into an empty patch: the very
+# vacuous evidence this change exists to remove, and a regression against the
+# bare `git diff` it replaced. Hence --verify, whose stdout is empty here.
+FRESH="$WORK/fresh"; mkdir -p "$FRESH"
+# tracked.txt, staged but never committed: the stub appends to that name, and a
+# bare `git diff` only shows a path git already knows about.
+(cd "$FRESH" && git init -q && printf 'base line\n' > tracked.txt \
+  && git add tracked.txt)
+FHOP="$WORK/hop-fresh"; mkdir -p "$FHOP"
+printf '' > "$FHOP/base-commit"
+FAKE_REPO="$FRESH" FAKE_CLI_MODE=edit \
+  _ccs_dispatch_run_worker "$FRESH" "do X" "$FHOP" 1 60 claude
+assert_contains "staged-but-uncommitted repo still yields a diff" \
+  "$(cat "$FHOP/attempt-01/diff.patch")" "worker line"
+
+echo "=== an unresolvable base degrades instead of emptying the diff ==="
+# A worker may gc, re-init or switch away; a stale sha would make git diff fail
+# into an empty patch. Re-verifying turns that into the no-base fallback.
+GONE="$WORK/hop-gone"; mkdir -p "$GONE"
+printf '%s\n' "0000000000000000000000000000000000000000" > "$GONE/base-commit"
+(cd "$CWD" && git reset -q --hard "$BASE" && git clean -qfd)
+export FAKE_CLI_MODE=edit
+_ccs_dispatch_run_worker "$CWD" "do X" "$GONE" 1 60 claude
+assert_contains "unresolvable base falls back to the bare diff" \
+  "$(cat "$GONE/attempt-01/diff.patch")" "worker line"
+
 echo "=== integration: run_one records the base before the first attempt ==="
 # Without this the helper above would read a base-commit nobody writes, and the
 # fix would be dead code in production while every unit case still passed.
@@ -127,6 +156,25 @@ _ccs_dispatch_run_worker() {  # seam override: observe what run_one left us
 task_json="$(_ccs_dispatch_gate_load_task "$WORK/task.yaml")"
 _ccs_dispatch_run_one "$task_json" "$WORK/task.yaml" "$WORK/hop-int" >/dev/null
 assert_eq "run_one writes the hop's base commit before spawning" "$BASE" \
+  "$SEEN_BASE"
+
+# Same seam, no-commit repo: this is what pins --verify. A bare `git rev-parse
+# HEAD` records the literal "HEAD" here, and every unit case above would still
+# pass while production wrote an unusable anchor.
+cat > "$WORK/task-fresh.yaml" <<YAML
+id: evf
+goal: "touch a file"
+scope: { cwd: "$FRESH" }
+acceptance_criteria:
+  - id: AC1
+    desc: "no-op"
+    verify: { cmd: "true" }
+YAML
+SEEN_BASE="unset"
+task_json="$(_ccs_dispatch_gate_load_task "$WORK/task-fresh.yaml")"
+_ccs_dispatch_run_one "$task_json" "$WORK/task-fresh.yaml" \
+  "$WORK/hop-int-fresh" >/dev/null
+assert_eq "run_one records an empty base in a no-commit repo, not \"HEAD\"" "" \
   "$SEEN_BASE"
 
 test_summary
