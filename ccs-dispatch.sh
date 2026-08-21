@@ -399,6 +399,22 @@ _ccs_dispatch_capture_evidence() { # $1=cwd $2=hop_dir $3=attempt_dir
   fi
 }
 
+# Run <cmd...> under timeout with the AGENT_PAGER_* namespace stripped from the
+# child. Headless workers inherit the orchestrator's env today, so a
+# pager-launched parent leaks NOTIFY/BOT_SLOT/SESSION_TREE into the CLI; the
+# child's hooks then relay as the parent slot (issue #114). `env -u` is
+# child-only — the caller keeps wake/notify/seat. An empty namespace is a
+# passthrough (`env cmd`). timeout stays the outermost wrapper so it still
+# reaps both env and the CLI.
+_ccs_dispatch_timeout_scrubbed() {
+  local timeout_sec="$1"; shift
+  local scrub=() v
+  while IFS= read -r v; do
+    [ -n "$v" ] && scrub+=(-u "$v")
+  done < <(compgen -v AGENT_PAGER_ 2>/dev/null || true)
+  timeout "$timeout_sec" env "${scrub[@]}" "$@"
+}
+
 # SPAWN SEAM. Real impl runs the executor synchronously (headless claude -p) in
 # <cwd> and captures evidence into attempt-NN/. Tests override this to simulate
 # worker edits. Scope C drives synchronous headless execution; the agentpager
@@ -439,7 +455,7 @@ _ccs_dispatch_run_worker() {
              [ -n "$model" ] && cmd+=(--model "$model") ;;
   esac
   local wrc=0
-  (cd "$cwd" && timeout "$timeout_sec" "${cmd[@]}") \
+  (cd "$cwd" && _ccs_dispatch_timeout_scrubbed "$timeout_sec" "${cmd[@]}") \
     > "$ad/executor-output.md" 2>&1 || wrc=$?
   # Every executor records its rc: a crashed worker, a missing CLI and a
   # worker that ran and did nothing are otherwise indistinguishable in the
@@ -1777,21 +1793,25 @@ _ccs_dispatch_spawn_headless() {
   if [ "$mode" = "sync" ]; then
     local rc=0
     (cd "$project_dir" && \
-      timeout "$timeout_secs" claude -p "$(cat "$prompt_file")") \
+      _ccs_dispatch_timeout_scrubbed "$timeout_secs" \
+        claude -p "$(cat "$prompt_file")") \
       > "$dispatch_dir/results/${job_id}.raw" \
       2> "$dispatch_dir/results/${job_id}.err" \
       || rc=$?
     _ccs_dispatch_finish "$job_id" "$rc"
     return $rc
   else
+    # Source first so the wrapper can call the same scrub helper as the
+    # sync path. Finish still runs in this wrapper (not under env -u), so
+    # wake/notify keep the orchestrator's AGENT_PAGER_* .
     nohup bash -c '
+      source "$6/ccs-dashboard.sh"
       prompt=$(cat "$1")
       cd "$2" && \
-      timeout "$3" claude -p "$prompt" \
+      _ccs_dispatch_timeout_scrubbed "$3" claude -p "$prompt" \
         > "$4/results/$5.raw" \
         2> "$4/results/$5.err"
       rc=$?
-      source "$6/ccs-dashboard.sh"
       _ccs_dispatch_finish "$5" $rc
     ' _ \
       "$prompt_file" \
