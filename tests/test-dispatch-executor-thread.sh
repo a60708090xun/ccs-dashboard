@@ -44,3 +44,10 @@ echo "=== omitted executor threads claude to worker ==="
 : > "$WORK/seen-executor.log"; rm -f "$CWD/done.txt"
 _ccs_dispatch_run "$(mk n.yaml '')" >/dev/null
 assert_eq "worker saw claude" "claude" "$(head -1 "$WORK/seen-executor.log")"
+
+echo "=== grok task threads grok to worker ==="
+: > "$WORK/seen-executor.log"; rm -f "$CWD/done.txt"
+_ccs_dispatch_run "$(mk k.yaml 'executor: grok')" >/dev/null
+assert_eq "worker saw grok" "grok" "$(head -1 "$WORK/seen-executor.log")"
+
+test_summary

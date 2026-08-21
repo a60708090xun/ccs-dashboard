@@ -651,7 +651,7 @@ hops:
   以 spec 位置為心智模型寫相對路徑會 silently 錯位。
 - out dir 預設 `<spec 所在目錄>/chain`，可 `--out` 覆寫。
 - 每份產出立即以 gate 自身的 task loader 驗證（≥1 AC、≥1 `verify.cmd`、
-  executor ∈ {claude,gemini,wingman}、AC id 唯一）。任一 hop 不合法 → 不產出任何檔、非零 exit。
+  executor ∈ {claude,gemini,wingman,grok}、AC id 唯一）。任一 hop 不合法 → 不產出任何檔、非零 exit。
 - 成功時 entry path（`hop-01-*`）印到 stdout，可直接組合：
   `ccs-dispatch-run "$(ccs-dispatch-plan spec.yaml)"`。
 
@@ -726,8 +726,8 @@ id: task-x                      # slug，也是 run-id 前綴
 goal: "新增 greeter 並被 CLI 呼叫"
 scope:
   cwd: "/abs/path/to/project"   # worker 執行與 gate 驗收的目錄
-executor: gemini                # 可選：claude(預設) | gemini | wingman。claude/gemini 皆 auto-approve 跑 headless（claude `--permission-mode bypassPermissions`、gemini `--approval-mode yolo`）— 無 tty 下權限 prompt 會卡到 timeout；gate 為信任邊界，見 §8.4
-backend: agentpager             # 可選：headless(預設) | agentpager。agentpager 讓 gate worker 跑在 agent-pager 互動 local channel（tmux、可監看/接管），gate 以前景阻塞式 spawn+wait 等 worker 的 per-attempt handoff 檔為完成訊號，回來後照常對現實驗收（gate 仍是唯一裁決來源）。executor 映射為互動 worker CLI（claude|gemini）；`agentpager` + `executor: wingman` 不合法（wingman 非可互動 launch 的 CLI）。見下方「backend: agentpager」
+executor: gemini                # 可選：claude(預設) | gemini | wingman | grok。claude/gemini/grok 皆 auto-approve 跑 headless（claude `--permission-mode bypassPermissions`、gemini `--approval-mode yolo`、grok `--always-approve --output-format plain`）— 無 tty 下權限 prompt 會卡到 timeout；gate 為信任邊界，見 §8.4
+backend: agentpager             # 可選：headless(預設) | agentpager。agentpager 讓 gate worker 跑在 agent-pager 互動 local channel（tmux、可監看/接管），gate 以前景阻塞式 spawn+wait 等 worker 的 per-attempt handoff 檔為完成訊號，回來後照常對現實驗收（gate 仍是唯一裁決來源）。executor 映射為互動 worker CLI（claude|gemini|grok）；`agentpager` + `executor: wingman` 不合法（wingman 非可互動 launch 的 CLI）。見下方「backend: agentpager」
 model: "local-chat-35b"         # 可選：本次執行的 model。headless 帶 -m/--model、agentpager 寫進 launch 檔的 model: 欄；缺省 = 沿用 CLI 自己的預設。wingman 無 model 旗標，僅作 provenance。同時供收尾 X-Executor trailer 的 <model> 段
 plan: "plan.md"                 # 僅 executor: wingman（互為充要）：wingman plan.md 路徑，相對本檔所在目錄解析（同 next:）；由主 session 依 wingman plan-template 撰寫
 next: "task-y.yaml"             # 可選：下一個要自動執行與驗收的任務路徑（相對於此 yaml）
@@ -760,7 +760,7 @@ ${XDG_DATA_HOME:-~/.local/share}/ccs-dashboard/dispatch/runs/<first-task-id>-cha
       git-status.txt     # gate 當下 git status --porcelain
       diff.patch         # git diff <base-commit>：錨在派工前的 commit，worker `git add` / `git commit` 都不會把它清空（base-commit 為空、或該 revision 已不存在時退回裸 git diff——此時 staged 改動看不到，以 git-status.txt 為主）
       wingman-result.md  # 僅 wingman executor：scope.cwd/.wingman/result.md 凍結副本
-      executor-exit-code # 僅 headless backend（claude / gemini / wingman 皆落）：worker process exit code（純 evidence，不參與 verdict）。backend: agentpager 沒有 process rc，對應證據是 agentpager-wait-rc
+      executor-exit-code # 僅 headless backend（claude / gemini / wingman / grok 皆落）：worker process exit code（純 evidence，不參與 verdict）。backend: agentpager 沒有 process rc，對應證據是 agentpager-wait-rc
       worker-error       # 僅確定性基礎設施故障：故障類別單行（exit-125|126|127 / agentpager-daemon-down / agentpager-no-proj-map）；gate 據此發 ERROR
       launch-file.txt    # 僅 backend: agentpager：寫給 agent-pager 的 inbound launch 檔路徑
       handoff.md         # 僅 backend: agentpager：worker per-attempt 完成訊號 handoff 副本
@@ -784,7 +784,7 @@ CCS_DISPATCH_GATE_CMD_TAIL_CHARS=2000  # per-AC stdout/stderr 擷取尾端字元
 
 > **安全註記（§8.4）：** AC `verify.cmd` 會執行 worker 產出的 code（`pytest`、`python -c` 等，驗證本質使然），僅靠 `execution_policy.timeout_sec` 設界。只對「你本就願意在本機執行」的 worker 開跑；不加 network / write-path 限制（單人本地 MVP）。
 
-**backend: agentpager（互動 worker 進 gate）：** 預設 `backend: headless` 走同步 headless CLI；`backend: agentpager` 讓 gate worker 改跑在 agent-pager 互動 local channel（tmux、可監看/中途接管），把「gate 驗收 + 重派」與「可觀察互動 worker」合流（issue #91）。實作為**前景阻塞式 spawn+wait**：寫 inbound launch → 等 worker 寫 per-attempt handoff 檔（`tmp/handoff-<hop>-a<NN>.md`）為完成訊號 → 收回單一 per-user seat → 回來後 gate 照常對現實跑 `verify.cmd`（handoff 內容不採信，gate 仍是唯一裁決來源）。**重派＝Option B**：gate 判 RETRY 時，attempt 迴圈重新前景 spawn 一個 fresh 互動 hop、把上輪 machine 事實 feedback 前綴進 prompt（與 headless 對稱；不同於 `wingman` 的不重派）。**bounded wait**：先有 startup grace 等 worker session 出現（`CCS_DISPATCH_AGENTPAGER_STARTUP`，預設 60s），再以 `execution_policy.timeout_sec` 綁定 completion 等待——逾時未見 handoff 即收回 seat、當作未完成（gate 隨即 FAIL）。故最壞上界約 startup + timeout。gate 路徑本質 autonomous，與 jobs/`--chain` 互動路徑的「no wall-clock kill（D2）」互不相干。`executor` 映射為互動 worker CLI（claude|gemini）；`agentpager` + `wingman` 不合法（wingman 非可互動 launch）。auth 註記：互動 gemini worker 的 `GOOGLE_CLOUD_PROJECT` 由 agent-pager runner daemon 的 process env 繼承（worker 經 `bash -c` 起、不 source `.bashrc`），非結構性保證；持久修復屬 agent-pager 側。
+**backend: agentpager（互動 worker 進 gate）：** 預設 `backend: headless` 走同步 headless CLI；`backend: agentpager` 讓 gate worker 改跑在 agent-pager 互動 local channel（tmux、可監看/中途接管），把「gate 驗收 + 重派」與「可觀察互動 worker」合流（issue #91）。實作為**前景阻塞式 spawn+wait**：寫 inbound launch → 等 worker 寫 per-attempt handoff 檔（`tmp/handoff-<hop>-a<NN>.md`）為完成訊號 → 收回單一 per-user seat → 回來後 gate 照常對現實跑 `verify.cmd`（handoff 內容不採信，gate 仍是唯一裁決來源）。**重派＝Option B**：gate 判 RETRY 時，attempt 迴圈重新前景 spawn 一個 fresh 互動 hop、把上輪 machine 事實 feedback 前綴進 prompt（與 headless 對稱；不同於 `wingman` 的不重派）。**bounded wait**：先有 startup grace 等 worker session 出現（`CCS_DISPATCH_AGENTPAGER_STARTUP`，預設 60s），再以 `execution_policy.timeout_sec` 綁定 completion 等待——逾時未見 handoff 即收回 seat、當作未完成（gate 隨即 FAIL）。故最壞上界約 startup + timeout。gate 路徑本質 autonomous，與 jobs/`--chain` 互動路徑的「no wall-clock kill（D2）」互不相干。`executor` 映射為互動 worker CLI（claude|gemini|grok）；`agentpager` + `wingman` 不合法（wingman 非可互動 launch）。auth 註記：互動 gemini worker 的 `GOOGLE_CLOUD_PROJECT` 由 agent-pager runner daemon 的 process env 繼承（worker 經 `bash -c` 起、不 source `.bashrc`），非結構性保證；持久修復屬 agent-pager 側。
 
 **Scope C 限制（後續 sprint 補）：** 無 tier ladder（重派用同一 executor）、無 pager escalation ladder、不接 `--chain`（gated chain 續鏈為獨立層）、無 Stage-2 judgment review 自動化、guidance-AC 一律 SKIPPED_FOR_LLM。evidence 目前全留（未來加 TTL）。orchestrator-wake（worker 完成回灌派工 session）為獨立 followup。
 

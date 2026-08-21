@@ -125,10 +125,11 @@ PASS 後自動跟 `next:`（相對於當前 task.yaml 所在目錄解析）。
 ## 邊界（現行實作 = Scope C）
 
 - gate + 單次重派；無 tier ladder（重派同 executor）
-- executor 為 `claude`（預設）/ `gemini` / `wingman`；claude 與
-  gemini 以 auto-approve 跑 headless（claude
+- executor 為 `claude`（預設）/ `gemini` / `wingman` / `grok`；claude、
+  gemini 與 grok 以 auto-approve 跑 headless（claude
   `--permission-mode bypassPermissions`、gemini
-  `--approval-mode yolo`）— **gate 為信任邊界**：worker 全權限執行
+  `--approval-mode yolo`、grok `--always-approve --output-format plain`）—
+  **gate 為信任邊界**：worker 全權限執行
   於 `scope.cwd`，假成功由 gate 重驗現實攔下；task 應只來自你自己
   的規劃，勿餵不受信任的 goal
 - `executor: wingman`（本地 LLM，免 quota）為檔案驅動：task 需帶

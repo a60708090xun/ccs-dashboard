@@ -10,9 +10,9 @@ source "$SCRIPT_DIR/ccs-dashboard.sh"
 WORK="$SCRIPT_DIR/tmp/test-dispatch-executor-cli"
 rm -rf "$WORK"; mkdir -p "$WORK"; _TEST_DIRS+=("$WORK")
 
-# argv-recording shims for both CLIs, earlier on PATH than the real ones
+# argv-recording shims, earlier on PATH than the real ones
 BIN="$WORK/bin"; mkdir -p "$BIN"
-for c in claude gemini; do
+for c in claude gemini grok; do
   cat > "$BIN/$c" <<EOF
 #!/usr/bin/env bash
 echo "$c \$*" >> "$WORK/argv.log"
@@ -59,4 +59,28 @@ assert_not_contains "gemini keeps its own default" "$log_nom" " -m "
 : > "$WORK/argv.log"
 _ccs_dispatch_run_worker "$CWD" "do W" "$RUN" 1 60 claude
 assert_not_contains "claude keeps its own default" "$(cat "$WORK/argv.log")" "--model"
+
+echo "=== grok executor spawns grok -p ... --always-approve --output-format plain ==="
+: > "$WORK/argv.log"
+_ccs_dispatch_run_worker "$CWD" "do G" "$RUN" 1 60 grok
+log_gk="$(cat "$WORK/argv.log")"
+assert_contains "grok binary invoked" "$log_gk" "grok -p do G"
+assert_contains "grok always-approve" "$log_gk" "--always-approve"
+assert_contains "grok output-format plain" "$log_gk" "--output-format plain"
+assert_not_contains "grok did not call claude" "$log_gk" "claude -p"
+assert_not_contains "grok did not call gemini" "$log_gk" "gemini -p"
+
+echo "=== grok model pin / omit ==="
+: > "$WORK/argv.log"
+_ccs_dispatch_run_worker "$CWD" "do G" "$RUN" 1 60 grok "" headless "grok-4.6"
+assert_contains "grok gets -m" "$(cat "$WORK/argv.log")" "-m grok-4.6"
+: > "$WORK/argv.log"
+_ccs_dispatch_run_worker "$CWD" "do G" "$RUN" 1 60 grok
+# Exact argv, not " -m ": an empty `cmd+=(-m "$model")` logs a trailing
+# `-m` with no following space, which the substring miss would still pass.
+assert_eq "grok omit model exact argv" \
+  "grok -p do G --always-approve --output-format plain" \
+  "$(cat "$WORK/argv.log")"
+
+test_summary
 
