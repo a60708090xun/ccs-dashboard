@@ -110,7 +110,7 @@ diff 命中以下任一面 → 必跑 Change Impact Analysis 並貼為 PR commen
   消費）、`ccs-health.sh` 的 `_ccs_health_badge_md` / `_ccs_health_events` /
   `_ccs_health_score`（被 `ccs-overview.sh` 消費）。
 - **後端 / executor 分流點**：`ccs-dispatch.sh` 的 backend 選擇
-  （`headless` ↔ `agentpager`）與 executor 分派（`claude` / `gemini` / `wingman`）。
+  （`headless` ↔ `agentpager`）與 executor 分派（`claude` / `gemini` / `wingman` / `grok`）。
 - **task.yaml schema**（對外契約）：`_ccs_dispatch_gate_load_task` 的 jq 驗證。
   使用者的 task 檔與已分發的 `skills/ccs-dispatch-run` 共同依賴它，加一個必填欄位
   會讓既有 task.yaml 全部 validation 失敗（對應文件
@@ -133,9 +133,10 @@ diff 命中以下任一面 → 必跑 Change Impact Analysis 並貼為 PR commen
 本 repo 有四條變體軸，填該欄時逐條比對，不適用者明寫「無」：
 
 - **Provider**：Claude `[C]` ↔ Gemini `[G]` 的 session 收集與解析（ADR-002 duck-typing）
-- **Executor**：`claude` / `gemini` / `wingman`（wingman 無 model 旗標、僅作
+- **Executor**：`claude` / `gemini` / `wingman` / `grok`（wingman 無 model 旗標、僅作
   provenance，且 FAIL 直接 escalate 不 retry；`backend=agentpager` 與
-  `executor=wingman` 互斥，schema 層直接擋）
+  `executor=wingman` 互斥，schema 層直接擋。grok 有 `-m`，retry 同
+  claude/gemini；`backend=agentpager` + grok 合法）
 - **Backend**：`headless` ↔ `agentpager`。**兩個分流點行為不同，須分開比對**——
   別套用單一的「同步 / 非同步」標籤，那在兩邊都不成立：
   - **gate-run**（task.yaml 的 `.backend`）：兩者皆同步，agentpager 走前景阻塞

@@ -24,7 +24,7 @@ mkdir -p "$WORK/repo" "$WORK/bin"; _TEST_DIRS+=("$WORK")
 # comes from FAKE_CLI_EXIT so a "crash" is deterministic: 125/126/127 stand in
 # for timeout-itself-failed / not-executable / not-found, which in the real
 # world are produced by `timeout` and the shell rather than by the CLI.
-for c in claude gemini; do
+for c in claude gemini grok; do
   cat > "$WORK/bin/$c" <<'FAKE'
 #!/usr/bin/env bash
 echo "$0 $*" >> "$FAKE_CLI_LOG"
@@ -61,6 +61,12 @@ ad="$(spawn 2 0 gemini)"
 assert_contains "the gemini stub actually ran" \
   "$(cat "$FAKE_CLI_LOG")" "/bin/gemini -p do X"
 assert_eq "gemini rc 0 recorded" "0" "$(cat "$ad/executor-exit-code" 2>/dev/null)"
+
+: > "$FAKE_CLI_LOG"
+ad="$(spawn 8 0 grok)"
+assert_contains "the grok stub actually ran" \
+  "$(cat "$FAKE_CLI_LOG")" "/bin/grok -p do X"
+assert_eq "grok rc 0 recorded" "0" "$(cat "$ad/executor-exit-code" 2>/dev/null)"
 
 echo "=== non-deterministic failures stay on the FAIL -> RETRY path ==="
 ad="$(spawn 3 1 claude)"

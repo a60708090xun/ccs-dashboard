@@ -26,6 +26,11 @@ js="$(_ccs_dispatch_gate_load_task "$(mk g.yaml 'executor: gemini')")"; rc=$?
 assert_eq "gemini rc 0" "0" "$rc"
 assert_eq "gemini parsed" "gemini" "$(echo "$js" | jq -r '.executor')"
 
+echo "=== executor: grok loads OK ==="
+js_g="$(_ccs_dispatch_gate_load_task "$(mk grok.yaml 'executor: grok')")"; rc_g=$?
+assert_eq "grok rc 0" "0" "$rc_g"
+assert_eq "grok parsed" "grok" "$(echo "$js_g" | jq -r '.executor')"
+
 echo "=== executor: claude loads OK ==="
 _ccs_dispatch_gate_load_task "$(mk c.yaml 'executor: claude')" >/dev/null 2>&1
 assert_eq "claude rc 0" "0" "$?"
@@ -48,3 +53,5 @@ assert_eq "wingman without plan -> rc 1" "1" "$?"
 echo "=== non-string executor -> rc 1 ==="
 _ccs_dispatch_gate_load_task "$(mk numeric.yaml 'executor: 123')" >/dev/null 2>&1
 assert_eq "numeric -> rc 1" "1" "$?"
+
+test_summary

@@ -75,6 +75,20 @@ YAML
 _ccs_dispatch_gate_load_task "$WORK/apwing.yaml" >/dev/null 2>&1
 assert_eq "agentpager+wingman rejected" "1" "$?"
 
+echo "=== schema accepts backend: agentpager + executor: grok ==="
+cat > "$WORK/apgrok.yaml" <<YAML
+id: t
+goal: g
+backend: agentpager
+executor: grok
+scope: { cwd: "$WORK/repo" }
+acceptance_criteria:
+  - id: AC1
+    verify: { cmd: "true" }
+YAML
+_ccs_dispatch_gate_load_task "$WORK/apgrok.yaml" >/dev/null 2>&1
+assert_eq "agentpager+grok accepted" "0" "$?"
+
 # ── foreground wait helper ──────────────────────────────────────────────────
 echo "=== wait_and_collect: handoff appears -> rc 0, seat reclaimed, output collected ==="
 SEAT="$WORK/seat"; : > "$SEAT"
@@ -186,6 +200,35 @@ task_json="$(_ccs_dispatch_gate_load_task "$WORK/nomodel.yaml")"
 term="$(_ccs_dispatch_run_one "$task_json" "$WORK/nomodel.yaml" "$WORK/hop-nomodel")"
 assert_eq "no-model PASS term" "PASS" "$term"
 assert_eq "launch writer gets empty model" "" "$(head -1 "$MODELLOG")"
+
+echo "=== integration: executor grok reaches the launch file as cli ==="
+cat > "$WORK/grok.yaml" <<YAML
+id: gk
+goal: "make g"
+backend: agentpager
+executor: grok
+scope: { cwd: "$WORK/repo" }
+acceptance_criteria:
+  - id: AC1
+    text: "g exists"
+    verify: { cmd: "test -f g.txt" }
+YAML
+CLILOG="$WORK/clilog"
+: > "$CLILOG"; rm -f "$WORK/seat" "$WORK/repo/g.txt"; rm -f "$WORK/repo/tmp"/handoff-*.md
+_ccs_dispatch_agentpager_available() { return 0; }
+_ccs_dispatch_resolve_proj_from_dir() { echo "testproj"; }
+_ccs_dispatch_agentpager_session_alive() { [ -f "$WORK/seat" ]; }
+_ccs_dispatch_agentpager_stop_file() { rm -f "$WORK/seat"; echo "$WORK/stop"; }
+_ccs_dispatch_agentpager_launch_file() {
+  local sig="$1"; local cli="${6:-}"
+  mkdir -p "$WORK/repo/tmp"; : > "$WORK/seat"; : > "$WORK/repo/g.txt"
+  printf -- '---\nsummary: s\noutcome: done\n---\n' > "$WORK/repo/tmp/handoff-${sig}.md"
+  printf '%s\n' "$cli" >> "$CLILOG"; echo "$WORK/inbound-${sig}"
+}
+task_json="$(_ccs_dispatch_gate_load_task "$WORK/grok.yaml")"
+term="$(_ccs_dispatch_run_one "$task_json" "$WORK/grok.yaml" "$WORK/hop-grok")"
+assert_eq "grok PASS term" "PASS" "$term"
+assert_eq "launch writer gets cli=grok" "grok" "$(head -1 "$CLILOG")"
 
 echo "=== integration: attempt1 FAIL -> retry -> attempt2 PASS (Option B) ==="
 cat > "$WORK/retry.yaml" <<YAML

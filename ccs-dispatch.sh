@@ -99,7 +99,7 @@ _ccs_dispatch_gate_load_task() {
     and ((.next == null) or (.next | type == "string" and (length > 0)))
     and ((.executor == null) or
          (.executor | type == "string"
-          and (. == "claude" or . == "gemini" or . == "wingman")))
+          and (. == "claude" or . == "gemini" or . == "wingman" or . == "grok")))
     and ((.model == null) or (.model | type == "string" and (length > 0)))
     and (if .executor == "wingman"
          then (.plan | type == "string" and (length > 0))
@@ -434,21 +434,25 @@ _ccs_dispatch_run_worker() {
   fi
   local ad="$run_dir/attempt-$(printf '%02d' "$attempt")"
   mkdir -p "$ad"
-  # claude/gemini need auto-approve: headless has no tty, so a permission
+  # claude/gemini/grok need auto-approve: headless has no tty, so a permission
   # prompt hangs until the wall-clock timeout (claude -p without a permission
   # mode stalls on the first edit tool and produces zero output/changes). The
   # deterministic gate re-runs every verify.cmd against ground truth, so an
   # auto-approved false-success is caught (see
   # docs/case-studies/gemini-yolo-overconfidence.md). claude is the default.
-  # wingman is file-driven (plan.md in, .wingman/result.md out) and ignores
-  # the prompt; --exit-status maps overall_status to the exit code, which is
-  # recorded as evidence only -- the gate stays the sole verdict source.
+  # grok --output-format plain keeps evidence as prose (the CLI has no `text`
+  # value; a typo is clap-rejected). wingman is file-driven (plan.md in,
+  # .wingman/result.md out) and ignores the prompt; --exit-status maps
+  # overall_status to the exit code, which is recorded as evidence only -- the
+  # gate stays the sole verdict source.
   # A declared model is pinned per CLI (the flags differ and are not
   # interchangeable); omitting it keeps the CLI's own saved default. wingman is
   # file-driven and has no model flag, so it ignores the field.
   local cmd
   case "$executor" in
     gemini)  cmd=(gemini -p "$prompt" --approval-mode yolo)
+             [ -n "$model" ] && cmd+=(-m "$model") ;;
+    grok)    cmd=(grok -p "$prompt" --always-approve --output-format plain)
              [ -n "$model" ] && cmd+=(-m "$model") ;;
     wingman) cmd=(wingman execute --plan "$plan_abs" --exit-status) ;;
     *)       cmd=(claude -p "$prompt" --permission-mode bypassPermissions)
