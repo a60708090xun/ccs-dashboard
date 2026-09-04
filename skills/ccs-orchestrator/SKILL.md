@@ -1,6 +1,6 @@
 ---
 name: ccs-orchestrator
-description: "MANDATORY for any ccs-* command execution. Never run ccs-* commands via Bash directly — always invoke this skill instead. Triggers on: ccs-status, ccs-overview, ccs-crash, ccs-checkpoint, ccs-recap, ccs-feature, ccs-handoff, ccs-pick, ccs-health, ccs-dispatch, ccs-jobs, ccs-review, ccs-project, ccs-failure-triage. Also triggers on: 'checkpoint', 'overview', 'recap', 'sessions', 'crash', 'health', 'handoff', 'dispatch', 'review', 'session review', 'project report', 'project insights', '回顧', '報告', 'weekly report', '週報', '專案報告', '專案洞察', '跑一下checkpoint', '目前狀態', '工作總覽', 'what am I working on', 'show my sessions', 'セッションの状態', 'ccs-failure-triage', 'confabulation', 'model failure triage', 'confabulation triage', '對話對不起來', '假成功', 'model 怪怪的', '被注入', '腦補', 'session triage'. This skill handles output rendering (via _ccs_to_file + Read) so results display correctly in session view."
+description: "MANDATORY for any ccs-* command execution. Never run ccs-* commands via Bash directly — always invoke this skill instead. Triggers on: ccs-status, ccs-overview, ccs-crash, ccs-checkpoint, ccs-recap, ccs-feature, ccs-handoff, ccs-pick, ccs-health, ccs-dispatch, ccs-jobs, ccs-review, ccs-run-cost, ccs-project, ccs-failure-triage. Also triggers on: 'checkpoint', 'overview', 'recap', 'sessions', 'crash', 'health', 'handoff', 'dispatch', 'review', 'session review', 'project report', 'project insights', '回顧', '報告', 'weekly report', '週報', '專案報告', '專案洞察', '跑一下checkpoint', '目前狀態', '工作總覽', 'what am I working on', 'show my sessions', 'セッションの状態', 'ccs-failure-triage', 'confabulation', 'model failure triage', 'confabulation triage', '對話對不起來', '假成功', 'model 怪怪的', '被注入', '腦補', 'session triage', 'token 用量', '成本會計', 'token accounting'. This skill handles output rendering (via _ccs_to_file + Read) so results display correctly in session view."
 ---
 
 # Code CLI Sessions (CCS) Orchestrator
@@ -60,6 +60,7 @@ description: "MANDATORY for any ccs-* command execution. Never run ccs-* command
 | review [sid] | rv | `ccs-review [sid]` — session review 報告 |
 | review html [sid] | | `ccs-review [sid] --format html -o <path>` — HTML 報告 |
 | weekly [since] [until] | wk | `ccs-review --since <date> --until <date>` — 週報 |
+| run-cost [sid...] | rc | `ccs-run-cost [sid...]` — 跨 session token 用量會計 |
 | project [path] | pj | `ccs-project [path]` — 專案層級洞察報告 |
 | project html [path] | | `ccs-project [path] --format html -o <path>` — HTML 報告 |
 

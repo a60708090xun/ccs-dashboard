@@ -83,6 +83,7 @@ ccs-dashboard 分兩層：
 | `ccs-dispatch-plan` | 把 chain-spec 展開成 next:-linked task.yaml 鏈（只產檔、不派工） |
 | `ccs-dispatch-run` | 帶 review gate + 鏈結派工（gated task-list chaining，task.yaml） |
 | `ccs-review` | Session 回顧報告 — 統計、對話、LLM 摘要（md/html/pdf） |
+| `ccs-run-cost` | 跨 session token 用量會計 — 各 session／subagent 成本、階段切分（md/json） |
 | `ccs-project` | 專案層級洞察報告 — 成本、進度、節奏、程式碼變動（md/html） |
 | `ccs-failure-triage` | 對 session 進行 model confabulation-family 失效信號分類診斷 |
 

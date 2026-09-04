@@ -18,6 +18,7 @@ ccs-feature.sh        # Feature clustering + ccs-feature, ccs-tag
 ccs-ops.sh            # ccs-crash, ccs-recap, ccs-checkpoint
 ccs-dispatch.sh       # ccs-dispatch, ccs-jobs
 ccs-review.sh         # ccs-review — session 回顧報告
+ccs-run.sh            # ccs-run-cost — 跨 session token 用量會計
 ccs-project.sh        # ccs-project — 專案層級洞察報告
 install.sh            # 安裝腳本（依賴檢查 + bashrc + skill symlink）
 templates/            # Jinja2 HTML 模板（ccs-review、ccs-project 用）
