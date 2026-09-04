@@ -827,6 +827,43 @@ ccs-review --since 2026-03-24 --until 2026-03-31 --summarize
 - Responsive（手機友善）
 - `<details>` 原生折疊，零 JS 依賴
 
+## ccs-run-cost
+
+跨 session 的 token 用量會計 — 計算各 session 及 subagent 之精確 token 消耗成本與階段切分。
+
+```bash
+# 基本用法：指定單一或多個 session
+ccs-run-cost <sid>
+ccs-run-cost <sid1> <sid2>
+
+# 跨 session 協作（orchestrator + worker）並加上自訂標籤與階段切分
+ccs-run-cost <orchestrator-sid> <worker-sid> --label <sid>=oracle --split 2026-09-04T12:00:00Z
+
+# 限縮截止時點與 JSON 輸出
+ccs-run-cost <sid> --until 2026-09-04T18:00:00Z --format json
+
+# 排除 subagents 用量
+ccs-run-cost <sid> --no-subagents
+```
+
+**參數說明：**
+
+| 旗標 | 參數 | 說明 |
+|---|---|---|
+| `--split` | `<ISO8601>` | 階段切分切點（可多次指定；等於切點歸後段） |
+| `--label` | `<sid>=<name>` | 為指定 session 附加易讀標籤（例如 `<sid>=oracle`） |
+| `--until` | `<ISO8601>` | 只計算指定時間（含）之前的 token 用量 |
+| `--no-subagents` | 無 | 排除 subagents 目錄下的 token 用量累計 |
+| `--format` | `md` \| `json` | 輸出格式（預設為 `md`） |
+
+**邊界語意：**
+- `--split <ISO8601>`：**等於切點歸後段**。即時間點大於等於切點（`>= split`）的請求歸入後一個 stage，嚴格小於切點（`< split`）歸入前一個 stage。
+- `--until <ISO8601>`：**含該時點**。即時間點小於等於截止點（`<= until`）的所有請求皆包含在統計內，嚴格大於截止點（`> until`）則排除。
+
+**使用限制：**
+- **時間戳記格式**：`--split` 與 `--until` 僅接受嚴格 UTC ISO-8601 格式（`YYYY-MM-DDTHH:MM:SSZ` 或帶毫秒 `YYYY-MM-DDTHH:MM:SS.sssZ`）。裸日期（如 `2026-09-04`）、無效字串或帶時區偏移者（如 `+08:00`）會直接報錯並以狀態碼 1 退出。
+- **Provider 支援**：只有能自 JSONL 提取 `usage` 物件的 Provider（如 Claude Code）提供精確 token 數字；無法取得 usage 之 Provider（如 Gemini CLI）會在輸出中明確標記 `[usage unavailable]` 或 `usage_available: false`，且不計入總額。
+
 ## ccs-project
 
 專案層級洞察報告：投入成本、功能進度、開發節奏、程式碼變動、跨 session 問題模式。

@@ -83,6 +83,7 @@ ccs-dashboard has two layers:
 | `ccs-dispatch-plan` | Expand a chain-spec into a next:-linked task.yaml chain (no dispatch) |
 | `ccs-dispatch-run` | Dispatch with a review gate + gated task-list chaining (task.yaml) |
 | `ccs-review` | Session review report — stats, conversation, LLM summary (md/html/pdf) |
+| `ccs-run-cost` | Cross-session token accounting — per-session/subagent cost, stage split (md/json) |
 | `ccs-project` | Per-project insight report — cost, features, rhythm, code changes (md/html) |
 | `ccs-failure-triage` | Triage a session for model confabulation-family failure signals |
 
