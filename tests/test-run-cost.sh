@@ -11,9 +11,7 @@ cd "$(dirname "$0")/.."
 source tests/fixture-helper.sh
 source ccs-core.sh
 
-if [ -f "ccs-run.sh" ]; then
-  source ccs-run.sh
-fi
+source ccs-run.sh
 
 setup_test_dir "run-cost"
 
@@ -21,9 +19,27 @@ PROJECTS_DIR="$TEST_DIR/projects/test-proj"
 mkdir -p "$PROJECTS_DIR"
 export CCS_PROJECTS_DIR="$TEST_DIR/projects"
 
-# Helper for safe jq evaluation (returns empty string if invalid JSON or command failed)
+# Sanity assertion: ensure ccs-run-cost is executable and defined
+echo "=== Sanity check: ccs-run-cost executable ==="
+sanity_help=$(ccs-run-cost --help 2>&1)
+assert_eq "sanity: ccs-run-cost --help exits 0" "0" "$?"
+assert_contains "sanity: help text contains Usage: ccs-run-cost" "$sanity_help" "Usage: ccs-run-cost"
+
+# Helper for safe jq evaluation (warns on invalid JSON, returns empty string on empty input)
 jq_val() {
-  jq -r "$1" 2>/dev/null || echo ""
+  local query="$1"
+  local input
+  input=$(cat)
+  if [ -z "$input" ]; then
+    echo ""
+    return 0
+  fi
+  if ! echo "$input" | jq -e . >/dev/null 2>&1; then
+    echo "Warning: jq_val received invalid JSON" >&2
+    echo ""
+    return 0
+  fi
+  echo "$input" | jq -r "$query"
 }
 
 echo "=== Fixture 1 & A7: Single request & Metric independence ==="
