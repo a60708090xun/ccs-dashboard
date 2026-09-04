@@ -178,8 +178,9 @@ assert_eq "A6: until cache_read == 0" "0" "$(echo "$out_f8_run1" | jq_val '.sess
 assert_eq "A6: until cache_creation == 0" "0" "$(echo "$out_f8_run1" | jq_val '.sessions[0].totals.cache_creation')"
 assert_eq "A6: until thinking == 0" "0" "$(echo "$out_f8_run1" | jq_val '.sessions[0].totals.thinking')"
 
+norm_run() { echo "$1" | jq -S 'del(.generated_at)'; }
 out_f8_run2=$(ccs-run-cost sess-6-split --until 2026-09-04T12:00:00Z --format json 2>/dev/null || true)
-assert_eq "A6: until run1 and run2 reproducible" "$out_f8_run1" "$out_f8_run2"
+assert_eq "A6: until run1 and run2 reproducible" "$(norm_run "$out_f8_run1")" "$(norm_run "$out_f8_run2")"
 
 echo "=== Fixture 7: Missing requestId ==="
 F7="$PROJECTS_DIR/sess-7-missing-reqid.jsonl"
