@@ -218,4 +218,89 @@ assert_contains "cli: help flag" "$help_out" "Usage: ccs-run-cost"
 err_out=$(ccs-run-cost non-existent-session-id 2>&1 || true)
 assert_contains "cli: unresolvable session errors" "$err_out" "non-existent-session-id"
 
+echo "=== B1 & Flag combo: --split x --format md ==="
+out_split_md=$(ccs-run-cost sess-6-split --split 2026-09-04T12:00:00Z 2>/dev/null || true)
+rc_split_md=$(ccs-run-cost sess-6-split --split 2026-09-04T12:00:00Z >/dev/null 2>&1 && echo 0 || echo $?)
+assert_eq "B1: split x md exits 0" "0" "$rc_split_md"
+assert_contains "B1: split x md contains stages header" "$out_split_md" "### Stages Breakdown:"
+assert_contains "B1: split x md contains Stage 0" "$out_split_md" "| Stage 0 |"
+assert_contains "B1: split x md contains Stage 1" "$out_split_md" "| Stage 1 |"
+
+echo "=== Flag combo: --split x --until ==="
+out_split_until=$(ccs-run-cost sess-6-split --split 2026-09-04T12:00:00Z --until 2026-09-04T12:00:00Z --format json 2>/dev/null || true)
+assert_eq "split x until: stage 0 requests == 1" "1" "$(echo "$out_split_until" | jq_val '.sessions[0].stages[0].requests')"
+assert_eq "split x until: stage 1 requests == 1" "1" "$(echo "$out_split_until" | jq_val '.sessions[0].stages[1].requests')"
+assert_eq "split x until: total requests == 2" "2" "$(echo "$out_split_until" | jq_val '.sessions[0].totals.requests')"
+assert_eq "split x until: total output == 45" "45" "$(echo "$out_split_until" | jq_val '.sessions[0].totals.output')"
+
+echo "=== Flag combo: multiple splits in reverse order & precision ==="
+out_split_rev=$(ccs-run-cost sess-6-split --split 2026-09-04T12:00:00.5Z --split 2026-09-04T12:00:00Z --format json 2>/dev/null || true)
+assert_eq "split rev: stages length == 3" "3" "$(echo "$out_split_rev" | jq_val '.sessions[0].stages | length')"
+assert_eq "split rev: stage 0 to is 12:00:00Z" "2026-09-04T12:00:00Z" "$(echo "$out_split_rev" | jq_val '.sessions[0].stages[0].to')"
+assert_eq "split rev: stage 1 to is 12:00:00.5Z" "2026-09-04T12:00:00.5Z" "$(echo "$out_split_rev" | jq_val '.sessions[0].stages[1].to')"
+
+echo "=== Flag combo: Gemini session x --split ==="
+out_gem_split_md=$(ccs-run-cost sess-5-gemini --split 2026-09-04T12:00:00Z 2>/dev/null || true)
+rc_gem_split_md=$(ccs-run-cost sess-5-gemini --split 2026-09-04T12:00:00Z >/dev/null 2>&1 && echo 0 || echo 1)
+assert_eq "gemini x split exits 0" "0" "$rc_gem_split_md"
+assert_contains "gemini x split contains stages breakdown" "$out_gem_split_md" "### Stages Breakdown:"
+
+echo "=== B2: Timestamp validation for --until and --split ==="
+err_until_bare=$(ccs-run-cost sess-1-single --until 2026-09-04 2>&1 || true)
+rc_until_bare=$(ccs-run-cost sess-1-single --until 2026-09-04 >/dev/null 2>&1 && echo 0 || echo 1)
+assert_eq "B2: until bare date exits non-zero" "1" "$rc_until_bare"
+assert_contains "B2: until bare date error message" "$err_until_bare" "invalid ISO8601 timestamp"
+
+err_until_garb=$(ccs-run-cost sess-1-single --until garbage 2>&1 || true)
+rc_until_garb=$(ccs-run-cost sess-1-single --until garbage >/dev/null 2>&1 && echo 0 || echo 1)
+assert_eq "B2: until garbage exits non-zero" "1" "$rc_until_garb"
+assert_contains "B2: until garbage error message" "$err_until_garb" "invalid ISO8601 timestamp"
+
+err_until_tz=$(ccs-run-cost sess-1-single --until 2026-09-04T19:00:00+08:00 2>&1 || true)
+rc_until_tz=$(ccs-run-cost sess-1-single --until 2026-09-04T19:00:00+08:00 >/dev/null 2>&1 && echo 0 || echo 1)
+assert_eq "B2: until tz offset exits non-zero" "1" "$rc_until_tz"
+assert_contains "B2: until tz offset error message" "$err_until_tz" "invalid ISO8601 timestamp"
+
+err_split_bare=$(ccs-run-cost sess-1-single --split 2026-09-04 2>&1 || true)
+rc_split_bare=$(ccs-run-cost sess-1-single --split 2026-09-04 >/dev/null 2>&1 && echo 0 || echo 1)
+assert_eq "B2: split bare date exits non-zero" "1" "$rc_split_bare"
+assert_contains "B2: split bare date error message" "$err_split_bare" "invalid ISO8601 timestamp"
+
+echo "=== B3: Corrupted / truncated session handling ==="
+F_TRUNC="$PROJECTS_DIR/sess-trunc.jsonl"
+cat > "$F_TRUNC" <<'JSONL'
+{"type":"assistant","uuid":"uuid-trunc-1","timestamp":"2026-09-04T10:00:00Z","message":{"usage":{"input_tokens":10,"output_tokens":20}}}
+{"type":"assistant","uuid":"uuid-trunc-2","timestamp":"2026-09-04T10:01:00Z","message":{"usa
+JSONL
+
+err_trunc=$(ccs-run-cost sess-1-single sess-trunc --format json 2>&1 1>/dev/null || true)
+assert_contains "B3: trunc session warns on stderr" "$err_trunc" "failed to parse session"
+
+out_trunc_json=$(ccs-run-cost sess-1-single sess-trunc --format json 2>/dev/null || true)
+assert_eq "B3: trunc session retained in sessions array" "2" "$(echo "$out_trunc_json" | jq_val '.sessions | length')"
+assert_eq "B3: trunc session usage_available is false" "false" "$(echo "$out_trunc_json" | jq_val '.sessions[1].usage_available')"
+assert_eq "B3: trunc session not in grand_total output" "20" "$(echo "$out_trunc_json" | jq_val '.grand_total.output')"
+
+out_trunc_md=$(ccs-run-cost sess-trunc 2>/dev/null || true)
+assert_contains "B3: trunc session md shows unavailable" "$out_trunc_md" "[usage unavailable] / usage 不可得"
+
+echo "=== B4: Resolved UUID in sid & Deduplication of same sid ==="
+F_PREFIX="$PROJECTS_DIR/sess-prefix-full-uuid-12345.jsonl"
+cat > "$F_PREFIX" <<'JSONL'
+{"type":"assistant","uuid":"u1","timestamp":"2026-09-04T10:00:00Z","message":{"usage":{"input_tokens":5,"output_tokens":10}}}
+JSONL
+
+out_prefix_json=$(ccs-run-cost sess-prefix --format json 2>/dev/null || true)
+assert_eq "B4: sid contains full resolved uuid not prefix" "sess-prefix-full-uuid-12345" "$(echo "$out_prefix_json" | jq_val '.sessions[0].sid')"
+
+out_dup_json=$(ccs-run-cost sess-prefix sess-prefix-full-uuid-12345 --format json 2>/dev/null || true)
+assert_eq "B4: duplicate sid only counted once in sessions" "1" "$(echo "$out_dup_json" | jq_val '.sessions | length')"
+assert_eq "B4: duplicate sid grand_total output not doubled" "10" "$(echo "$out_dup_json" | jq_val '.grand_total.output')"
+
+echo "=== Nit 1: Unknown format returns 1 ==="
+err_fmt=$(ccs-run-cost sess-1-single --format xml 2>&1 || true)
+rc_fmt=$(ccs-run-cost sess-1-single --format xml >/dev/null 2>&1 && echo 0 || echo 1)
+assert_eq "nit 1: unknown format exits non-zero" "1" "$rc_fmt"
+assert_contains "nit 1: unknown format error message" "$err_fmt" "unknown format 'xml'"
+
 test_summary

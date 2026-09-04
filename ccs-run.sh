@@ -146,8 +146,6 @@ _ccs_run_cost_parse_file() {
 _ccs_run_cost_md() {
   local json_input="${1:?missing json input}"
   jq -r '
-    def format_num: tostring;
-    
     "# Run Cost Report\n",
     "- **Generated at**: \(.generated_at)",
     (if .until != null then "- **Until**: \(.until) (inclusive)" else empty end),
@@ -161,7 +159,11 @@ _ccs_run_cost_md() {
       if .usage_available then
         "| \($name) | \(.with_subagents.requests) | \(.with_subagents.rows) | \(.with_subagents.input) | \(.with_subagents.output) | \(.with_subagents.billable) | \(.with_subagents.cache_read) | \(.with_subagents.cache_creation) | \(.with_subagents.thinking) | OK |"
       else
-        "| \($name) | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | [usage unavailable] / usage 不可得 (Gemini session 無 token usage 欄位) |"
+        (if .provider == "gemini" then
+          "| \($name) | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | [usage unavailable] / usage 不可得 (Gemini session 無 token usage 欄位) |"
+        else
+          "| \($name) | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | [usage unavailable] / usage 不可得 (解析失敗) |"
+        end)
       end
     ),
     "| **Grand Total** | \(.grand_total.requests) | \(.grand_total.rows) | \(.grand_total.input) | \(.grand_total.output) | \(.grand_total.billable) | \(.grand_total.cache_read) | \(.grand_total.cache_creation) | \(.grand_total.thinking) | - |",
@@ -181,16 +183,16 @@ _ccs_run_cost_md() {
     ),
     (
       .sessions[] | select((.stages | length) > 0) |
-      (if .label != null then "\(.sid) (\(.label))" else .sid end) as $sname |
+      . as $sess |
+      (if $sess.label != null then "\($sess.sid) (\($sess.label))" else $sess.sid end) as $sname |
       "\n### Stages Breakdown: \($sname)\n\n" +
       "| Stage | From | To | Requests | Rows | Input | Output | Billable | Cache Read | Cache Creation | Thinking |\n" +
       "|:---|:---|:---|---:|---:|---:|---:|---:|---:|---:|---:|\n" +
       (
-        [range(0; .stages | length)] | map(
+        [range(0; $sess.stages | length)] | map(
           . as $idx |
-          $idx as $stg_num |
-          (.stages[$idx]) as $stg |
-          "| Stage \($stg_num) | \($stg.from // "-") | \($stg.to // "-") | \($stg.requests) | \($stg.rows) | \($stg.input) | \($stg.output) | \($stg.billable) | \($stg.cache_read) | \($stg.cache_creation) | \($stg.thinking) |\n"
+          ($sess.stages[$idx]) as $stg |
+          "| Stage \($idx) | \($stg.from // "-") | \($stg.to // "-") | \($stg.requests) | \($stg.rows) | \($stg.input) | \($stg.output) | \($stg.billable) | \($stg.cache_read) | \($stg.cache_creation) | \($stg.thinking) |\n"
         ) | join("")
       )
     )
@@ -199,6 +201,7 @@ _ccs_run_cost_md() {
 
 # ── Main CLI command ──
 ccs-run-cost() {
+  local -
   local splits=()
   local labels=()
   local until=""
@@ -214,6 +217,10 @@ ccs-run-cost() {
         ;;
       --split)
         [ $# -ge 2 ] || { echo "Error: --split requires an ISO8601 timestamp" >&2; return 1; }
+        if [[ ! "$2" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z$ ]]; then
+          echo "Error: invalid ISO8601 timestamp for --split: '$2' (expected UTC format YYYY-MM-DDTHH:MM:SSZ or YYYY-MM-DDTHH:MM:SS.sssZ)" >&2
+          return 1
+        fi
         splits+=("$2")
         shift 2
         ;;
@@ -224,6 +231,10 @@ ccs-run-cost() {
         ;;
       --until)
         [ $# -ge 2 ] || { echo "Error: --until requires an ISO8601 timestamp" >&2; return 1; }
+        if [[ ! "$2" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z$ ]]; then
+          echo "Error: invalid ISO8601 timestamp for --until: '$2' (expected UTC format YYYY-MM-DDTHH:MM:SSZ or YYYY-MM-DDTHH:MM:SS.sssZ)" >&2
+          return 1
+        fi
         until="$2"
         shift 2
         ;;
@@ -233,6 +244,10 @@ ccs-run-cost() {
         ;;
       --format)
         [ $# -ge 2 ] || { echo "Error: --format requires md or json" >&2; return 1; }
+        if [ "$2" != "md" ] && [ "$2" != "json" ]; then
+          echo "Error: unknown format '$2'" >&2
+          return 1
+        fi
         format="$2"
         shift 2
         ;;
@@ -254,28 +269,57 @@ ccs-run-cost() {
     return 1
   fi
 
-  # Prepare splits JSON array
+  # Prepare splits JSON array sorted by normalized ISO8601 timestamp
   local splits_json="[]"
   if [ ${#splits[@]} -gt 0 ]; then
-    splits_json=$(printf '%s\n' "${splits[@]}" | jq -R . | jq -s 'sort')
+    splits_json=$(printf '%s\n' "${splits[@]}" | jq -R . | jq -s '
+      def norm_iso:
+        if . == null or . == "" then ""
+        elif test("\\.[0-9]+Z$") then
+          sub("(?<dot>\\.[0-9]{3})[0-9]*Z$"; "\(.dot)Z")
+        else
+          sub("Z$"; ".000Z")
+        end;
+      sort_by(. | norm_iso) | unique_by(. | norm_iso)
+    ')
   fi
 
   local generated_at
   generated_at=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
   local sessions_json_list=()
+  local -A seen_sessions=()
+  local -A matched_labels=()
+  local sid=""
+  local l=""
 
   for sid in "${session_ids[@]}"; do
+    local file
+    file=$(_ccs_run_cost_resolve_session "$sid") || return 1
+
+    local resolved_uuid
+    resolved_uuid=$(basename "$file")
+    resolved_uuid="${resolved_uuid%.jsonl}"
+    resolved_uuid="${resolved_uuid%.json}"
+
+    if [ -n "${seen_sessions["$resolved_uuid"]:-}" ]; then
+      echo "Warning: duplicate session $resolved_uuid ($sid) ignored" >&2
+      continue
+    fi
+    seen_sessions["$resolved_uuid"]=1
+
     local label="null"
     for l in "${labels[@]}"; do
       if [[ "$l" == "${sid}="* ]]; then
         label="\"${l#"${sid}="}\""
+        matched_labels["$l"]=1
+        break
+      elif [[ "$l" == "${resolved_uuid}="* ]]; then
+        label="\"${l#"${resolved_uuid}="}\""
+        matched_labels["$l"]=1
         break
       fi
     done
-
-    local file
-    file=$(_ccs_run_cost_resolve_session "$sid") || return 1
 
     local provider
     provider=$(_ccs_get_provider "$file")
@@ -284,7 +328,7 @@ ccs-run-cost() {
       # Gemini session: no token usage available
       local sess_obj
       sess_obj=$(jq -n \
-        --arg sid "$sid" \
+        --arg sid "$resolved_uuid" \
         --argjson label "$label" \
         --argjson splits "$splits_json" \
         '{
@@ -319,72 +363,124 @@ ccs-run-cost() {
     else
       # Claude session
       local parsed_parent
-      parsed_parent=$(_ccs_run_cost_parse_file "$file" "$splits_json" "$until")
-
-      local subagents_json="[]"
-      local with_subagents_json
-      with_subagents_json=$(echo "$parsed_parent" | jq '.totals')
-
-      if [ "$include_subagents" = "true" ]; then
-        local subagents_dir="${file%.*}/subagents"
-        if [ -d "$subagents_dir" ]; then
-          local sub_items=()
-          local sub_files=()
-          shopt -s nullglob
-          sub_files=("$subagents_dir"/agent-*.jsonl)
-          shopt -u nullglob
-
-          for sfile in "${sub_files[@]}"; do
-            local sub_id
-            sub_id=$(basename "$sfile" .jsonl)
-            local parsed_sub
-            parsed_sub=$(_ccs_run_cost_parse_file "$sfile" "$splits_json" "$until")
-            local sub_obj
-            sub_obj=$(jq -n --arg id "$sub_id" --argjson ps "$parsed_sub" '{
-              id: $id,
-              totals: $ps.totals,
-              stages: $ps.stages
-            }')
-            sub_items+=("$sub_obj")
-          done
-
-          if [ ${#sub_items[@]} -gt 0 ]; then
-            subagents_json=$(printf '%s\n' "${sub_items[@]}" | jq -s .)
-            with_subagents_json=$(jq -n --argjson parent "$with_subagents_json" --argjson subs "$subagents_json" '
-              def add_m($a; $b): {
-                rows: ($a.rows + $b.rows),
-                requests: ($a.requests + $b.requests),
-                input: ($a.input + $b.input),
-                output: ($a.output + $b.output),
-                billable: ($a.billable + $b.billable),
-                cache_read: ($a.cache_read + $b.cache_read),
-                cache_creation: ($a.cache_creation + $b.cache_creation),
-                thinking: ($a.thinking + $b.thinking)
-              };
-              reduce $subs[] as $s ($parent; add_m(.; $s.totals))
-            ')
-          fi
-        fi
+      local parse_failed=false
+      if ! parsed_parent=$(_ccs_run_cost_parse_file "$file" "$splits_json" "$until" 2>/dev/null) || [ -z "$parsed_parent" ] || ! echo "$parsed_parent" | jq -e '.totals' >/dev/null 2>&1; then
+        parse_failed=true
+        echo "Error: failed to parse session $resolved_uuid ($sid): $file" >&2
       fi
 
-      local sess_obj
-      sess_obj=$(jq -n \
-        --arg sid "$sid" \
-        --argjson label "$label" \
-        --argjson parent "$parsed_parent" \
-        --argjson subs "$subagents_json" \
-        --argjson with_subs "$with_subagents_json" \
-        '{
-          sid: $sid,
-          label: $label,
-          provider: "claude",
-          usage_available: true,
-          totals: $parent.totals,
-          stages: $parent.stages,
-          subagents: $subs,
-          with_subagents: $with_subs
-        }')
-      sessions_json_list+=("$sess_obj")
+      if [ "$parse_failed" = "true" ]; then
+        local sess_obj
+        sess_obj=$(jq -n \
+          --arg sid "$resolved_uuid" \
+          --argjson label "$label" \
+          --arg provider "$provider" \
+          --argjson splits "$splits_json" \
+          '{
+            sid: $sid,
+            label: $label,
+            provider: $provider,
+            usage_available: false,
+            totals: {
+              rows: 0,
+              requests: 0,
+              input: 0,
+              output: 0,
+              billable: 0,
+              cache_read: 0,
+              cache_creation: 0,
+              thinking: 0
+            },
+            stages: (if ($splits | length) == 0 then [] else [range(0; ($splits | length) + 1)] | map({from: (if . == 0 then null else $splits[. - 1] end), to: (if . == ($splits | length) then null else $splits[.] end), rows: 0, requests: 0, input: 0, output: 0, billable: 0, cache_read: 0, cache_creation: 0, thinking: 0}) end),
+            subagents: [],
+            with_subagents: {
+              rows: 0,
+              requests: 0,
+              input: 0,
+              output: 0,
+              billable: 0,
+              cache_read: 0,
+              cache_creation: 0,
+              thinking: 0
+            }
+          }')
+        sessions_json_list+=("$sess_obj")
+      else
+        local subagents_json="[]"
+        local with_subagents_json
+        with_subagents_json=$(echo "$parsed_parent" | jq '.totals')
+
+        if [ "$include_subagents" = "true" ]; then
+          local subagents_dir="${file%.*}/subagents"
+          if [ -d "$subagents_dir" ]; then
+            local sub_items=()
+            local sub_files=()
+            shopt -s nullglob
+            sub_files=("$subagents_dir"/agent-*.jsonl)
+
+            local sfile
+            for sfile in "${sub_files[@]}"; do
+              local sub_id
+              sub_id=$(basename "$sfile" .jsonl)
+              local parsed_sub
+              if parsed_sub=$(_ccs_run_cost_parse_file "$sfile" "$splits_json" "$until" 2>/dev/null) && [ -n "$parsed_sub" ] && echo "$parsed_sub" | jq -e '.totals' >/dev/null 2>&1; then
+                local sub_obj
+                sub_obj=$(jq -n --arg id "$sub_id" --argjson ps "$parsed_sub" '{
+                  id: $id,
+                  totals: $ps.totals,
+                  stages: $ps.stages
+                }')
+                sub_items+=("$sub_obj")
+              else
+                echo "Warning: failed to parse subagent $sub_id for session $resolved_uuid: $sfile" >&2
+              fi
+            done
+
+            if [ ${#sub_items[@]} -gt 0 ]; then
+              subagents_json=$(printf '%s\n' "${sub_items[@]}" | jq -s .)
+              with_subagents_json=$(jq -n --argjson parent "$with_subagents_json" --argjson subs "$subagents_json" '
+                def add_m($a; $b): {
+                  rows: ($a.rows + $b.rows),
+                  requests: ($a.requests + $b.requests),
+                  input: ($a.input + $b.input),
+                  output: ($a.output + $b.output),
+                  billable: ($a.billable + $b.billable),
+                  cache_read: ($a.cache_read + $b.cache_read),
+                  cache_creation: ($a.cache_creation + $b.cache_creation),
+                  thinking: ($a.thinking + $b.thinking)
+                };
+                reduce $subs[] as $s ($parent; add_m(.; $s.totals))
+              ')
+            fi
+          fi
+        fi
+
+        local sess_obj
+        sess_obj=$(jq -n \
+          --arg sid "$resolved_uuid" \
+          --argjson label "$label" \
+          --argjson parent "$parsed_parent" \
+          --argjson subs "$subagents_json" \
+          --argjson with_subs "$with_subagents_json" \
+          '{
+            sid: $sid,
+            label: $label,
+            provider: "claude",
+            usage_available: true,
+            totals: $parent.totals,
+            stages: $parent.stages,
+            subagents: $subs,
+            with_subagents: $with_subs
+          }')
+        sessions_json_list+=("$sess_obj")
+      fi
+    fi
+  done
+
+  # Warn on any unmatched labels
+  for l in "${labels[@]}"; do
+    if [ -z "${matched_labels["$l"]:-}" ]; then
+      echo "Warning: label '$l' did not match any session" >&2
     fi
   done
 
@@ -436,7 +532,10 @@ ccs-run-cost() {
 
   if [ "$format" = "json" ]; then
     echo "$full_json"
-  else
+  elif [ "$format" = "md" ]; then
     _ccs_run_cost_md "$full_json"
+  else
+    echo "Error: unknown format '$format'" >&2
+    return 1
   fi
 }
