@@ -187,7 +187,9 @@ pager-launched → 等 wake；否則主動 poll `ccs-jobs`，不要空等一個�
 ## Agent Behavior
 
 1. **先 JSON 後呈現：** 內部先跑 `--json` 做判斷（需要哪些 options、有無殭屍等），再跑 `--md` 取人讀格式呈現。如果 `--md` 已包含所需資訊，可省略 `--json` 步驟。
-2. **單次不超過 2 個 Bash 呼叫：** 避免 token 浪費。
+2. **Bash 呼叫只跑當前 view 需要的：** 一般 view 是一次 `--json`
+   （判斷用；`--md` 已足夠時省略）加一次 `--md`；Recap / Review /
+   Project 流程照各自步驟跑。
 3. **不主動分析或建議：** 除非使用者問「排優先順序」或「今天該做什麼」。
 4. **優先順序推斷規則**（僅在使用者要求時）：
    - 有明確 deadline 的排最前
