@@ -97,7 +97,9 @@ description: "MANDATORY for any ccs-* command execution. Never run ccs-* command
 
 ## Context-Aware Options Logic
 
-每次回應結尾必須附 `<options>` 區塊。選項根據當前 view + 資料內容動態決定：
+每次回應結尾必須附選項清單。本檔所稱「`<options>` 區塊」依通道決定格式：Happy Coder
+網頁版用 `<options>` XML（會 render 成按鈕），其他通道（CLI、pager、Happy Android）用
+plain 數字清單；延遲到達的背景通知不附。選項根據當前 view + 資料內容動態決定：
 
 | 情境 | 建議 options |
 |------|-------------|
