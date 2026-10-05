@@ -97,7 +97,10 @@ commit——退回裸 `git diff`，此時 staged 改動看不到，判讀請以
 ## Verdict 語意
 
 - `PASS` — 全部 cmd-AC exit 0（guidance-AC 記 `SKIPPED_FOR_LLM`，
-  等你 Stage 2 裁決，不參與 gate 判定）
+  等你 Stage 2 裁決，不參與 gate 判定）。`PASS` ＝**這一個 hop 完成**
+  （cmd-AC 全過，Stage 2 另計），不等於整個變更可以發 MR／PR；搭配
+  `sprint-workflow` 使用時，發 MR 前要不要跑獨立 review 以它的 Phase 3
+  step 6（獨立 review 是發 MR 的前置）為準
 - `RETRY` — 有 FAIL 且 loop_budget 未耗盡；CLI 自動帶「machine 事實
   摘要」（AC id + cmd + exit code，無 worker prose）重派，你不介入
 - `ESCALATE` — budget 耗盡，或發生 ERROR。交給人診斷（讀 evidence 樹），
