@@ -681,9 +681,9 @@ ccs-dispatch-run <task.yaml>
 1. 讀取任務 `task.yaml` 中的 `next:` 欄位。若其不存在或為空，則鏈結正常結束（exit 0，`stop_reason: empty-next`）。
 2. 若 `next:` 存在，則解析為絕對路徑（若為相對路徑，則相對於當前任務檔所在目錄進行解析）。
 3. 執行各項邊界與安全保護檢查：
-   - **環路偵測（cycle）**：檢查下一個任務路徑是否已被執行過。若是，鏈結中斷（`stop_reason: cycle`）。
+   - **環路偵測（cycle）**：檢查下一個任務路徑是否已被執行過。若是，鏈結中斷（`stop_reason: cycle`，終態 `escalated`、exit 10）。
    - **最大深度限制（depth）**：鏈結深度不能超過 `CCS_DISPATCH_CHAIN_MAX_DEPTH`。若是，鏈結中斷（`stop_reason: depth`）。
-   - **載入失敗（failed）**：下一個 YAML 檔案不存在或格式不合規。若是，鏈結中斷（`stop_reason: failed`）。
+   - **載入失敗（failed）**：下一個 YAML 檔案不存在或格式不合規。若是，鏈結中斷（`stop_reason: failed`，終態 `escalated`、exit 10；loader 的錯誤訊息記在 `chain.json.stop_detail` 並印到 stderr）。
 4. 載入下一個任務，分配下一個 `hop-NN-<task-id>` 目錄並繼續 attempt 迴圈。
 
 **Gate verdict（四值，純函式判定）：**
@@ -762,7 +762,7 @@ acceptance_criteria:
 
 ```
 ${XDG_DATA_HOME:-~/.local/share}/ccs-dashboard/dispatch/runs/<first-task-id>-chain-<NN>/
-  chain.json             # 鏈結執行摘要（包含 hops 陣列、stopped_at_hop、stop_reason、outcome 與 depth 欄位）
+  chain.json             # 鏈結執行摘要（包含 hops 陣列、stopped_at_hop、stop_reason、stop_detail、outcome 與 depth 欄位）
   hop-01-<task-id-1>/
     task.yaml            # 凍結副本
     base-commit          # 派工前的 scope.cwd HEAD（每 hop 記一次，diff 的錨點；非 git repo 或無 commit 時為空）
@@ -785,7 +785,7 @@ ${XDG_DATA_HOME:-~/.local/share}/ccs-dashboard/dispatch/runs/<first-task-id>-cha
     ...
 ```
 
-**Exit code：** 跟隨最後執行的任務 verdict：`0` accepted / `10` escalated / `11` hard_stop。若因為 next: 載入失敗、語法錯誤或環路造成鏈中斷，其 exit code 依然跟隨前一個 PASS 的任務判定為 `0`。
+**Exit code：** 跟隨最後執行的任務 verdict：`0` accepted / `10` escalated / `11` hard_stop。例外：若因為 next: 載入失敗、語法錯誤或環路造成鏈中斷，宣告的下一個任務沒有執行，鏈結終態為 `escalated`、exit `10`（不吃 loop_budget），原因記在 `chain.json.stop_detail` 並印到 stderr；已執行任務的 `final.json` 仍保留 gate 的 verdict。`depth` 上限停鏈仍跟隨前一個 PASS 判定為 `0`。單一 hop 時，若 stop_reason 不是 `empty-next`，outcome 行會附上 `stop=<reason>`。
 
 **環境變數：**
 
