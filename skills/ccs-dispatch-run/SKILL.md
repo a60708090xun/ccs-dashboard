@@ -73,7 +73,7 @@ hop-NN-<task-id>/
 ├── final.json                 # 本 hop 終態：outcome / attempts / worker_rc
 └── attempt-NN/
     ├── prompt.md              # worker 收到的完整 prompt
-    ├── repro.json             # 重現條件 {executor, model, cli_version, cwd_head}；model 是 task 宣告值（非 CLI 實際使用）、wingman 的 cli_version 恆 null、agentpager 下 cli_version 是 orchestrator 端 PATH 上的版本
+    ├── repro.json             # 重現條件 {executor, model, cli_version, cwd_head}；model 是 task 宣告值（非 CLI 實際使用）、agentpager 下 cli_version 是 orchestrator 端 PATH 上的版本
     ├── executor-output.md     # worker 原始輸出（僅供鑑識，勿當依據）
     ├── executor-exit-code     # worker process exit code（純 evidence；僅 headless backend）
     ├── worker-error           # 僅確定性故障：類別 exit-125|126|127 / auth / model-not-found / agentpager-*（見 Verdict 語意）
@@ -112,8 +112,10 @@ commit——退回裸 `git diff`，此時 staged 改動看不到，判讀請以
     以及 `backend: agentpager` 的 daemon 不在、`cwd` 無 proj-map entry。
   - **輸出字串類**（CLI 起來後立刻中止，證據較弱）：`auth`（CLI 未登入）與
     `model-not-found`（宣告的 model 不存在）。**只對 headless backend 的
-    claude / gemini**，掃 `executor-output.md` 最後 50 行的固定字串，且**只在
-    rc 非 0 且非 124 時**才判（grok、wingman、agentpager 不分類）。字串表多為
+    claude / gemini / opencode**（opencode 只分 `auth`），掃 `executor-output.md`
+    最後 50 行的固定字串，且**只在 rc 非 0 且非 124 時**才判（grok、agentpager
+    不分類）。opencode 的 auth 字串由 provider 回傳，換 provider 可能比對不到而
+    退回 FAIL -> RETRY。字串表多為
     實測輸出的較長片段；claude 的 `Invalid API key` 與 gemini 的
     `FatalAuthenticationError` 取自 CLI 本體內的字串、未實測觸發，仍是關鍵字層級。
     **會隨 CLI 改版過期**；過期時退化成現行的 FAIL -> RETRY。
@@ -142,20 +144,18 @@ PASS 後自動跟 `next:`（相對於當前 task.yaml 所在目錄解析）。
 ## 邊界（現行實作 = Scope C）
 
 - gate + 單次重派；無 tier ladder（重派同 executor）
-- executor 為 `claude`（預設）/ `gemini` / `wingman` / `grok`；claude、
-  gemini 與 grok 以 auto-approve 跑 headless（claude
+- executor 為 `claude`（預設）/ `gemini` / `grok` / `opencode`；claude、
+  gemini、grok 與 opencode 以 auto-approve 跑 headless（claude
   `--permission-mode bypassPermissions`、gemini
-  `--approval-mode yolo`、grok `--always-approve --output-format plain`）—
+  `--approval-mode yolo`、grok `--always-approve --output-format plain`、
+  opencode `run --auto`）—
   **gate 為信任邊界**：worker 全權限執行
   於 `scope.cwd`，假成功由 gate 重驗現實攔下；task 應只來自你自己
   的規劃，勿餵不受信任的 goal
-- `executor: wingman`（本地 LLM，免 quota）為檔案驅動：task 需帶
-  `plan:`（wingman plan.md 路徑，由你依 wingman plan-template 紀律
-  撰寫，plan 品質不由 dispatch-run 把關）。wingman 不吃 prompt 前綴
-  的重派摘要 → **不重派**（loop_budget 視同 0，gate FAIL 直接
-  ESCALATE）；wingman 的 `--exit-status` exit code 與
-  `.wingman/result.md` 凍結進 attempt evidence 供診斷，**不參與
-  verdict**（gate 是唯一裁決來源，worker 自述樂觀或悲觀皆不信）
+- `executor: opencode`：可用 `model` 欄（帶 `-m`），重派行為同 claude / gemini，
+  `backend: agentpager` 合法。**auth 前提**：ccs 不讀 agent-pager 的 opencode
+  設定，auth 須從呼叫端環境找得到，且不要直接 export `XDG_DATA_HOME`；詳見
+  `docs/commands.md` 的「opencode 的 auth 前提」
 - `scope.allowed_paths` / `forbidden_paths` 未實作（僅 `scope.cwd`
   生效），worker 無路徑硬限制
 - worker 預設同步 headless；`backend: agentpager` 改跑互動 local channel

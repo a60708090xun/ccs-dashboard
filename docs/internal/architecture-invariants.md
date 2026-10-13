@@ -187,7 +187,8 @@ at load (`_ccs_dispatch_gate_load_task`).
 source.** A worker that never started (missing CLI, agentpager daemon
 down, no proj-map entry) or whose CLI started and aborted at once on a
 known deterministic error (`auth`, `model-not-found`, matched as fixed
-strings in the tail of the headless claude/gemini output) writes a
+strings in the tail of the headless claude/gemini/opencode output;
+opencode has `auth` only) writes a
 one-line class to `attempt-NN/worker-error`; the classification lives at
 the site that knows how the spawn failed, never in the gate. Timeout 124
 is never classified, whatever the output says, and the string table

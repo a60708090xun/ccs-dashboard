@@ -138,7 +138,8 @@ the failure is judged deterministic (`exit-125` / `exit-126` /
 `exit-127`, `agentpager-daemon-down`, `agentpager-no-proj-map`, and two
 classes taken from the worker's own output: `auth` and
 `model-not-found`). The output classes apply only to the headless
-backend's claude and gemini executors, only when the rc is neither 0 nor
+backend's claude, gemini and opencode executors (opencode: `auth` only,
+from a provider-side string), only when the rc is neither 0 nor
 124, and only when no exit-class was already written; they match fixed
 strings in the last 50 lines of `executor-output.md`. The strings are
 mostly longer fragments of observed CLI output; claude's `Invalid API key`
@@ -167,13 +168,11 @@ seam, so it exists under both backends). `cwd_head` is read per attempt,
 so attempt 2 shows whatever HEAD attempt 1 left behind; it is `null` when
 `cwd` has no commit or is not a git repo. `cli_version` is the first line
 of `timeout 10 <cli> --version` run inside the hop directory, never in
-`scope.cwd`, and is `null` on failure or empty output. Three deliberate
-narrowings: wingman is never probed, so its `cli_version` is always
-`null` (`wingman --version` is an argparse usage error); `model` is the
-value the task declared, not what the CLI actually used, and `null` when
-undeclared; and under `backend: agentpager` `cli_version` is the version
-on the orchestrator's PATH, which a cross-uid seat may not match. The
-file is evidence only — no verdict reads it.
+`scope.cwd`, and is `null` on failure or empty output. Two deliberate
+narrowings: `model` is the value the task declared, not what the CLI
+actually used, and `null` when undeclared; and under `backend: agentpager`
+`cli_version` is the version on the orchestrator's PATH, which a
+cross-uid seat may not match. The file is evidence only — no verdict reads it.
 
 ## 5. Cleanup
 

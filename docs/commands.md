@@ -479,8 +479,9 @@ ccs-dispatch --timeout 300 \
 --chain        (agentpager only) 自動接力：worker 回報 outcome:done + next 時，
                在同一專案內自動派出下一個 worker，不再逐跳詢問（鏈首一次核准）
 --max-depth <n> 最大接力跳數（預設 5），防跑飛硬上限
---cli <name>   agentpager 後端的 worker CLI：claude（預設）或 gemini；env 預設
-               CCS_DISPATCH_CLI。headless 後端忽略（會警告並用 claude）
+--cli <name>   agentpager 後端的 worker CLI：claude（預設）、gemini、grok 或
+               opencode；env 預設 CCS_DISPATCH_CLI。headless 後端忽略（會警告
+               並用 claude）
 ```
 
 **拍板流程（operator sign-off）**：人直接操作時 `--preview` 會互動確認；
@@ -497,7 +498,7 @@ CCS_DISPATCH_TIMEOUT=600          # async 預設 timeout
 CCS_DISPATCH_RESULT_TTL_DAYS=7    # 結果檔保留天數
 CCS_DISPATCH_MAX_CONCURRENT_WARN=3  # 並行 job 警告閾值
 CCS_DISPATCH_BACKEND=auto         # auto | agentpager | headless
-CCS_DISPATCH_CLI=claude           # agentpager worker CLI: claude | gemini
+CCS_DISPATCH_CLI=claude           # agentpager worker CLI: claude | gemini | grok | opencode
 CCS_DISPATCH_WAKE=1               # 派工主 session 為 pager-launched 時完成回灌一個 turn；0 關閉
 CCS_DISPATCH_PREVIEW_TIMEOUT=60   # --preview 確認等待秒數
 CCS_DISPATCH_PREVIEW_MAX_CHARS=1500  # preview prompt 折疊長度
@@ -533,9 +534,10 @@ ccs-dispatch 有兩個執行後端，由 `CCS_DISPATCH_BACKEND` 選擇（預設 
 **agentpager 行為：**
 
 - **async only**：`--sync` 會 fallback 回 headless（互動 worker 可能長跑）。
-- **worker CLI 可選**：`--cli gemini`（或 `CCS_DISPATCH_CLI=gemini`）讓互動 worker
-  跑 gemini 而非 claude；claude 為預設。僅 agentpager 後端支援——headless 一律
-  claude，指定 gemini 會警告並退回 claude。gemini chain 各 hop 沿用同一 cli。
+- **worker CLI 可選**：`--cli <name>`（或 `CCS_DISPATCH_CLI=<name>`；可選值為
+  claude、gemini、grok、opencode）讓互動 worker 跑指定的 CLI 而非 claude；claude
+  為預設。僅 agentpager 後端支援——headless 一律 claude，指定其他值會警告並退回
+  claude。chain 各 hop 沿用同一 cli。
 - **完成判定**：worker 完成時把交接寫到 `tmp/handoff-<job-id>.md`（開場 prompt 已注入
   此規則）；ccs 偵測到即收席位、把交接存到 `results/<job-id>.handoff`，狀態記為
   `handoff-ready`。無交接但 session 自行結束 → `completed`；session 從未起來 → `failed`。
@@ -646,12 +648,9 @@ hops:
 - 每 hop → `<out>/hop-NN-<id>.task.yaml`（1-based、zero-padded）。
 - `defaults` 併入每個 hop（shallow merge）；hop 層級同名 key 覆寫整個該 key，hop 內寫 `execution_policy` 會整塊蓋掉 `defaults` 的 `execution_policy`。
 - 依 hops 順序自動串 `next:`（下一 hop 的檔名）；最後一 hop 無 `next:`。
-- wingman hop 的 `plan:` 建議寫**絕對路徑**：hop 檔產出在 out dir（預設
-  `<spec 所在目錄>/chain/`），相對 `plan:` 會以 out dir 為基準解析，
-  以 spec 位置為心智模型寫相對路徑會 silently 錯位。
 - out dir 預設 `<spec 所在目錄>/chain`，可 `--out` 覆寫。
 - 每份產出立即以 gate 自身的 task loader 驗證（≥1 AC、≥1 `verify.cmd`、
-  executor ∈ {claude,gemini,wingman,grok}、AC id 唯一）。任一 hop 不合法 → 不產出任何檔、非零 exit。
+  executor ∈ {claude,gemini,grok,opencode}、AC id 唯一）。任一 hop 不合法 → 不產出任何檔、非零 exit。
 - 成功時 entry path（`hop-01-*`）印到 stdout，可直接組合：
   `ccs-dispatch-run "$(ccs-dispatch-plan spec.yaml)"`。
 
@@ -675,7 +674,7 @@ ccs-dispatch-run <task.yaml>
 
 1. **Dispatch：** 讀取並凍結 `task.yaml`（複製到鏈目錄下 `hop-NN-<task-id>/task.yaml`），依 `goal` 派 worker 到 `scope.cwd`。
 2. **Gate（Stage 1，零 LLM）：** 對 worker 改動後的 worktree 重跑每條 AC 的 `verify.cmd`（exit 0 = PASS，非零 = FAIL），寫結構化 evidence。裁決一律以重跑結果為準，不看 worker 自述。
-3. **單次重派：** gate 判 RETRY（有 FAIL 且 loop_budget 未耗盡）時，帶「上一輪失敗的 machine 事實摘要」重派一次；再失敗即 ESCALATE。例外：`executor: wingman` 不重派（loop_budget 視同 0，gate FAIL 直接 ESCALATE）— 重派摘要走 prompt 前綴，檔案驅動的 wingman 吃不到；feedback 迴圈為 tracked followup。
+3. **單次重派：** gate 判 RETRY（有 FAIL 且 loop_budget 未耗盡）時，帶「上一輪失敗的 machine 事實摘要」重派一次；再失敗即 ESCALATE。
 
 **同步鏈結迴圈（gated task-list chaining）：**
 當一個任務獲得 `PASS` 裁決後：
@@ -700,9 +699,11 @@ ccs-dispatch-run <task.yaml>
 現場**寫出——headless 的 exit `125`（timeout 自身失敗）/ `126`（CLI 不可執行）/
 `127`（CLI 不存在），以及 `backend: agentpager` 的 daemon 不在、`cwd` 無
 proj-map entry。另有兩類由輸出字串判定：`auth`（CLI 未登入）與 `model-not-found`
-（宣告的 model 不存在）——只對 headless backend 的 claude / gemini，掃
-`executor-output.md` 最後 50 行的固定字串，且只在 rc 非 0 且非 124 時才判
-（既有的 125/126/127 優先；grok、wingman、agentpager 不分類）。字串表抄自實測的
+（宣告的 model 不存在）——只對 headless backend 的 claude / gemini / opencode
+（opencode 只分 `auth`），掃 `executor-output.md` 最後 50 行的固定字串，且只在
+rc 非 0 且非 124 時才判（既有的 125/126/127 優先；grok、agentpager 不分類）。
+opencode 的 auth 字串由 provider 回傳而非 opencode 本體，換 provider 後可能比對
+不到，此時退回 FAIL -> RETRY。字串表抄自實測的
 CLI 輸出（多為較長的實測片段；`Invalid API key` 與 `FatalAuthenticationError`
 取自 CLI 本體內的字串、未實測觸發，仍是關鍵字層級）、會隨 CLI 改版過期，過期時
 退化成現行的 FAIL -> RETRY。exit／agentpager 類是 worker 根本沒起來；輸出字串類的
@@ -719,8 +720,7 @@ hop 或既有狀態剛好滿足了 AC；輸出字串類的誤判方向見上一�
 **刻意不算 ERROR 的（都可能在下一次 attempt 自癒，維持在 FAIL 路徑）：**
 `124`（timeout，即使輸出含 `auth` / `model-not-found` 字串也不分類）、一般非零 rc、
 agentpager 的 seat 被占與 launch 檔寫入失敗。
-註：「FAIL 路徑」在 budget 未耗盡時是 RETRY，耗盡時（或 `executor: wingman`，
-其 budget 被 clamp 成 0）仍是 ESCALATE。
+註：「FAIL 路徑」在 budget 未耗盡時是 RETRY，耗盡時仍是 ESCALATE。
 
 要分辨終態是「gate 判失敗」還是「worker 沒跑完」，讀 `final.json` 的
 `worker_rc`（`backend: agentpager` 恆為 `null`，該 backend 看
@@ -736,10 +736,9 @@ id: task-x                      # slug，也是 run-id 前綴
 goal: "新增 greeter 並被 CLI 呼叫"
 scope:
   cwd: "/abs/path/to/project"   # worker 執行與 gate 驗收的目錄
-executor: gemini                # 可選：claude(預設) | gemini | wingman | grok。claude/gemini/grok 皆 auto-approve 跑 headless（claude `--permission-mode bypassPermissions`、gemini `--approval-mode yolo`、grok `--always-approve --output-format plain`）— 無 tty 下權限 prompt 會卡到 timeout；gate 為信任邊界，見 §8.4
-backend: agentpager             # 可選：headless(預設) | agentpager。agentpager 讓 gate worker 跑在 agent-pager 互動 local channel（tmux、可監看/接管），gate 以前景阻塞式 spawn+wait 等 worker 的 per-attempt handoff 檔為完成訊號，回來後照常對現實驗收（gate 仍是唯一裁決來源）。executor 映射為互動 worker CLI（claude|gemini|grok）；`agentpager` + `executor: wingman` 不合法（wingman 非可互動 launch 的 CLI）。見下方「backend: agentpager」
-model: "local-chat-35b"         # 可選：本次執行的 model。headless 帶 -m/--model、agentpager 寫進 launch 檔的 model: 欄；缺省 = 沿用 CLI 自己的預設。wingman 無 model 旗標，僅作 provenance。同時供收尾 X-Executor trailer 的 <model> 段
-plan: "plan.md"                 # 僅 executor: wingman（互為充要）：wingman plan.md 路徑，相對本檔所在目錄解析（同 next:）；由主 session 依 wingman plan-template 撰寫
+executor: gemini                # 可選：claude(預設) | gemini | grok | opencode。claude/gemini/grok/opencode 皆 auto-approve 跑 headless（claude `--permission-mode bypassPermissions`、gemini `--approval-mode yolo`、grok `--always-approve --output-format plain`、opencode `run --auto`）— 無 tty 下權限 prompt 會卡到 timeout；gate 為信任邊界，見 §8.4。opencode 見下方「executor: opencode」
+backend: agentpager             # 可選：headless(預設) | agentpager。agentpager 讓 gate worker 跑在 agent-pager 互動 local channel（tmux、可監看/接管），gate 以前景阻塞式 spawn+wait 等 worker 的 per-attempt handoff 檔為完成訊號，回來後照常對現實驗收（gate 仍是唯一裁決來源）。executor 映射為互動 worker CLI（claude|gemini|grok|opencode）。見下方「backend: agentpager」
+model: "local-chat-35b"         # 可選：本次執行的 model。headless 帶 -m/--model、agentpager 寫進 launch 檔的 model: 欄；缺省 = 沿用 CLI 自己的預設。同時供收尾 X-Executor trailer 的 <model> 段
 next: "task-y.yaml"             # 可選：下一個要自動執行與驗收的任務路徑（相對於此 yaml）
 execution_policy:
   loop_budget: 1                # 重派上限（預設 1 = 共 2 attempts）
@@ -769,13 +768,12 @@ ${XDG_DATA_HOME:-~/.local/share}/ccs-dashboard/dispatch/runs/<first-task-id>-cha
     base-commit          # 派工前的 scope.cwd HEAD（每 hop 記一次，diff 的錨點；非 git repo 或無 commit 時為空）
     attempt-01/
       prompt.md          # 實際送 worker 的 prompt
-      repro.json         # 每個 attempt 在呼叫 worker 前寫入的重現條件：{executor, model, cli_version, cwd_head}。cli_version 是 `<cli> --version` 第一行（失敗或空為 null；wingman 不呼叫、恆為 null；在 hop 目錄內執行，不在 scope.cwd）；cwd_head 是該 attempt 開始時 scope.cwd 的 HEAD（每個 attempt 各讀一次，無 commit 或非 git repo 為 null）；model 是 task 宣告值而非 CLI 實際使用的 model（未宣告為 null）；backend: agentpager 下 cli_version 是 orchestrator 端 PATH 上的版本，不保證等於 seat 實際跑的
+      repro.json         # 每個 attempt 在呼叫 worker 前寫入的重現條件：{executor, model, cli_version, cwd_head}。cli_version 是 `<cli> --version` 第一行（失敗或空為 null；在 hop 目錄內執行，不在 scope.cwd）；cwd_head 是該 attempt 開始時 scope.cwd 的 HEAD（每個 attempt 各讀一次，無 commit 或非 git repo 為 null）；model 是 task 宣告值而非 CLI 實際使用的 model（未宣告為 null）；backend: agentpager 下 cli_version 是 orchestrator 端 PATH 上的版本，不保證等於 seat 實際跑的
       executor-output.md # worker 原始輸出
       git-status.txt     # gate 當下 git status --porcelain
       diff.patch         # git diff <base-commit>：錨在派工前的 commit，worker `git add` / `git commit` 都不會把它清空（base-commit 為空、或該 revision 已不存在時退回裸 git diff——此時 staged 改動看不到，以 git-status.txt 為主）
-      wingman-result.md  # 僅 wingman executor：scope.cwd/.wingman/result.md 凍結副本
-      executor-exit-code # 僅 headless backend（claude / gemini / wingman / grok 皆落）：worker process exit code（純 evidence，不參與 verdict）。backend: agentpager 沒有 process rc，對應證據是 agentpager-wait-rc
-      worker-error       # 僅確定性故障：類別單行（exit-125|126|127 / auth / model-not-found / agentpager-daemon-down / agentpager-no-proj-map）；auth 與 model-not-found 只對 headless 的 claude / gemini、rc 非 0 且非 124 時由輸出字串判定；gate 據此發 ERROR
+      executor-exit-code # 僅 headless backend（claude / gemini / grok / opencode 皆落）：worker process exit code（純 evidence，不參與 verdict）。backend: agentpager 沒有 process rc，對應證據是 agentpager-wait-rc
+      worker-error       # 僅確定性故障：類別單行（exit-125|126|127 / auth / model-not-found / agentpager-daemon-down / agentpager-no-proj-map）；auth 與 model-not-found 只對 headless 的 claude / gemini（opencode 只判 auth）、rc 非 0 且非 124 時由輸出字串判定；gate 據此發 ERROR
       launch-file.txt    # 僅 backend: agentpager：寫給 agent-pager 的 inbound launch 檔路徑
       handoff.md         # 僅 backend: agentpager：worker per-attempt 完成訊號 handoff 副本
       agentpager-wait-rc # 僅 backend: agentpager：前景 wait 結果（0=handoff / 1=timeout|無 handoff；純 evidence）
@@ -798,7 +796,16 @@ CCS_DISPATCH_GATE_CMD_TAIL_CHARS=2000  # per-AC stdout/stderr 擷取尾端字元
 
 > **安全註記（§8.4）：** AC `verify.cmd` 會執行 worker 產出的 code（`pytest`、`python -c` 等，驗證本質使然），僅靠 `execution_policy.ac_timeout_sec`（未寫則 `timeout_sec`）設界。只對「你本就願意在本機執行」的 worker 開跑；不加 network / write-path 限制（單人本地 MVP）。
 
-**backend: agentpager（互動 worker 進 gate）：** 預設 `backend: headless` 走同步 headless CLI；`backend: agentpager` 讓 gate worker 改跑在 agent-pager 互動 local channel（tmux、可監看/中途接管），把「gate 驗收 + 重派」與「可觀察互動 worker」合流（issue #91）。實作為**前景阻塞式 spawn+wait**：寫 inbound launch → 等 worker 寫 per-attempt handoff 檔（`tmp/handoff-<hop>-a<NN>.md`）為完成訊號 → 收回單一 per-user seat → 回來後 gate 照常對現實跑 `verify.cmd`（handoff 內容不採信，gate 仍是唯一裁決來源）。**重派＝Option B**：gate 判 RETRY 時，attempt 迴圈重新前景 spawn 一個 fresh 互動 hop、把上輪 machine 事實 feedback 前綴進 prompt（與 headless 對稱；不同於 `wingman` 的不重派）。**bounded wait**：先有 startup grace 等 worker session 出現（`CCS_DISPATCH_AGENTPAGER_STARTUP`，預設 60s），再以 `execution_policy.worker_timeout_sec`（未寫則 `timeout_sec`）綁定 completion 等待——逾時未見 handoff 即收回 seat、當作未完成（gate 隨即 FAIL）。故最壞上界約 startup + timeout。gate 路徑本質 autonomous，與 jobs/`--chain` 互動路徑的「no wall-clock kill（D2）」互不相干。`executor` 映射為互動 worker CLI（claude|gemini|grok）；`agentpager` + `wingman` 不合法（wingman 非可互動 launch）。auth 註記：互動 gemini worker 的 `GOOGLE_CLOUD_PROJECT` 由 agent-pager runner daemon 的 process env 繼承（worker 經 `bash -c` 起、不 source `.bashrc`），非結構性保證；持久修復屬 agent-pager 側。
+**executor: opencode：** headless 以 `opencode run --auto [-m <model>] -- <prompt>` 執行：`--auto` 自動核可未被明確 deny 的權限（同其他 executor，gate 為信任邊界）；`-m` 只在 task 宣告 `model` 時帶；`--` 讓 `-` 開頭的 prompt 不被當成旗標；opencode 會把非 TTY 的 stdin 讀進 message，故其 stdin 一律接 `/dev/null`。重派行為同 claude / gemini；`backend: agentpager` 合法。分類只涵蓋 `auth`（見 worker_error 段），unknown model 的輸出是泛用 server error，不分類。
+
+**opencode 的 auth 前提：** ccs 不讀 agent-pager 的 opencode 環境設定；auth 必須從**呼叫 `ccs-dispatch-run` 的環境**就找得到，否則 worker 以 auth 失敗結束（`worker-error` ＝ `auth`，終態 ESCALATE）。**不要直接 export `XDG_DATA_HOME`**：ccs-dashboard 自己的 dispatch 資料目錄 `${XDG_DATA_HOME:-$HOME/.local/share}/ccs-dashboard` 也讀這個變數，export 後 runs/ 會跟著搬家。兩條路擇一：
+
+- 把 auth 放在 opencode 的預設位置（呼叫端環境不需額外設定）。
+- 在 `PATH` 前面放一支 wrapper 命名為 `opencode`，只替 opencode 這個行程設定 agent-pager 那份 opencode 環境設定所用的 XDG 變數，再 `exec` 真正的 opencode；其他行程（含 ccs 本身）不受影響。
+
+auth 失敗的字串由 provider 回傳而不是 opencode 本體，換 provider 後可能比對不到而分類不出來，此時退回一般的 FAIL -> RETRY。
+
+**backend: agentpager（互動 worker 進 gate）：** 預設 `backend: headless` 走同步 headless CLI；`backend: agentpager` 讓 gate worker 改跑在 agent-pager 互動 local channel（tmux、可監看/中途接管），把「gate 驗收 + 重派」與「可觀察互動 worker」合流（issue #91）。實作為**前景阻塞式 spawn+wait**：寫 inbound launch → 等 worker 寫 per-attempt handoff 檔（`tmp/handoff-<hop>-a<NN>.md`）為完成訊號 → 收回單一 per-user seat → 回來後 gate 照常對現實跑 `verify.cmd`（handoff 內容不採信，gate 仍是唯一裁決來源）。**重派＝Option B**：gate 判 RETRY 時，attempt 迴圈重新前景 spawn 一個 fresh 互動 hop、把上輪 machine 事實 feedback 前綴進 prompt（與 headless 對稱）。**bounded wait**：先有 startup grace 等 worker session 出現（`CCS_DISPATCH_AGENTPAGER_STARTUP`，預設 60s），再以 `execution_policy.worker_timeout_sec`（未寫則 `timeout_sec`）綁定 completion 等待——逾時未見 handoff 即收回 seat、當作未完成（gate 隨即 FAIL）。故最壞上界約 startup + timeout。gate 路徑本質 autonomous，與 jobs/`--chain` 互動路徑的「no wall-clock kill（D2）」互不相干。`executor` 映射為互動 worker CLI（claude|gemini|grok|opencode）。auth 註記：互動 gemini worker 的 `GOOGLE_CLOUD_PROJECT` 由 agent-pager runner daemon 的 process env 繼承（worker 經 `bash -c` 起、不 source `.bashrc`），非結構性保證；持久修復屬 agent-pager 側。
 
 **Scope C 限制（後續 sprint 補）：** 無 tier ladder（重派用同一 executor）、無 pager escalation ladder、不接 `--chain`（gated chain 續鏈為獨立層）、無 Stage-2 judgment review 自動化、guidance-AC 一律 SKIPPED_FOR_LLM。evidence 目前全留（未來加 TTL）。orchestrator-wake（worker 完成回灌派工 session）為獨立 followup。
 
