@@ -653,6 +653,8 @@ hops:
   executor ∈ {claude,gemini,grok,opencode}、AC id 唯一）。任一 hop 不合法 → 不產出任何檔、非零 exit。
 - 成功時 entry path（`hop-01-*`）印到 stdout，可直接組合：
   `ccs-dispatch-run "$(ccs-dispatch-plan spec.yaml)"`。
+- 每個產出的 hop 另跑一次 AC lint，命中時印 `ccs-dispatch: AC lint (advisory): …` 到 stderr
+  （規則見 `ccs-dispatch-run` 的 AC lint 段）；不影響 exit code，stdout 仍只有 entry path。
 
 > **命名注意：** 產出的來源檔 `hop-NN-<id>.task.yaml` 與 `ccs-dispatch-run` 執行時
 > 凍結的證據目錄 `hop-NN-<id>/` 名稱相近但**不同東西**：前者是可供人檢查的鏈結來源，
@@ -766,6 +768,7 @@ ${XDG_DATA_HOME:-~/.local/share}/ccs-dashboard/dispatch/runs/<first-task-id>-cha
   hop-01-<task-id-1>/
     task.yaml            # 凍結副本
     base-commit          # 派工前的 scope.cwd HEAD（每 hop 記一次，diff 的錨點；非 git repo 或無 commit 時為空）
+    ac-lint.json         # 僅 AC lint 命中時：advisory 警示紀錄 {advisory, task_id, hits[{ac_id, rule, collation, literal, recomputed}]}；gate 不讀、不影響裁決
     attempt-01/
       prompt.md          # 實際送 worker 的 prompt
       repro.json         # 每個 attempt 在呼叫 worker 前寫入的重現條件：{executor, model, cli_version, cwd_head}。cli_version 是 `<cli> --version` 第一行（失敗或空為 null；在 hop 目錄內執行，不在 scope.cwd）；cwd_head 是該 attempt 開始時 scope.cwd 的 HEAD（每個 attempt 各讀一次，無 commit 或非 git repo 為 null）；model 是 task 宣告值而非 CLI 實際使用的 model（未宣告為 null）；backend: agentpager 下 cli_version 是 orchestrator 端 PATH 上的版本，不保證等於 seat 實際跑的
@@ -786,6 +789,12 @@ ${XDG_DATA_HOME:-~/.local/share}/ccs-dashboard/dispatch/runs/<first-task-id>-cha
 ```
 
 **Exit code：** 跟隨最後執行的任務 verdict：`0` accepted / `10` escalated / `11` hard_stop。例外：若因為 next: 載入失敗、語法錯誤或環路造成鏈中斷，宣告的下一個任務沒有執行，鏈結終態為 `escalated`、exit `10`（不吃 loop_budget），原因記在 `chain.json.stop_detail` 並印到 stderr；已執行任務的 `final.json` 仍保留 gate 的 verdict。`depth` 上限停鏈仍跟隨前一個 PASS 判定為 `0`。單一 hop 時，若 stop_reason 不是 `empty-next`，outcome 行會附上 `stop=<reason>`。
+
+**AC lint (advisory)：** 每個 hop 在派 worker 前，對各條 `verify.cmd` 找「`"$(…)"` 與兩個以上 token 的字面值做 `=`／`==` 比對」的形狀，命中時每筆印一行 `ccs-dispatch: AC lint (advisory): <task-id>/<ac-id>: <RULE>: …` 到 stderr，並寫 `hop-NN-<task-id>/ac-lint.json`。**純警示**：不改 verdict、exit code 與 task.yaml schema；沒有警示也不代表期望值是對的。
+
+- `AC_SORT_ORDER`（確定型，帶前提）：只判最單純的形狀——比較式那一句就是 cmd 的開頭（以 `test`／`[`／`[[` 開頭，可帶 `!`，前面什麼都沒有）、兩個運算元都是完整的字詞（沒有黏著其他字元，例如 `'b a'c`）、`$(…)` 是單行的單一 pipeline（可帶 `cd <dir> &&`／`;` 前置），最後一個 `sort` 只帶 `-u`、之後只接 `tr`（只換空白分隔符）、`paste -s[d<空白>]`、無參數 `xargs`、`head`／`tail -n N`。lint 用真的 `sort` 在 **gate 本身的 locale**（呼叫 `ccs-dispatch-run` 的環境）重排字面 token，順序不同即命中——若每行恰為一個 token、行首沒有空白、也不含引號或反斜線，這個比較式不可能為真（前提由 lint 無法驗證：例如 C collation 下 `git branch` 的 `  master` 行首空白會改變排序，而 `xargs` 會吃掉空白與引號）。cmd 內只要出現 `LC_ALL`／`LC_COLLATE`／`LANG` 任一名稱、pipeline 任一段帶前置賦值（`LC_ALL=C sort`、`PATH=… sort`）、或有 heredoc（含 here-string `<<<`、`$((… << …))`），就只判疑似型——自行設定 locale 或在前面改環境的 AC，lint 判斷不了它實際用的排序。引號字串內的比較式（例如 `grep` 的 pattern、`bash -c '…'`）與註解不算比較。
+- `AC_LITERAL_SET`（疑似型）：其餘符合形狀的比較。提示用同一條管線在 gate 的 locale 重算，或改比集合（見 `references/task-yaml.md` § AC 撰寫紀律）。
+- 手寫 `next:` 的鏈，後續 hop 要等前一 hop PASS 才載入，警示也到那時才出現；`ccs-dispatch-plan` 產出的鏈在 plan 時就逐 hop 檢查（用的是 plan 當下 shell 的 locale）。
 
 **環境變數：**
 
