@@ -73,6 +73,7 @@ hop-NN-<task-id>/
 ├── final.json                 # 本 hop 終態：outcome / attempts / worker_rc
 └── attempt-NN/
     ├── prompt.md              # worker 收到的完整 prompt
+    ├── repro.json             # 重現條件 {executor, model, cli_version, cwd_head}；model 是 task 宣告值（非 CLI 實際使用）、wingman 的 cli_version 恆 null、agentpager 下 cli_version 是 orchestrator 端 PATH 上的版本
     ├── executor-output.md     # worker 原始輸出（僅供鑑識，勿當依據）
     ├── executor-exit-code     # worker process exit code（純 evidence；僅 headless backend）
     ├── worker-error           # 僅確定性故障：類別 exit-125|126|127 / auth / model-not-found / agentpager-*（見 Verdict 語意）
