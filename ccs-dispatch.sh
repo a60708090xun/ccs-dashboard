@@ -130,6 +130,300 @@ _ccs_dispatch_gate_load_task() {
   echo "$js"
 }
 
+# Advisory AC lint for hand-computed expected values (issue #128). Looks for
+# `"$(<subst>)" = '<literal>'` comparisons (either side, `=` or
+# `==`; not inside a quoted string) whose literal has >= 2 tokens, and labels
+# each one with one rule:
+#   AC_SORT_ORDER  -- (only when the comparison's statement opens the cmd
+#                     with test/[/[[, both operands are whole words, and the
+#                     cmd has no heredoc, no LC_ALL/LC_COLLATE/LANG name and
+#                     no prefix assignment on any pipeline stage)
+#                     <subst> is a single-line pipeline (optionally after `cd <dir>`)
+#                     ending in a plain `sort` (`-u` only) followed by
+#                     order-preserving stages only, and re-sorting the literal's
+#                     tokens with the real `sort` in the gate's locale changes
+#                     their order: if every line is one token with no leading
+#                     blank, quote or backslash, that comparison can never be
+#                     true.
+#   AC_LITERAL_SET -- any other such comparison: a suspected hand-computed
+#                     literal.
+# Locale: only the caller's environment (= the gate's; run_ac does not touch
+# it). An AC that sets its own locale is not judged deterministically.
+# Prints one line per hit on STDERR (never stdout: run_one's stdout is the
+# terminal verdict and plan's stdout is the entry path); writes <json-out>
+# only when there is a hit. Always returns 0 -- it is advisory.
+_ccs_dispatch_ac_lint() {
+  local task="$1" json_out="${2:-}"
+  local out rc
+  out="$(python3 - "$task" "$json_out" 2>/dev/null <<'PY'
+import sys, os, re, json, shlex, subprocess
+
+LOCALE_VARS = ("LC_ALL", "LC_COLLATE", "LANG")
+ASSIGN = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$", re.S)
+WS_OPERAND = re.compile(r"^(?:\\n|\\t| |\t|\n)+$")
+LIT_FWD = re.compile(r"""\s*(?:==|=)\s*(?:'([^']*)'|"([^"$`\\]*)")""")
+LIT_REV = re.compile(r"""(?:'([^']*)'|"([^"$`\\]*)")\s*(?:==|(?<![!=])=)\s*$""")
+# An operand only ends at a word boundary: text glued to either quoted part
+# ('b a'c, "$(..)"' a') makes the operand something other than the literal.
+BOUND_BEFORE = " \t\n;&|(!"
+BOUND_AFTER = " \t\n;&|)"
+
+def bounded(cmd, a, b):
+    """True when cmd[a:b] is a whole word: boundary chars on both sides."""
+    return (a == 0 or cmd[a - 1] in BOUND_BEFORE) and (b == len(cmd) or cmd[b] in BOUND_AFTER)
+# Any mention of a locale variable (assignment, unset, expansion) means the AC
+# may not run under the gate's own collation: sort_env then declines.
+LOCALE_ANY = re.compile(r"(?<![A-Za-z0-9_])(?:LC_ALL|LC_COLLATE|LANG)(?![A-Za-z0-9_])")
+
+def code_mask(cmd):
+    """code[j]: cmd[j] is shell code, not text inside a quoted string or a
+    comment (it may sit in a subshell or a nested substitution)."""
+    n = len(cmd)
+    code, stack, j = [False] * n, ["top"], 0
+    closed_paren = -1
+    while j < n:
+        ctx, c = stack[-1], cmd[j]
+        code[j] = ctx not in ("'", '"', "$'")
+        if ctx == "'":
+            if c == "'": stack.pop()
+            j += 1; continue
+        if c == "\\":
+            j += 2; continue
+        if ctx == "$'":
+            if c == "'": stack.pop()
+        elif ctx == "${":
+            if c == "}": stack.pop()
+            elif c == "'": stack.append("'")
+            elif c == '"': stack.append('"')
+        elif ctx == '"':
+            if c == '"': stack.pop()
+            elif cmd.startswith("$(", j): stack.append("$("); j += 1
+        elif cmd.startswith("$$", j): j += 1
+        elif cmd.startswith("${", j): stack.append("${"); j += 1
+        elif c == "#" and (j == 0 or cmd[j - 1] in " \t\n;&|(" or j - 1 == closed_paren):
+            k = cmd.find("\n", j)          # comment: skip to end of line
+            j = n if k < 0 else k
+            continue
+        elif cmd.startswith("$'", j): stack.append("$'"); j += 1
+        elif c == "'": stack.append("'")
+        elif c == '"': stack.append('"')
+        elif cmd.startswith("$(", j): stack.append("$("); j += 1
+        elif c == "(": stack.append("(")
+        elif c == ")" and len(stack) > 1:
+            if stack.pop() == "(": closed_paren = j
+        j += 1
+    return code
+
+def words(text):
+    lex = shlex.shlex(text, posix=True, punctuation_chars=True)
+    lex.whitespace_split = True
+    return list(lex)
+
+# The comparison's own statement may only start with `test`, `[` or `[[`
+# (optionally negated) for the deterministic rule.
+STMT_HEAD = re.compile(r"[ \t]*(?:![ \t]+)?(?:test|\[\[?)[ \t]+")
+
+def match_subst(cmd, i):
+    """cmd[i:i+3] == '"$(' -> index just past the closing '"', or None."""
+    depth, j = 1, i + 3
+    while j < len(cmd):
+        c = cmd[j]
+        if c == "\\":
+            j += 2; continue
+        if c == "'":
+            k = cmd.find("'", j + 1)
+            if k < 0: return None
+            j = k + 1; continue
+        if c == '"':
+            k = j + 1
+            while k < len(cmd) and cmd[k] != '"':
+                k += 2 if cmd[k] == "\\" else 1
+            if k >= len(cmd): return None
+            j = k + 1; continue
+        if c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+            if depth == 0:
+                return j + 2 if cmd[j + 1:j + 2] == '"' else None
+        j += 1
+    return None
+
+def comparisons(cmd, code):
+    """Yield (start, subst, literal, exact) for each "$(..)" OP literal pair
+    written as shell code (one inside a quoted string, e.g. a grep pattern, is
+    not). exact is False when either operand has text glued to it."""
+    i = cmd.find('"$(')
+    while i >= 0:
+        end = match_subst(cmd, i) if code[i] else None
+        if end is not None:
+            subst = cmd[i + 3:end - 2]
+            m = LIT_FWD.match(cmd, end)
+            if m:
+                g = 1 if m.group(1) is not None else 2
+                # the literal's quotes sit just outside its group
+                yield (i, subst, m.group(g),
+                       bounded(cmd, i, end) and bounded(cmd, m.start(g) - 1, m.end(g) + 1))
+            else:
+                r = LIT_REV.search(cmd[:i])
+                if r:
+                    g = 1 if r.group(1) is not None else 2
+                    yield (r.start(), subst, r.group(g),
+                           bounded(cmd, r.start(g) - 1, r.end(g) + 1) and bounded(cmd, i, end))
+        i = cmd.find('"$(', i + 1)
+
+def strip_prefix(words):
+    """Split leading VAR=v words and `env VAR=v..` off a segment.
+    Returns (assignments, command_word, args) or None when unrecognised."""
+    assigns, k = [], 0
+    while k < len(words) and ASSIGN.match(words[k]):
+        assigns.append(words[k]); k += 1
+    if k < len(words) and words[k] == "env":
+        k += 1
+        while k < len(words) and ASSIGN.match(words[k]):
+            assigns.append(words[k]); k += 1
+        if k < len(words) and words[k].startswith("-"):
+            return None
+    if k >= len(words):
+        return None
+    return assigns, words[k], words[k + 1:]
+
+def paste_ok(args):
+    k = 0
+    while k < len(args):
+        a = args[k]
+        if a == "-s":
+            pass
+        elif a in ("-d", "-sd"):
+            k += 1
+            if k >= len(args) or not WS_OPERAND.match(args[k]): return False
+        elif re.match(r"^-(?:sd|ds|d)", a):
+            rest = re.sub(r"^-(?:sd|ds|d)", "", a)
+            if not WS_OPERAND.match(rest): return False
+        else:
+            return False
+        k += 1
+    return True
+
+def head_tail_ok(args):
+    if not args: return True
+    if len(args) == 1: return bool(re.match(r"^-(?:n)?\+?\d+$", args[0]))
+    return len(args) == 2 and args[0] == "-n" and bool(re.match(r"^\+?\d+$", args[1]))
+
+def stage_ok(cw, args):
+    if cw == "tr":
+        return len(args) == 2 and all(WS_OPERAND.match(a) for a in args)
+    if cw == "paste": return paste_ok(args)
+    if cw == "xargs": return not args
+    if cw in ("head", "tail"): return head_tail_ok(args)
+    return False
+
+def sort_env(cmd, start, subst):
+    """-> sort_u (True for `sort -u`) when AC_SORT_ORDER applies, else None."""
+    if "\n" in subst:
+        return None
+    try:
+        toks = words(subst)
+    except ValueError:
+        return None
+    if any(t in ("(", ")", "||", "&") for t in toks):
+        return None
+    elems, cur = [], []
+    for t in toks:
+        if t in (";", "&&"):
+            elems.append(cur); cur = []
+        else:
+            cur.append(t)
+    elems.append(cur)
+    for e in elems[:-1]:
+        if not (len(e) == 2 and e[0] == "cd"):
+            return None
+    segs, cur = [], []
+    for t in elems[-1]:
+        if t == "|":
+            segs.append(cur); cur = []
+        else:
+            cur.append(t)
+    segs.append(cur)
+    parsed = [strip_prefix(s) for s in segs]
+    if any(p is None for p in parsed):
+        return None
+    sort_idx = [n for n, p in enumerate(parsed) if p[1] == "sort"]
+    if not sort_idx: return None
+    if any(not set(parsed[n][2]) <= {"-u"} for n in sort_idx): return None
+    last = sort_idx[-1]
+    if not all(stage_ok(p[1], p[2]) for p in parsed[last + 1:]): return None
+    # Only the gate's own locale is understood: a locale name anywhere in the
+    # cmd, or a prefix assignment (PATH=.., LC_ALL=$x ..) on any stage, could
+    # change what sort sees or which sort runs.
+    if any(p[0] for p in parsed) or LOCALE_ANY.search(cmd):
+        return None
+    # The comparison's statement must open the cmd: anything in front (an
+    # export, source, eval, function, chain) could change it as well.
+    if not STMT_HEAD.fullmatch(cmd[:start]):
+        return None
+    return "-u" in parsed[last][2]
+
+def collation(env):
+    for v in LOCALE_VARS:
+        if env.get(v): return env[v]
+    return "unset"
+
+try:
+    task = json.loads(sys.argv[1])
+    json_out = sys.argv[2]
+    tid = task.get("id", "?")
+    hits = []
+    for ac in task.get("acceptance_criteria") or []:
+        cmd = (ac.get("verify") or {}).get("cmd") or ""
+        code = code_mask(cmd)
+        # A heredoc body is text the scanner cannot tell from code.
+        heredoc = any(code[j] and cmd.startswith("<<", j) for j in range(len(cmd)))
+        for start, subst, lit, exact in comparisons(cmd, code):
+            tokens = [t for t in re.split(r"[ \t\n]+", lit) if t]
+            if len(tokens) < 2: continue
+            hit = {"ac_id": ac.get("id", "?"), "rule": "AC_LITERAL_SET",
+                   "collation": collation(os.environ), "literal": lit, "recomputed": None}
+            uniq = None if heredoc or not exact else sort_env(cmd, start, subst)
+            if uniq is not None:
+                # the real sort, in the environment the gate runs the AC in
+                res = subprocess.run(["sort"] + (["-u"] if uniq else []),
+                                     input="\n".join(tokens) + "\n",
+                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                     universal_newlines=True, check=True)
+                got = res.stdout.split("\n")[:-1]
+                if got != tokens:
+                    hit["rule"] = "AC_SORT_ORDER"
+                    hit["recomputed"] = " ".join(got)
+            hits.append(hit)
+    for h in hits:
+        head = "ccs-dispatch: AC lint (advisory): %s/%s: %s: " % (tid, h["ac_id"], h["rule"])
+        if h["rule"] == "AC_SORT_ORDER":
+            print(head + "if every line is exactly one token with no leading blank, quote or "
+                  "backslash, this comparison can never be true: "
+                  "`sort` under %s orders the expected tokens as '%s', not '%s'"
+                  % (h["collation"], h["recomputed"],
+                     " ".join(t for t in re.split(r"[ \t\n]+", h["literal"]) if t)))
+        else:
+            print(head + "compares command output with a hand-written multi-token "
+                  "literal; recompute it with the same pipeline in the gate's "
+                  "locale, or compare sets (task-yaml.md, AC writing discipline)")
+    if hits and json_out:
+        with open(json_out, "w") as f:
+            json.dump({"advisory": True, "task_id": tid, "hits": hits}, f, indent=2)
+except Exception as e:
+    print("%s: %s" % (type(e).__name__, e))
+    sys.exit(3)
+PY
+)" && rc=0 || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "ccs-dispatch: AC lint skipped: ${out:-python3 exited $rc}" >&2
+  elif [ -n "$out" ]; then
+    printf '%s\n' "$out" >&2
+  fi
+  return 0
+}
+
 # Deterministically expand a chain-spec YAML into per-hop task.yaml files in
 # <dest_dir>. Merges spec.defaults into each hop (hop keys override), wires next:
 # in hops order (last hop has none), names files hop-NN-<id>.task.yaml. Echoes the
@@ -609,6 +903,8 @@ _ccs_dispatch_run_one() {
 
   mkdir -p "$hop_dir"
   cp "$task_yaml" "$hop_dir/task.yaml"   # freeze (§1)
+  # Advisory only (issue #128): stderr + hop-level ac-lint.json, never rc.
+  _ccs_dispatch_ac_lint "$task" "$hop_dir/ac-lint.json"
   # Evidence anchor, recorded ONCE per hop rather than per attempt: attempt 2's
   # diff must still show what attempt 1 changed, since a retry inherits the
   # working tree its predecessor left behind. Empty when cwd has no commit to
@@ -834,6 +1130,12 @@ HELP
   local entry
   entry="$(_ccs_dispatch_plan_generate "$spec" "$out")" || return 1
   local -a _hops=("$out"/hop-*.task.yaml); local n="${#_hops[@]}"
+  # Advisory AC lint per generated hop (issue #128); stderr only, so stdout
+  # stays the entry path for `ccs-dispatch-run "$(ccs-dispatch-plan ...)"`.
+  local _h
+  for _h in "${_hops[@]}"; do
+    _ccs_dispatch_ac_lint "$(_ccs_dispatch_gate_load_task "$_h" 2>/dev/null)"
+  done
   echo "ccs-dispatch-plan: generated $n hop(s) -> $out" >&2
   echo "ccs-dispatch-plan: dispatch with: ccs-dispatch-run $entry" >&2
   echo "$entry"
