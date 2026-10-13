@@ -185,15 +185,25 @@ at load (`_ccs_dispatch_gate_load_task`).
 
 **Corollary — worker infra failure does not become a second verdict
 source.** A worker that never started (missing CLI, agentpager daemon
-down, no proj-map entry) writes a one-line class to
-`attempt-NN/worker-error`; the classification lives at the site that
-knows how the spawn failed, never in the gate. The gate reads that single
-signal and appends a synthetic ERROR record to the verdict input, so the
-existing pure `_ccs_dispatch_gate_verdict` still produces the terminal
-word (ERROR -> ESCALATE, no retry spent), and it outranks a fully passing
-AC set — the worker never ran, so a green gate only means reality already
-matched. `_ccs_dispatch_run_one` keeps branching on the gate's output
-only, and reads `escalation.reason` back out of that verdict rather than
+down, no proj-map entry) or whose CLI started and aborted at once on a
+known deterministic error (`auth`, `model-not-found`, matched as fixed
+strings in the tail of the headless claude/gemini output) writes a
+one-line class to `attempt-NN/worker-error`; the classification lives at
+the site that knows how the spawn failed, never in the gate. Timeout 124
+is never classified, whatever the output says, and the string table
+goes stale on a CLI upgrade, degrading to the plain RETRY path. The gate
+reads that single signal and appends a synthetic ERROR record to the
+verdict input, so the existing pure `_ccs_dispatch_gate_verdict` still
+produces the terminal word (ERROR -> ESCALATE, no retry spent), and it
+outranks a fully passing AC set. For the exit and agentpager classes the
+worker never ran, so a green gate only means reality already matched. The output classes are
+weaker evidence: the scanned tail also holds the model's own reply, so a
+reply quoting a table string plus an unrelated non-zero exit escalates an
+attempt that would otherwise pass. That direction is fail-closed (a human
+looks); the table mostly uses longer observed fragments to keep it rare,
+but two entries (`Invalid API key`, `FatalAuthenticationError`) remain
+keyword-level. `_ccs_dispatch_run_one` keeps branching on the gate's
+output only, and reads `escalation.reason` back out of that verdict rather than
 re-deriving it from the evidence file. A failure class that could
 self-heal on a retry (timeout 124, plain non-zero rc, agentpager seat
 busy or launch-file write failure) is deliberately left off that file and

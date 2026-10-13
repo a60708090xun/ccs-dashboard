@@ -415,6 +415,47 @@ _ccs_dispatch_timeout_scrubbed() {
   timeout "$timeout_sec" env "${scrub[@]}" "$@"
 }
 
+# Classify a headless worker's captured output into a deterministic error
+# class, or print nothing. Only claude and gemini have a string table; other
+# executors never classify. Scans the last 50 lines of <output_file> (a CLI's
+# fatal error is printed at the end) with fixed strings, case-insensitive.
+# Priority: auth, then model-not-found. The window also holds the model's own
+# reply text, so a reply that quotes one of these strings and then exits
+# non-zero for another reason is misclassified -- ERROR outranks a passing AC
+# set, so that attempt escalates instead of being accepted. Most strings
+# are longer fragments of observed CLI output to keep that rare; "Invalid
+# API key" and "FatalAuthenticationError" come from strings inside the
+# CLIs, were never triggered, and stay keyword-level. The tables go stale on
+# a CLI upgrade; a stale table degrades to today's plain FAIL -> RETRY.
+_ccs_dispatch_classify_worker_output() {
+  local executor="$1" file="$2"
+  local auth=() model=() s
+  case "$executor" in
+    claude)
+      auth=("Not logged in · Please run /login" "Invalid API key")
+      model=("There's an issue with the selected model"
+             "[claude-code:unrecognized_model]") ;;
+    gemini)
+      auth=("Please set an Auth method" "FatalAuthenticationError")
+      model=("ModelNotFoundError: Requested entity was not found") ;;
+    *) return 0 ;;
+  esac
+  [ -r "$file" ] || return 0
+  local tail_text
+  tail_text="$(tail -n 50 "$file" 2>/dev/null)"
+  for s in "${auth[@]}"; do
+    if grep -iqF -- "$s" <<<"$tail_text"; then
+      echo "auth"; return 0
+    fi
+  done
+  for s in "${model[@]}"; do
+    if grep -iqF -- "$s" <<<"$tail_text"; then
+      echo "model-not-found"; return 0
+    fi
+  done
+  return 0
+}
+
 # SPAWN SEAM. Real impl runs the executor synchronously (headless claude -p) in
 # <cwd> and captures evidence into attempt-NN/. Tests override this to simulate
 # worker edits. Scope C drives synchronous headless execution; the agentpager
@@ -472,6 +513,15 @@ _ccs_dispatch_run_worker() {
   case "$wrc" in
     125|126|127) printf 'exit-%s\n' "$wrc" > "$ad/worker-error" ;;
   esac
+  # A CLI that started and then aborted on a known deterministic error
+  # (logged out, model does not exist) is treated as unretryable too, on
+  # weaker evidence (see the classifier header). Only when no class was set
+  # above, and never for 124: a timeout stays on RETRY.
+  if [ ! -e "$ad/worker-error" ] && [ "$wrc" -ne 0 ] && [ "$wrc" -ne 124 ]; then
+    local werr
+    werr="$(_ccs_dispatch_classify_worker_output "$executor" "$ad/executor-output.md")"
+    [ -n "$werr" ] && printf '%s\n' "$werr" > "$ad/worker-error"
+  fi
   if [ "$executor" = "wingman" ]; then
     cp "$cwd/.wingman/result.md" "$ad/wingman-result.md" 2>/dev/null || true
   fi

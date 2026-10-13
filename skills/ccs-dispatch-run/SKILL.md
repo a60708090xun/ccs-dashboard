@@ -75,7 +75,7 @@ hop-NN-<task-id>/
     ├── prompt.md              # worker 收到的完整 prompt
     ├── executor-output.md     # worker 原始輸出（僅供鑑識，勿當依據）
     ├── executor-exit-code     # worker process exit code（純 evidence；僅 headless backend）
-    ├── worker-error           # 僅確定性基礎設施故障：故障類別（見 Verdict 語意）
+    ├── worker-error           # 僅確定性故障：類別 exit-125|126|127 / auth / model-not-found / agentpager-*（見 Verdict 語意）
     ├── git-status.txt / diff.patch   # ground truth
     └── gate/
         ├── <AC-id>.json       # per-AC verdict + exit code + output tail
@@ -105,13 +105,26 @@ commit——退回裸 `git diff`，此時 staged 改動看不到，判讀請以
   摘要」（AC id + cmd + exit code，無 worker prose）重派，你不介入
 - `ESCALATE` — budget 耗盡，或發生 ERROR。交給人診斷（讀 evidence 樹），
   **不是**由你直接重試 — 你帶著 planning 確認偏誤
-- `ERROR` — worker 根本沒起來或沒跑完，且**重派一定不會過**：headless
-  exit 125（timeout 自身失敗）/ 126（CLI 不可執行）/ 127（CLI 不存在），
-  以及 `backend: agentpager` 的 daemon 不在、`cwd` 無 proj-map entry。
+- `ERROR` — worker 沒跑完、且判定為重派不會過的確定性故障。兩種來源，證據強度不同：
+  - **exit／agentpager 類**（worker 根本沒起來，**重派一定不會過**）：headless
+    exit 125（timeout 自身失敗）/ 126（CLI 不可執行）/ 127（CLI 不存在），
+    以及 `backend: agentpager` 的 daemon 不在、`cwd` 無 proj-map entry。
+  - **輸出字串類**（CLI 起來後立刻中止，證據較弱）：`auth`（CLI 未登入）與
+    `model-not-found`（宣告的 model 不存在）。**只對 headless backend 的
+    claude / gemini**，掃 `executor-output.md` 最後 50 行的固定字串，且**只在
+    rc 非 0 且非 124 時**才判（grok、wingman、agentpager 不分類）。字串表多為
+    實測輸出的較長片段；claude 的 `Invalid API key` 與 gemini 的
+    `FatalAuthenticationError` 取自 CLI 本體內的字串、未實測觸發，仍是關鍵字層級。
+    **會隨 CLI 改版過期**；過期時退化成現行的 FAIL -> RETRY。
+    **誤判方向**：那 50 行也包含模型自己的回覆；回覆若引用了表內字串、CLI 又因
+    別的原因以非 0 結束，會被誤判成 ERROR 而 ESCALATE——這種情況下 worker 其實
+    跑完了，重派也可能會過（fail-closed，交人判斷）。
+
   gate 讀 `attempt-NN/worker-error` 產生，類別記在
   `verdict.json.worker_error`，終態直接 ESCALATE（不吃 loop_budget），
-  且**即使 cmd-AC 全 PASS 也一樣**（worker 沒跑，AC 過只代表現實剛好符合）。
-  **不含** timeout（124）、一般非零 rc、agentpager 的 seat 被占與 launch
+  且**即使 cmd-AC 全 PASS 也一樣**（exit／agentpager 類是 worker 沒跑，AC 過
+  只代表現實剛好符合；輸出字串類見上方誤判方向）。
+  **不含** timeout（124，即使輸出含上述字串也不分類）、一般非零 rc、agentpager 的 seat 被占與 launch
   檔寫入失敗——那些可能在下一次 attempt 自癒，維持在 FAIL 路徑。
   診斷：`final.json.worker_rc`（`backend: agentpager` 恆為 null，改看
   `agentpager-wait-rc`）＋ `escalation.reason`（`gate` / `worker_error`），
