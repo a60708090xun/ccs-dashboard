@@ -52,10 +52,12 @@ ccs-dispatch-run <task.yaml>
 
 - 前景阻塞直到終態；長任務用 background 執行 + 完成通知，避免乾等
 - Exit code：`0` accepted / `10` escalated / `11` hard_stop /
-  `2` task 載入失敗 / `1` usage error（無參數）
+  `2` 第一個 task 載入失敗 / `1` usage error（無參數）
 - 鏈結時注意：exit `0` 只代表**已執行的 hops** 皆 PASS —
-  `stop_reason` 為 `failed` / `depth` 時也回 0，是否完整跑完
-  要查 `chain.json.stop_reason`
+  `stop_reason` 為 `depth` 時也回 0，是否完整跑完要查
+  `chain.json.stop_reason`。`cycle` / `failed`（下一檔載入失敗）
+  代表 task 宣告的下一個 hop 沒跑，回 `10` escalated，原因在
+  `chain.json.stop_detail`（stderr 也印一行）
 - stdout 印 `run: <run-dir>` 與 outcome 摘要，末尾附一行 advisory
   `suggested trailer: X-Executor: <executor>/<model> (ccs-dispatch-run)`
   （dispatched work 收尾 commit 時 copy 用；`model` 缺省則 executor-only，
@@ -66,7 +68,7 @@ ccs-dispatch-run <task.yaml>
 結果樹（`<data-dir>/dispatch/runs/<first-id>-chain-NN/`）：
 
 ```
-chain.json                     # 鏈終態：hops[]、stop_reason、outcome
+chain.json                     # 鏈終態：hops[]、stop_reason、stop_detail、outcome
 hop-NN-<task-id>/
 ├── task.yaml                  # dispatch 當下凍結的驗收條件
 ├── base-commit                # 派工前的 cwd HEAD，diff.patch 的錨點
@@ -105,7 +107,10 @@ commit——退回裸 `git diff`，此時 staged 改動看不到，判讀請以
 - `RETRY` — 有 FAIL 且 loop_budget 未耗盡；CLI 自動帶「machine 事實
   摘要」（AC id + cmd + exit code，無 worker prose）重派，你不介入
 - `ESCALATE` — budget 耗盡，或發生 ERROR。交給人診斷（讀 evidence 樹），
-  **不是**由你直接重試 — 你帶著 planning 確認偏誤
+  **不是**由你直接重試 — 你帶著 planning 確認偏誤。**chain 的 exit 10
+  不一定來自 hop**：`chain.json.stop_reason` 為 `cycle` / `failed` 時
+  最後一個 hop 的 `final.json` 是 `accepted`、`escalation` 為 null，
+  原因改讀 `chain.json.stop_detail`（見下方「鏈結」）
 - `ERROR` — worker 沒跑完、且判定為重派不會過的確定性故障。兩種來源，證據強度不同：
   - **exit／agentpager 類**（worker 根本沒起來，**重派一定不會過**）：headless
     exit 125（timeout 自身失敗）/ 126（CLI 不可執行）/ 127（CLI 不存在），
@@ -140,6 +145,10 @@ commit——退回裸 `git diff`，此時 staged 改動看不到，判讀請以
 PASS 後自動跟 `next:`（相對於當前 task.yaml 所在目錄解析）。
 停鏈原因記在 `chain.json.stop_reason`：`empty-next`（正常完成）/
 `depth` / `cycle` / `failed`（下一檔載入失敗）/ 非 PASS 終態。
+`empty-next` 與 `depth` 沿用最後一個 hop 的終態；`cycle` 與 `failed`
+是 chain 層的設定錯誤，終態 `escalated`（exit 10、不吃 loop_budget），
+`chain.json.stop_detail` 帶 loader 訊息或重複的路徑；各 hop 的
+`final.json` 仍是 gate 的 verdict。
 
 ## 邊界（現行實作 = Scope C）
 

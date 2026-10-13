@@ -103,7 +103,7 @@ thin pointer, not the transcript).
 
 ```
 runs/<first_id>-chain-NN/
-├── chain.json                     # chain-level summary (hops[], stop_reason, outcome, depth)
+├── chain.json                     # chain-level summary (hops[], stop_reason, stop_detail, outcome, depth)
 └── hop-NN-<task_id>/
     ├── task.yaml                  # frozen at dispatch (AC immutable — §1 of the gate)
     ├── base-commit                # cwd HEAD before attempt 1 — the diff anchor
