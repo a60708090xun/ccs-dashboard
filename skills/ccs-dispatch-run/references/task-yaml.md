@@ -53,6 +53,9 @@
         <(git diff --name-only "$BASE" | sort))"
 
   逐條 `grep -x` 只證明期望的都在、管不到多出來的檔，不能代替
+
+  `ccs-dispatch-run`／`ccs-dispatch-plan` 會對這一型給
+  advisory 警示（不改 exit code）；沒有警示不代表期望值是對的。
 - **否定式的完成型 AC 前加一條正面前置**：斷言寫成「某件事
   **沒有**發生」時，產出物根本不存在也讓它成立——worker 什麼都
   沒做，這條照樣綠。凍結前在否定斷言之前加一條證明產出物真的存在

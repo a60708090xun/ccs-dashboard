@@ -72,6 +72,7 @@ chain.json                     # 鏈終態：hops[]、stop_reason、stop_detail�
 hop-NN-<task-id>/
 ├── task.yaml                  # dispatch 當下凍結的驗收條件
 ├── base-commit                # 派工前的 cwd HEAD，diff.patch 的錨點
+├── ac-lint.json               # 僅 AC lint 命中時：advisory 警示紀錄（gate 不讀、不影響裁決）
 ├── final.json                 # 本 hop 終態：outcome / attempts / worker_rc
 └── attempt-NN/
     ├── prompt.md              # worker 收到的完整 prompt

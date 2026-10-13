@@ -107,6 +107,7 @@ runs/<first_id>-chain-NN/
 └── hop-NN-<task_id>/
     ├── task.yaml                  # frozen at dispatch (AC immutable — §1 of the gate)
     ├── base-commit                # cwd HEAD before attempt 1 — the diff anchor
+    ├── ac-lint.json               # advisory AC lint hits, only when any (#128); never read by the gate
     ├── attempt-NN/
     │   ├── prompt.md              # attempt 1 = goal; ≥2 = §6 feedback + goal
     │   ├── repro.json             # {executor, model, cli_version, cwd_head}, written before the worker runs
