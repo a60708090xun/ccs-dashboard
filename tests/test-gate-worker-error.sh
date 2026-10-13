@@ -272,6 +272,21 @@ assert_eq "unclassified rc 1 with output still spends its retry" "2" \
 assert_eq "unclassified rc 1 with output blames the gate" "gate" \
   "$(jq -r '.escalation.reason' "$chain3/hop-01-we-x/final.json")"
 
+# The gate is the sole verdict source: a worker that exits non-zero (with no
+# classified error) while the AC set passes is still accepted. The AC target
+# is put in place before the run, so only the worker rc disagrees with it.
+echo "=== gate wins over a non-zero worker rc when the AC set passes ==="
+echo "def greet(name): pass" > "$CWD/greeter.py"
+export FAKE_CLI_EXIT=1 FAKE_CLI_OUT='something went wrong but not in the table'
+chain4="$(_ccs_dispatch_run "$task_yaml")"; rc4=$?
+unset FAKE_CLI_EXIT FAKE_CLI_OUT
+rm -f "$CWD/greeter.py"
+assert_eq "non-zero worker rc + passing AC: exit 0" "0" "$rc4"
+assert_eq "non-zero worker rc + passing AC: accepted" "accepted" \
+  "$(jq -r '.outcome' "$chain4/hop-01-we-x/final.json")"
+assert_eq "non-zero worker rc recorded as evidence" "1" \
+  "$(cat "$chain4/hop-01-we-x/attempt-01/executor-exit-code")"
+
 echo "=== agentpager: deterministic infra failures are classified too ==="
 unset FAKE_CLI_EXIT
 _ccs_dispatch_agentpager_available() { return 1; }

@@ -80,6 +80,16 @@ _ccs_dispatch_gate_load_task() {
   local js
   js="$(python3 -c 'import sys,yaml,json; json.dump(yaml.safe_load(open(sys.argv[1])) or {}, sys.stdout)' "$yaml" 2>/dev/null)" \
     || { echo "gate: task YAML parse failed: $yaml" >&2; return 1; }
+  # Removed-feature checks come first so an old task file gets a message that
+  # names the replacement instead of the generic validation failure below.
+  if [ "$(jq -r 'if type == "object" then (.executor // empty) else empty end' <<<"$js" 2>/dev/null)" = "wingman" ]; then
+    echo "gate: executor 'wingman' was removed; use executor: opencode: $yaml" >&2
+    return 1
+  fi
+  if [ "$(jq -r 'if type == "object" then has("plan") else false end' <<<"$js" 2>/dev/null)" = "true" ]; then
+    echo "gate: field 'plan' was removed with the wingman executor: $yaml" >&2
+    return 1
+  fi
   # Validation: id/goal non-empty strings; non-empty AC array; each AC id is a
   # filesystem-safe token (used verbatim as gate/<id>.json) and unique; each AC
   # has exactly one of cmd/guidance; and at least one cmd-track AC exists (an
@@ -103,18 +113,13 @@ _ccs_dispatch_gate_load_task() {
     and ((.next == null) or (.next | type == "string" and (length > 0)))
     and ((.executor == null) or
          (.executor | type == "string"
-          and (. == "claude" or . == "gemini" or . == "wingman" or . == "grok"
+          and (. == "claude" or . == "gemini" or . == "grok"
                   or . == "opencode")))
     and ((.model == null) or (.model | type == "string" and (length > 0)))
-    and (if .executor == "wingman"
-         then (.plan | type == "string" and (length > 0))
-         else (.plan == null) end)
+    and (.plan == null)
     and ((.backend == null) or
          (.backend | type == "string"
           and (. == "headless" or . == "agentpager")))
-    and (if .backend == "agentpager"
-         then (.executor != "wingman")
-         else true end)
     and (def posint: (. == null)
            or (type == "number" and (tostring | test("^[1-9][0-9]*$")));
          (.execution_policy | if type == "object"
@@ -479,7 +484,8 @@ _ccs_dispatch_classify_worker_output() {
 _ccs_dispatch_run_worker() {
   local cwd="$1" prompt="$2" run_dir="$3" attempt="$4"
   local timeout_sec="${5:-$CCS_DISPATCH_TIMEOUT}" executor="${6:-claude}"
-  local plan_abs="${7:-}" backend="${8:-headless}" model="${9:-}"
+  # Slot 7 formerly carried the wingman plan path; kept so positional callers keep their positions.
+  local _slot7="${7:-}" backend="${8:-headless}" model="${9:-}"
   # backend=agentpager routes the worker through the interactive local channel
   # (foreground blocking spawn+wait), so a gate-run can BOTH verify+retry AND run
   # its worker in a monitorable/interruptible tmux session (issue #91). The gate
@@ -498,18 +504,14 @@ _ccs_dispatch_run_worker() {
   # auto-approved false-success is caught (see
   # docs/case-studies/gemini-yolo-overconfidence.md). claude is the default.
   # grok --output-format plain keeps evidence as prose (the CLI has no `text`
-  # value; a typo is clap-rejected). wingman is file-driven (plan.md in,
-  # .wingman/result.md out) and ignores the prompt; --exit-status maps
-  # overall_status to the exit code, which is recorded as evidence only -- the
-  # gate stays the sole verdict source.
+  # value; a typo is clap-rejected).
   # opencode run --auto auto-approves permissions that are not explicitly
   # denied; `--` keeps a prompt that starts with `-` from being read as a flag.
   # A non-TTY stdin is read into opencode's message, so its stdin is
   # /dev/null. Its auth comes from the caller's environment (ccs does not read
   # agent-pager's opencode settings).
   # A declared model is pinned per CLI (the flags differ and are not
-  # interchangeable); omitting it keeps the CLI's own saved default. wingman is
-  # file-driven and has no model flag, so it ignores the field.
+  # interchangeable); omitting it keeps the CLI's own saved default.
   local cmd no_stdin=""
   case "$executor" in
     gemini)  cmd=(gemini -p "$prompt" --approval-mode yolo)
@@ -520,7 +522,6 @@ _ccs_dispatch_run_worker() {
               [ -n "$model" ] && cmd+=(-m "$model")
               cmd+=(-- "$prompt")
               no_stdin=1 ;;
-    wingman) cmd=(wingman execute --plan "$plan_abs" --exit-status) ;;
     *)       cmd=(claude -p "$prompt" --permission-mode bypassPermissions)
              [ -n "$model" ] && cmd+=(--model "$model") ;;
   esac
@@ -548,9 +549,6 @@ _ccs_dispatch_run_worker() {
     werr="$(_ccs_dispatch_classify_worker_output "$executor" "$ad/executor-output.md")"
     [ -n "$werr" ] && printf '%s\n' "$werr" > "$ad/worker-error"
   fi
-  if [ "$executor" = "wingman" ]; then
-    cp "$cwd/.wingman/result.md" "$ad/wingman-result.md" 2>/dev/null || true
-  fi
   _ccs_dispatch_capture_evidence "$cwd" "$run_dir" "$ad"
   return 0
 }
@@ -560,8 +558,8 @@ _ccs_dispatch_run_worker() {
 # override and so would hide anything written behind it). Fail-soft: every
 # field degrades to null rather than aborting the run.
 # - cli_version: first line of `<cli> --version`; null on failure or empty.
-#   wingman is never probed (its --version is an argparse usage error). Run in
-#   hop_dir, not cwd, so a CLI side effect cannot land in the tree under test.
+#   Run in hop_dir, not cwd, so a CLI side effect cannot land in the tree
+#   under test.
 #   Under the agentpager backend this is the orchestrator-side PATH version,
 #   not necessarily what the seat runs.
 # - cwd_head: `git rev-parse --verify HEAD` in cwd, read per attempt so a retry
@@ -573,13 +571,10 @@ _ccs_dispatch_write_repro() { # $1=cwd $2=hop_dir $3=attempt_dir $4=executor $5=
   local cli="" ver="" head_sha=""
   case "$executor" in
     claude|gemini|grok|opencode) cli="$executor" ;;
-    wingman) cli="" ;;
     *) cli="claude" ;;
   esac
-  if [ -n "$cli" ]; then
-    ver="$(cd "$hop_dir" 2>/dev/null && timeout 10 "$cli" --version 2>/dev/null)" || ver=""
-    ver="$(printf '%s\n' "$ver" | head -n1)"
-  fi
+  ver="$(cd "$hop_dir" 2>/dev/null && timeout 10 "$cli" --version 2>/dev/null)" || ver=""
+  ver="$(printf '%s\n' "$ver" | head -n1)"
   # No `|| head_sha=""` reset here on purpose: --verify itself prints nothing
   # on failure, and a reset would mask a regression to the bare form.
   head_sha="$(cd "$cwd" 2>/dev/null && git rev-parse --verify HEAD 2>/dev/null)" || true
@@ -598,7 +593,7 @@ _ccs_dispatch_write_repro() { # $1=cwd $2=hop_dir $3=attempt_dir $4=executor $5=
 # the terminal verdict word; rc 0 accepted / 10 escalated / 11 hard_stop.
 _ccs_dispatch_run_one() {
   local task="$1" task_yaml="$2" hop_dir="$3"
-  local cwd budget goal timeout_sec executor backend plan plan_abs="" model
+  local cwd budget goal timeout_sec executor backend model
   cwd="$(echo "$task" | jq -r '.scope.cwd // "."')"
   budget="$(echo "$task" | jq -r ".execution_policy.loop_budget // $CCS_DISPATCH_GATE_LOOP_BUDGET")"
   goal="$(echo "$task" | jq -r '.goal')"
@@ -611,14 +606,6 @@ _ccs_dispatch_run_one() {
   # Worker bound: worker_timeout_sec -> timeout_sec -> CCS_DISPATCH_TIMEOUT.
   timeout_sec="$(echo "$task" | jq -r '.execution_policy.worker_timeout_sec // .execution_policy.timeout_sec // empty')"
   [ -z "$timeout_sec" ] && timeout_sec="$CCS_DISPATCH_TIMEOUT"
-  plan="$(echo "$task" | jq -r '.plan // empty')"
-  # plan: resolves like next: -- against the ORIGINAL task file's directory,
-  # then passed absolute (the worker runs in scope.cwd, not here).
-  [ -n "$plan" ] && plan_abs="$(_ccs_dispatch_resolve_next "$task_yaml" "$plan")"
-  # RETRY feedback is prompt-prefixed, which wingman (file-driven) cannot
-  # consume; first version does not retry -- a gate FAIL escalates directly.
-  # Feedback via .wingman/feedback.md is a tracked followup.
-  [ "$executor" = "wingman" ] && budget=0
 
   mkdir -p "$hop_dir"
   cp "$task_yaml" "$hop_dir/task.yaml"   # freeze (§1)
@@ -651,7 +638,7 @@ _ccs_dispatch_run_one() {
     printf '%s' "$prompt" > "$ad/prompt.md"
     _ccs_dispatch_write_repro "$cwd" "$hop_dir" "$ad" "$executor" "$model"
 
-    _ccs_dispatch_run_worker "$cwd" "$prompt" "$hop_dir" "$attempt" "$timeout_sec" "$executor" "$plan_abs" "$backend" "$model"
+    _ccs_dispatch_run_worker "$cwd" "$prompt" "$hop_dir" "$attempt" "$timeout_sec" "$executor" "" "$backend" "$model"
     verdict="$(_ccs_dispatch_gate_run "$cwd" "$task" "$ad" "$attempt" "$budget")"
 
     case "$verdict" in
@@ -755,8 +742,7 @@ ccs-dispatch-run() {
 Usage: ccs-dispatch-run <task.yaml>
   Dispatch a worker, verify its output against the task's acceptance criteria
   (deterministic Stage-1 gate), retry once on FAIL with a machine-fact failure
-  summary (executor: wingman never retries -- a FAIL escalates directly), and
-  record structured evidence under the dispatch runs/ tree. On a
+  summary, and record structured evidence under the dispatch runs/ tree. On a
   PASS verdict, follow the task's optional next: field to run the next task
   (synchronous gated chain); the chain stops on non-PASS / empty-next / depth /
   cycle / next-load failure.

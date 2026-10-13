@@ -15,7 +15,7 @@ source "$SCRIPT_DIR/tests/fixture-helper.sh"
 source "$SCRIPT_DIR/ccs-dashboard.sh"
 
 WORK="$SCRIPT_DIR/tmp/test-gate-repro"; rm -rf "$WORK"
-mkdir -p "$WORK/bin" "$WORK/bin-failver" "$WORK/bin-marker" "$WORK/bin-wingman" \
+mkdir -p "$WORK/bin" "$WORK/bin-failver" "$WORK/bin-marker" \
   "$WORK/bin-twoline"
 _TEST_DIRS+=("$WORK")
 WORK="$(realpath "$WORK")"
@@ -56,16 +56,6 @@ exit 0
 FAKE
 chmod +x "$WORK/bin-marker/claude"
 
-# Fake wingman: logs every call, so a --version probe would be visible.
-cat > "$WORK/bin-wingman/wingman" <<'FAKE'
-#!/usr/bin/env bash
-echo "$*" >> "$FAKE_WINGMAN_LOG"
-mkdir -p .wingman
-printf 'overall_status: done\n' > .wingman/result.md
-exit 0
-FAKE
-chmod +x "$WORK/bin-wingman/wingman"
-
 # Fake opencode: only needs to answer --version for the repro probe.
 cat > "$WORK/bin/opencode" <<'FAKE'
 #!/usr/bin/env bash
@@ -76,7 +66,6 @@ chmod +x "$WORK/bin/opencode"
 
 ORIG_PATH="$PATH"
 export PATH="$WORK/bin:$ORIG_PATH"
-export FAKE_WINGMAN_LOG="$WORK/wingman.log"
 
 # mk_repo <name> [nocommit] -> path of a git repo (with one commit by default)
 mk_repo() {
@@ -182,22 +171,6 @@ hop="$(run_task "$y")"
 r="$hop/attempt-01/repro.json"
 assert_eq "opencode cli_version" "5.5.5" "$(jq -r '.cli_version' "$r")"
 assert_eq "opencode executor" "opencode" "$(jq -r '.executor' "$r")"
-
-echo "=== AC3.5: wingman is never probed ==="
-repo="$(mk_repo e)"
-echo "plan" > "$WORK/plan.md"
-y="$(mk_task e "$repo" $'executor: wingman\nplan: "plan.md"' 'true' 0)"
-: > "$FAKE_WINGMAN_LOG"
-hop="$(PATH="$WORK/bin-wingman:$PATH" run_task "$y")"
-r="$hop/attempt-01/repro.json"
-assert_eq "wingman cli_version is null" "null" "$(jq -c '.cli_version' "$r")"
-assert_eq "wingman executor" "wingman" "$(jq -r '.executor' "$r")"
-assert_eq "wingman was called once (execute only, no --version probe)" "1" \
-  "$(wc -l < "$FAKE_WINGMAN_LOG")"
-assert_not_contains "no --version in wingman argv log" \
-  "$(cat "$FAKE_WINGMAN_LOG")" "--version"
-bash "$SCRIPT_DIR/tests/test-gate-wingman.sh" >/dev/null 2>&1
-assert_eq "existing test-gate-wingman.sh stays green" "0" "$?"
 
 echo "=== AC3.6: --version runs in hop_dir, not scope.cwd ==="
 repo="$(mk_repo f)"
