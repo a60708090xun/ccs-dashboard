@@ -30,6 +30,14 @@ reset_jobs; : > "$CAP"
 CCS_DISPATCH_BACKEND=agentpager ccs-dispatch --cli gemini --project "$PROJ" --yes "t" >/dev/null 2>&1
 assert_eq "flag selects gemini" "gemini" "$(cat "$CAP")"
 
+echo "=== --cli opencode / grok are threaded to the spawn dispatcher ==="
+reset_jobs; : > "$CAP"
+CCS_DISPATCH_BACKEND=agentpager ccs-dispatch --cli opencode --project "$PROJ" --yes "t" >/dev/null 2>&1
+assert_eq "flag selects opencode" "opencode" "$(cat "$CAP")"
+reset_jobs; : > "$CAP"
+CCS_DISPATCH_BACKEND=agentpager ccs-dispatch --cli grok --project "$PROJ" --yes "t" >/dev/null 2>&1
+assert_eq "flag selects grok" "grok" "$(cat "$CAP")"
+
 echo "=== default cli is claude ==="
 reset_jobs; : > "$CAP"
 CCS_DISPATCH_BACKEND=agentpager ccs-dispatch --project "$PROJ" --yes "t" >/dev/null 2>&1
@@ -54,6 +62,7 @@ rc=0
 err="$(CCS_DISPATCH_BACKEND=agentpager ccs-dispatch --cli bogus --project "$PROJ" --yes "t" 2>&1 >/dev/null)" || rc=$?
 assert_eq "invalid --cli -> rc 1" "1" "$rc"
 assert_contains "error names the --cli flag" "$err" "cli"
+assert_contains "bogus --cli error lists opencode" "$err" "opencode"
 assert_eq "spawn not called on invalid cli" "" "$(cat "$CAP")"
 after=$([ -f "$JOBS" ] && wc -l < "$JOBS" || echo 0)
 assert_eq "no job record written on invalid cli" "$before" "$after"

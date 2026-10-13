@@ -19,6 +19,14 @@ echo "$c \$*" >> "$WORK/argv.log"
 EOF
   chmod +x "$BIN/$c"
 done
+# opencode reads a non-TTY stdin into its message, so this shim records what
+# it could read: the harness must hand it /dev/null.
+cat > "$BIN/opencode" <<EOF
+#!/usr/bin/env bash
+echo "opencode \$*" >> "$WORK/argv.log"
+cat > "$WORK/stdin-opencode.log"
+EOF
+chmod +x "$BIN/opencode"
 export PATH="$BIN:$PATH"
 
 CWD="$WORK/repo"; mkdir -p "$CWD"; (cd "$CWD" && git init -q)
@@ -81,6 +89,28 @@ _ccs_dispatch_run_worker "$CWD" "do G" "$RUN" 1 60 grok
 assert_eq "grok omit model exact argv" \
   "grok -p do G --always-approve --output-format plain" \
   "$(cat "$WORK/argv.log")"
+
+echo "=== opencode executor spawns opencode run --auto ==="
+: > "$WORK/argv.log"
+_ccs_dispatch_run_worker "$CWD" "do O" "$RUN" 1 60 opencode
+assert_eq "opencode omit model exact argv" \
+  "opencode run --auto -- do O" \
+  "$(cat "$WORK/argv.log")"
+assert_not_contains "opencode did not call claude" "$(cat "$WORK/argv.log")" "claude -p"
+
+echo "=== opencode model pin ==="
+: > "$WORK/argv.log"
+_ccs_dispatch_run_worker "$CWD" "do O" "$RUN" 1 60 opencode "" headless "litellm/x"
+assert_eq "opencode model pin exact argv" \
+  "opencode run --auto -m litellm/x -- do O" \
+  "$(cat "$WORK/argv.log")"
+
+echo "=== opencode stdin is /dev/null ==="
+rm -f "$WORK/stdin-opencode.log"
+printf 'leak\n' | _ccs_dispatch_run_worker "$CWD" "do O" "$RUN" 1 60 opencode
+# A missing log means the opencode shim never ran; it must not read as "empty".
+assert_eq "opencode stdin is /dev/null" "" \
+  "$([ -f "$WORK/stdin-opencode.log" ] && cat "$WORK/stdin-opencode.log" || echo SHIM-DID-NOT-RUN)"
 
 test_summary
 

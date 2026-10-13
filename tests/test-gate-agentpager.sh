@@ -89,6 +89,20 @@ YAML
 _ccs_dispatch_gate_load_task "$WORK/apgrok.yaml" >/dev/null 2>&1
 assert_eq "agentpager+grok accepted" "0" "$?"
 
+echo "=== schema accepts backend: agentpager + executor: opencode ==="
+cat > "$WORK/apopencode.yaml" <<YAML
+id: t
+goal: g
+backend: agentpager
+executor: opencode
+scope: { cwd: "$WORK/repo" }
+acceptance_criteria:
+  - id: AC1
+    verify: { cmd: "true" }
+YAML
+_ccs_dispatch_gate_load_task "$WORK/apopencode.yaml" >/dev/null 2>&1
+assert_eq "agentpager+opencode accepted" "0" "$?"
+
 # ── foreground wait helper ──────────────────────────────────────────────────
 echo "=== wait_and_collect: handoff appears -> rc 0, seat reclaimed, output collected ==="
 SEAT="$WORK/seat"; : > "$SEAT"
@@ -229,6 +243,24 @@ task_json="$(_ccs_dispatch_gate_load_task "$WORK/grok.yaml")"
 term="$(_ccs_dispatch_run_one "$task_json" "$WORK/grok.yaml" "$WORK/hop-grok")"
 assert_eq "grok PASS term" "PASS" "$term"
 assert_eq "launch writer gets cli=grok" "grok" "$(head -1 "$CLILOG")"
+
+echo "=== integration: executor opencode reaches the launch file as cli ==="
+cat > "$WORK/opencode.yaml" <<YAML
+id: oc
+goal: "make g"
+backend: agentpager
+executor: opencode
+scope: { cwd: "$WORK/repo" }
+acceptance_criteria:
+  - id: AC1
+    text: "g exists"
+    verify: { cmd: "test -f g.txt" }
+YAML
+: > "$CLILOG"; rm -f "$WORK/seat" "$WORK/repo/g.txt"; rm -f "$WORK/repo/tmp"/handoff-*.md
+task_json="$(_ccs_dispatch_gate_load_task "$WORK/opencode.yaml")"
+term="$(_ccs_dispatch_run_one "$task_json" "$WORK/opencode.yaml" "$WORK/hop-opencode")"
+assert_eq "opencode PASS term" "PASS" "$term"
+assert_eq "launch writer gets cli=opencode" "opencode" "$(head -1 "$CLILOG")"
 
 echo "=== integration: attempt1 FAIL -> retry -> attempt2 PASS (Option B) ==="
 cat > "$WORK/retry.yaml" <<YAML

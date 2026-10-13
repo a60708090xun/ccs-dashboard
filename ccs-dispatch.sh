@@ -103,7 +103,8 @@ _ccs_dispatch_gate_load_task() {
     and ((.next == null) or (.next | type == "string" and (length > 0)))
     and ((.executor == null) or
          (.executor | type == "string"
-          and (. == "claude" or . == "gemini" or . == "wingman" or . == "grok")))
+          and (. == "claude" or . == "gemini" or . == "wingman" or . == "grok"
+                  or . == "opencode")))
     and ((.model == null) or (.model | type == "string" and (length > 0)))
     and (if .executor == "wingman"
          then (.plan | type == "string" and (length > 0))
@@ -426,9 +427,12 @@ _ccs_dispatch_timeout_scrubbed() {
 }
 
 # Classify a headless worker's captured output into a deterministic error
-# class, or print nothing. Only claude and gemini have a string table; other
-# executors never classify. Scans the last 50 lines of <output_file> (a CLI's
-# fatal error is printed at the end) with fixed strings, case-insensitive.
+# class, or print nothing. claude and gemini have auth and model tables;
+# opencode has auth only (its unknown-model output is a generic server error,
+# and its auth line comes from the provider, so another provider may not
+# match); other executors never classify. Scans the last 50 lines of
+# <output_file> (a CLI's fatal error is printed at the end) with fixed
+# strings, case-insensitive.
 # Priority: auth, then model-not-found. The window also holds the model's own
 # reply text, so a reply that quotes one of these strings and then exits
 # non-zero for another reason is misclassified -- ERROR outranks a passing AC
@@ -448,6 +452,8 @@ _ccs_dispatch_classify_worker_output() {
     gemini)
       auth=("Please set an Auth method" "FatalAuthenticationError")
       model=("ModelNotFoundError: Requested entity was not found") ;;
+    opencode)
+      auth=("Authentication Error, No api key passed in") ;;
     *) return 0 ;;
   esac
   [ -r "$file" ] || return 0
@@ -496,21 +502,31 @@ _ccs_dispatch_run_worker() {
   # .wingman/result.md out) and ignores the prompt; --exit-status maps
   # overall_status to the exit code, which is recorded as evidence only -- the
   # gate stays the sole verdict source.
+  # opencode run --auto auto-approves permissions that are not explicitly
+  # denied; `--` keeps a prompt that starts with `-` from being read as a flag.
+  # A non-TTY stdin is read into opencode's message, so its stdin is
+  # /dev/null. Its auth comes from the caller's environment (ccs does not read
+  # agent-pager's opencode settings).
   # A declared model is pinned per CLI (the flags differ and are not
   # interchangeable); omitting it keeps the CLI's own saved default. wingman is
   # file-driven and has no model flag, so it ignores the field.
-  local cmd
+  local cmd no_stdin=""
   case "$executor" in
     gemini)  cmd=(gemini -p "$prompt" --approval-mode yolo)
              [ -n "$model" ] && cmd+=(-m "$model") ;;
     grok)    cmd=(grok -p "$prompt" --always-approve --output-format plain)
              [ -n "$model" ] && cmd+=(-m "$model") ;;
+    opencode) cmd=(opencode run --auto)
+              [ -n "$model" ] && cmd+=(-m "$model")
+              cmd+=(-- "$prompt")
+              no_stdin=1 ;;
     wingman) cmd=(wingman execute --plan "$plan_abs" --exit-status) ;;
     *)       cmd=(claude -p "$prompt" --permission-mode bypassPermissions)
              [ -n "$model" ] && cmd+=(--model "$model") ;;
   esac
   local wrc=0
-  (cd "$cwd" && _ccs_dispatch_timeout_scrubbed "$timeout_sec" "${cmd[@]}") \
+  (cd "$cwd" && { [ -z "$no_stdin" ] || exec </dev/null; } \
+    && _ccs_dispatch_timeout_scrubbed "$timeout_sec" "${cmd[@]}") \
     > "$ad/executor-output.md" 2>&1 || wrc=$?
   # Every executor records its rc: a crashed worker, a missing CLI and a
   # worker that ran and did nothing are otherwise indistinguishable in the
@@ -556,7 +572,7 @@ _ccs_dispatch_write_repro() { # $1=cwd $2=hop_dir $3=attempt_dir $4=executor $5=
   local cwd="$1" hop_dir="$2" ad="$3" executor="$4" model="$5"
   local cli="" ver="" head_sha=""
   case "$executor" in
-    claude|gemini|grok) cli="$executor" ;;
+    claude|gemini|grok|opencode) cli="$executor" ;;
     wingman) cli="" ;;
     *) cli="claude" ;;
   esac
@@ -2080,9 +2096,10 @@ Options:
                    reports outcome:done + next, launch the next worker in the
                    same project without asking again. Approved once up front.
   --max-depth <n>  Max chained hops (default 5); a runaway ceiling.
-  --cli <name>     Worker CLI for the agentpager backend: claude (default) or
-                   gemini. Env default: CCS_DISPATCH_CLI. Ignored (with a
-                   warning) by the headless backend, which always runs claude.
+  --cli <name>     Worker CLI for the agentpager backend: claude (default),
+                   gemini, grok or opencode. Env default: CCS_DISPATCH_CLI.
+                   Ignored (with a warning) by the headless backend, which
+                   always runs claude.
 HELP
     return 0
   fi
@@ -2124,8 +2141,8 @@ HELP
     echo "Error: $project not found" >&2; return 1
   fi
   case "$cli" in
-    claude|gemini) ;;
-    *) echo "ccs-dispatch: --cli must be 'claude' or 'gemini' (got: $cli)" >&2
+    claude|gemini|grok|opencode) ;;
+    *) echo "ccs-dispatch: --cli must be one of: claude, gemini, grok, opencode (got: $cli)" >&2
        return 1 ;;
   esac
 

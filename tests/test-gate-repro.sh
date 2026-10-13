@@ -66,6 +66,14 @@ exit 0
 FAKE
 chmod +x "$WORK/bin-wingman/wingman"
 
+# Fake opencode: only needs to answer --version for the repro probe.
+cat > "$WORK/bin/opencode" <<'FAKE'
+#!/usr/bin/env bash
+if [ "${1:-}" = "--version" ]; then echo "5.5.5"; exit 0; fi
+exit 0
+FAKE
+chmod +x "$WORK/bin/opencode"
+
 ORIG_PATH="$PATH"
 export PATH="$WORK/bin:$ORIG_PATH"
 export FAKE_WINGMAN_LOG="$WORK/wingman.log"
@@ -166,6 +174,14 @@ hop="$(run_task "$y")"
 r="$hop/attempt-01/repro.json"
 assert_eq "gemini cli_version" "8.8.8" "$(jq -r '.cli_version' "$r")"
 assert_eq "gemini executor" "gemini" "$(jq -r '.executor' "$r")"
+
+echo "=== opencode maps to the opencode CLI ==="
+repo="$(mk_repo oc)"
+y="$(mk_task oc "$repo" 'executor: opencode' 'true' 0)"
+hop="$(run_task "$y")"
+r="$hop/attempt-01/repro.json"
+assert_eq "opencode cli_version" "5.5.5" "$(jq -r '.cli_version' "$r")"
+assert_eq "opencode executor" "opencode" "$(jq -r '.executor' "$r")"
 
 echo "=== AC3.5: wingman is never probed ==="
 repo="$(mk_repo e)"
