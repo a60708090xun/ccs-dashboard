@@ -111,7 +111,7 @@ runs/<first_id>-chain-NN/
     │   ├── prompt.md              # attempt 1 = goal; ≥2 = §6 feedback + goal
     │   ├── executor-output.md     # worker stdout+stderr
     │   ├── executor-exit-code     # worker rc, headless backend only (evidence)
-    │   ├── worker-error           # deterministic infra failure class, if any
+    │   ├── worker-error           # deterministic failure class, if any
     │   ├── git-status.txt         # ground-truth porcelain
     │   ├── diff.patch             # ground-truth diff
     │   └── gate/<ac-id>.json      # per-AC verdict evidence
@@ -132,9 +132,23 @@ resolved — `cwd` is not a git repo, has no commit yet, or the recorded revisio
 no longer exists — capture falls back to the bare `git diff`, where a staged
 edit is again invisible and `git-status.txt` is the reliable material.
 
-`worker-error` exists only when the worker demonstrably never ran to
-completion and a retry cannot change that (`exit-125` / `exit-126` /
-`exit-127`, `agentpager-daemon-down`, `agentpager-no-proj-map`). Failures
+`worker-error` exists only when the worker did not run to completion and
+the failure is judged deterministic (`exit-125` / `exit-126` /
+`exit-127`, `agentpager-daemon-down`, `agentpager-no-proj-map`, and two
+classes taken from the worker's own output: `auth` and
+`model-not-found`). The output classes apply only to the headless
+backend's claude and gemini executors, only when the rc is neither 0 nor
+124, and only when no exit-class was already written; they match fixed
+strings in the last 50 lines of `executor-output.md`. The strings are
+mostly longer fragments of observed CLI output; claude's `Invalid API key`
+and gemini's `FatalAuthenticationError` come from strings inside the CLI
+itself, were never triggered here, and stay keyword-level. The table goes
+stale on a CLI upgrade, in which case the failure falls back to the plain
+FAIL -> RETRY path. For the exit and agentpager classes a retry provably
+cannot pass; the output classes are weaker: the scanned tail also holds
+the model's own reply, so a reply quoting a table string plus an
+unrelated non-zero exit is misclassified and escalates, although that
+worker did finish and a retry might pass. Failures
 that a retry might survive — a timeout, a plain non-zero rc, an occupied
 agentpager seat, a launch file that could not be written — deliberately
 do not write it. It is the gate's ERROR input; its class is copied into

@@ -694,21 +694,31 @@ ccs-dispatch-run <task.yaml>
 - `ESCALATE` — budget 耗盡、或 worker 發生確定性基礎設施故障（ERROR）
 - `HARD_STOP` — 破壞性操作（判定函式已支援，目前無 producer）
 
-**Worker 故障 vs 驗收失敗（ERROR 的來源）：** worker 根本沒起來或沒跑完、且
-重派一定不會過時，gate 產生一筆合成 ERROR 記錄，判定直接走 ESCALATE（不吃
+**Worker 故障 vs 驗收失敗（ERROR 的來源）：** worker 沒跑完、且判定為重派不會過的
+確定性故障時，gate 產生一筆合成 ERROR 記錄，判定直接走 ESCALATE（不吃
 `loop_budget`）。判定輸入是 `attempt-NN/worker-error` 這個單行類別檔，由**產生
 現場**寫出——headless 的 exit `125`（timeout 自身失敗）/ `126`（CLI 不可執行）/
 `127`（CLI 不存在），以及 `backend: agentpager` 的 daemon 不在、`cwd` 無
-proj-map entry。類別記進 `verdict.json.worker_error`；該記錄刻意不落
+proj-map entry。另有兩類由輸出字串判定：`auth`（CLI 未登入）與 `model-not-found`
+（宣告的 model 不存在）——只對 headless backend 的 claude / gemini，掃
+`executor-output.md` 最後 50 行的固定字串，且只在 rc 非 0 且非 124 時才判
+（既有的 125/126/127 優先；grok、wingman、agentpager 不分類）。字串表抄自實測的
+CLI 輸出（多為較長的實測片段；`Invalid API key` 與 `FatalAuthenticationError`
+取自 CLI 本體內的字串、未實測觸發，仍是關鍵字層級）、會隨 CLI 改版過期，過期時
+退化成現行的 FAIL -> RETRY。exit／agentpager 類是 worker 根本沒起來；輸出字串類的
+證據較弱：那 50 行也包含模型自己的回覆，回覆若引用了表內字串、CLI 又因別的原因以
+非 0 結束，會被誤判成 ERROR 而 ESCALATE，而那次 worker 其實跑完了、重派也可能會過
+（fail-closed，交人判斷）。類別記進 `verdict.json.worker_error`；該記錄刻意不落
 `gate/<id>.json`，因為 AC id 可為任意 `[A-Za-z0-9_.-]+` token、任何檔名都可能
 與使用者的 AC 撞名。
 
 **ERROR 蓋過 AC 結果：** 有 `worker-error` 時即使全部 cmd-AC 都 PASS 也照樣
-ESCALATE。worker 沒跑就不該接受驗收結果——現實可能是前一輪 hop 或既有狀態剛好
-滿足了 AC。
+ESCALATE。exit／agentpager 類是 worker 沒跑，不該接受驗收結果——現實可能是前一輪
+hop 或既有狀態剛好滿足了 AC；輸出字串類的誤判方向見上一段。
 
 **刻意不算 ERROR 的（都可能在下一次 attempt 自癒，維持在 FAIL 路徑）：**
-`124`（timeout）、一般非零 rc、agentpager 的 seat 被占與 launch 檔寫入失敗。
+`124`（timeout，即使輸出含 `auth` / `model-not-found` 字串也不分類）、一般非零 rc、
+agentpager 的 seat 被占與 launch 檔寫入失敗。
 註：「FAIL 路徑」在 budget 未耗盡時是 RETRY，耗盡時（或 `executor: wingman`，
 其 budget 被 clamp 成 0）仍是 ESCALATE。
 
@@ -761,7 +771,7 @@ ${XDG_DATA_HOME:-~/.local/share}/ccs-dashboard/dispatch/runs/<first-task-id>-cha
       diff.patch         # git diff <base-commit>：錨在派工前的 commit，worker `git add` / `git commit` 都不會把它清空（base-commit 為空、或該 revision 已不存在時退回裸 git diff——此時 staged 改動看不到，以 git-status.txt 為主）
       wingman-result.md  # 僅 wingman executor：scope.cwd/.wingman/result.md 凍結副本
       executor-exit-code # 僅 headless backend（claude / gemini / wingman / grok 皆落）：worker process exit code（純 evidence，不參與 verdict）。backend: agentpager 沒有 process rc，對應證據是 agentpager-wait-rc
-      worker-error       # 僅確定性基礎設施故障：故障類別單行（exit-125|126|127 / agentpager-daemon-down / agentpager-no-proj-map）；gate 據此發 ERROR
+      worker-error       # 僅確定性故障：類別單行（exit-125|126|127 / auth / model-not-found / agentpager-daemon-down / agentpager-no-proj-map）；auth 與 model-not-found 只對 headless 的 claude / gemini、rc 非 0 且非 124 時由輸出字串判定；gate 據此發 ERROR
       launch-file.txt    # 僅 backend: agentpager：寫給 agent-pager 的 inbound launch 檔路徑
       handoff.md         # 僅 backend: agentpager：worker per-attempt 完成訊號 handoff 副本
       agentpager-wait-rc # 僅 backend: agentpager：前景 wait 結果（0=handoff / 1=timeout|無 handoff；純 evidence）

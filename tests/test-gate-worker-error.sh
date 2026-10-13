@@ -4,7 +4,7 @@
 #
 # Two separable claims:
 #   1. every executor records its exit code (evidence only, no verdict change)
-#   2. only DETERMINISTIC failures (a retry provably cannot pass) write
+#   2. only failures judged DETERMINISTIC (no retry expected to pass) write
 #      attempt-NN/worker-error, which the gate turns into ERROR -> ESCALATE
 #      without spending a retry on infrastructure
 # A timeout (124) and a plain non-zero (1) stay on the FAIL -> RETRY path on
@@ -28,6 +28,14 @@ for c in claude gemini grok; do
   cat > "$WORK/bin/$c" <<'FAKE'
 #!/usr/bin/env bash
 echo "$0 $*" >> "$FAKE_CLI_LOG"
+# Optional canned output (what a CLI prints when it aborts), followed by
+# FAKE_CLI_PAD_AFTER unrelated lines so a test can push it out of a tail window.
+[ -n "${FAKE_CLI_OUT:-}" ] && printf '%s\n' "$FAKE_CLI_OUT"
+i=0
+while [ "$i" -lt "${FAKE_CLI_PAD_AFTER:-0}" ]; do
+  echo "unrelated output line $i"
+  i=$((i + 1))
+done
 exit "${FAKE_CLI_EXIT:-0}"
 FAKE
   chmod +x "$WORK/bin/$c"
@@ -156,6 +164,106 @@ assert_eq "two attempts" "2" "$(jq -r '.attempts' "$hop2/final.json")"
 assert_eq "final.json carries worker_rc" "1" "$(jq -r '.worker_rc' "$hop2/final.json")"
 assert_eq "escalation blamed on the gate" "gate" \
   "$(jq -r '.escalation.reason' "$hop2/final.json")"
+
+echo "=== worker output classification: every string in the table ==="
+# classify_case <label> <executor> <exit> <expected|absent> <output> [pad_after]
+# Always goes through _ccs_dispatch_run_worker (the wiring is under test, not
+# just the classifier), into a fresh run dir so cases cannot see each other.
+CLS_N=0
+classify_case() {
+  local label="$1" executor="$2" code="$3" expected="$4" out="$5" pad="${6:-0}"
+  CLS_N=$((CLS_N + 1))
+  local run="$WORK/run-cls-$CLS_N"; mkdir -p "$run"
+  export FAKE_CLI_EXIT="$code" FAKE_CLI_OUT="$out" FAKE_CLI_PAD_AFTER="$pad"
+  _ccs_dispatch_run_worker "$CWD" "do X" "$run" 1 60 "$executor"
+  unset FAKE_CLI_EXIT FAKE_CLI_OUT FAKE_CLI_PAD_AFTER
+  local got="absent"
+  [ -e "$run/attempt-01/worker-error" ] && got="$(cat "$run/attempt-01/worker-error")"
+  assert_eq "$label" "$expected" "$got"
+}
+
+# Fixtures are mostly observed CLI lines, with machine-specific paths
+# rewritten to generic forms; C_AUTH2 and G_AUTH2 are synthetic (those two
+# strings were never triggered). Each fixture holds exactly one table string.
+C_AUTH='Not logged in · Please run /login'
+C_AUTH2='Invalid API key'
+C_MODEL1='[claude-code:unrecognized_model] {"model":"no-such-model-x1","query_source":"sdk"}'
+C_MODEL2="There's an issue with the selected model (no-such-model-x1). It may not exist or you may not have access to it. Run --model to pick a different model."
+G_AUTH='Please set an Auth method in your ~/.gemini/settings.json or specify one of the following environment variables before running: GEMINI_API_KEY, GOOGLE_GENAI_USE_VERTEXAI, GOOGLE_GENAI_USE_GCA'
+G_AUTH2='FatalAuthenticationError: authentication required'
+G_MODEL='Error when talking to Gemini API Full report available at: <tmp>/gemini-client-error-Turn.run-sendMessageStream.json ModelNotFoundError: Requested entity was not found.'
+G_QUOTA='Attempt 1 failed: You have exhausted your capacity on this model. Your quota will reset after 4m57s.. Retrying after 328332ms...'
+
+classify_case "claude 'Not logged in' -> auth" claude 1 auth "$C_AUTH"
+classify_case "claude 'Invalid API key' -> auth" claude 1 auth "$C_AUTH2"
+classify_case "claude 'unrecognized_model' -> model-not-found" claude 1 model-not-found "$C_MODEL1"
+classify_case "claude 'issue with the selected model' -> model-not-found" claude 1 model-not-found "$C_MODEL2"
+classify_case "gemini 'Please set an Auth method' (rc 41) -> auth" gemini 41 auth "$G_AUTH"
+classify_case "gemini 'FatalAuthenticationError' -> auth" gemini 1 auth "$G_AUTH2"
+classify_case "gemini 'ModelNotFoundError' -> model-not-found" gemini 1 model-not-found "$G_MODEL"
+classify_case "gemini quota exhaustion is not classified (quota out of scope)" \
+  gemini 1 absent "$G_QUOTA"
+# The window also holds the model's own reply. Most table strings are
+# longer observed fragments, so a reply that merely names the error is not
+# classified. Two entries stay keyword-level ("Invalid API key",
+# "FatalAuthenticationError"); a reply quoting them exactly is still
+# misclassified, and the cases below only guard against loosening them.
+classify_case "a reply naming ModelNotFoundError alone is not classified" \
+  gemini 53 absent 'Summary: added a handler for ModelNotFoundError in client.py.'
+classify_case "a reply quoting 'not logged in' alone is not classified" \
+  claude 1 absent 'The helper now prints "not logged in" when the token is missing.'
+classify_case "a reply naming unrecognized_model alone is not classified" \
+  claude 1 absent 'Added handling for the unrecognized_model error code.'
+classify_case "a reply saying 'issue with the selected model' alone is not classified" \
+  claude 1 absent 'Logged an issue with the selected model in the tracker.'
+classify_case "a reply mentioning the auth method alone is not classified" \
+  gemini 1 absent 'Configured the auth method in settings.'
+classify_case "a reply mentioning an API key alone is not classified" \
+  claude 1 absent 'Rotated the API key in the vault.'
+
+echo "=== worker output classification: guards ==="
+classify_case "rc 0 with an auth string writes nothing" claude 0 absent "$C_AUTH"
+classify_case "grok is never classified" grok 1 absent "$C_AUTH"
+classify_case "rc 1 with unrelated output writes nothing" claude 1 absent \
+  'something went wrong but not in the table'
+classify_case "rc 127 outranks the output classification" claude 127 exit-127 "$C_AUTH"
+classify_case "rc 124 with an auth string stays unclassified (timeout policy)" \
+  claude 124 absent "$C_AUTH"
+classify_case "match is case-insensitive" claude 1 auth 'NOT LOGGED IN · PLEASE RUN /LOGIN'
+classify_case "auth outranks model-not-found when both are present" claude 1 auth \
+  "$C_AUTH"$'\n'"$C_MODEL2"
+
+echo "=== worker output classification: tail window is 50 lines ==="
+classify_case "auth line followed by 60 unrelated lines is outside the window" \
+  claude 1 absent "$C_AUTH" 60
+classify_case "auth line followed by 49 unrelated lines is inside the window" \
+  claude 1 auth "$C_AUTH" 49
+
+echo "=== run loop: classified worker errors escalate without a retry ==="
+loop_case() {
+  local label="$1" out="$2" expected="$3"
+  export FAKE_CLI_EXIT=1 FAKE_CLI_OUT="$out"
+  local chain hop rc
+  chain="$(_ccs_dispatch_run "$task_yaml")"; rc=$?
+  unset FAKE_CLI_EXIT FAKE_CLI_OUT
+  hop="$chain/hop-01-we-x"
+  assert_eq "$label: exit 10 escalated" "10" "$rc"
+  assert_eq "$label: one attempt only" "1" "$(jq -r '.attempts' "$hop/final.json")"
+  assert_eq "$label: escalation blamed on the worker" "worker_error" \
+    "$(jq -r '.escalation.reason' "$hop/final.json")"
+  assert_eq "$label: verdict.json carries the class" "$expected" \
+    "$(jq -r '.worker_error' "$hop/attempt-01/gate/verdict.json")"
+}
+loop_case "auth" "$C_AUTH" auth
+loop_case "model-not-found" "$C_MODEL2" model-not-found
+
+export FAKE_CLI_EXIT=1 FAKE_CLI_OUT='something went wrong but not in the table'
+chain3="$(_ccs_dispatch_run "$task_yaml")"; rc3=$?
+unset FAKE_CLI_EXIT FAKE_CLI_OUT
+assert_eq "unclassified rc 1 with output still spends its retry" "2" \
+  "$(jq -r '.attempts' "$chain3/hop-01-we-x/final.json")"
+assert_eq "unclassified rc 1 with output blames the gate" "gate" \
+  "$(jq -r '.escalation.reason' "$chain3/hop-01-we-x/final.json")"
 
 echo "=== agentpager: deterministic infra failures are classified too ==="
 unset FAKE_CLI_EXIT
