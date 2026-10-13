@@ -51,9 +51,29 @@ assert_eq "unknown -> rc 1" "1" "$?"
 _ccs_dispatch_gate_load_task "$(mk typo.yaml 'executor: gemeni')" >/dev/null 2>&1
 assert_eq "typo -> rc 1" "1" "$?"
 
-echo "=== executor: wingman needs plan (full coverage in test-gate-wingman.sh) ==="
-_ccs_dispatch_gate_load_task "$(mk w.yaml 'executor: wingman')" >/dev/null 2>&1
-assert_eq "wingman without plan -> rc 1" "1" "$?"
+# Both the dedicated message and the jq whitelist reject these files, so rc
+# alone would stay green with the dedicated check removed; assert the message.
+echo "=== executor: wingman was removed -> dedicated error ==="
+err_w="$(_ccs_dispatch_gate_load_task "$(mk w.yaml 'executor: wingman')" 2>&1 >/dev/null)"; rc_w=$?
+assert_eq "wingman rejected rc 1" "1" "$rc_w"
+assert_contains "wingman error points to opencode" "$err_w" "use executor: opencode"
+
+echo "=== plan field was removed -> dedicated error ==="
+err_p="$(_ccs_dispatch_gate_load_task "$(mk plan.yaml $'executor: claude\nplan: p.md')" 2>&1 >/dev/null)"; rc_p=$?
+assert_eq "plan field rejected rc 1" "1" "$rc_p"
+assert_contains "plan field error names removal" "$err_p" "field 'plan' was removed"
+
+echo "=== empty plan field -> dedicated error ==="
+err_e="$(_ccs_dispatch_gate_load_task "$(mk plan-empty.yaml $'executor: claude\nplan:')" 2>&1 >/dev/null)"; rc_e=$?
+assert_eq "empty plan field rejected rc 1" "1" "$rc_e"
+assert_contains "empty plan field error names removal" "$err_e" "field 'plan' was removed"
+
+# An old wingman task carries both fields; the executor message, which names
+# the replacement, must win over the plan message.
+echo "=== old wingman task (executor + plan) -> executor message ==="
+err_wp="$(_ccs_dispatch_gate_load_task "$(mk wp.yaml $'executor: wingman\nplan: p.md')" 2>&1 >/dev/null)"
+assert_contains "old wingman task error points to opencode" "$err_wp" "use executor: opencode"
+assert_not_contains "old wingman task: no plan message" "$err_wp" "field 'plan'"
 
 echo "=== non-string executor -> rc 1 ==="
 _ccs_dispatch_gate_load_task "$(mk numeric.yaml 'executor: 123')" >/dev/null 2>&1

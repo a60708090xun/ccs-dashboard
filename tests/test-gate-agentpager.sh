@@ -60,21 +60,6 @@ YAML
 _ccs_dispatch_gate_load_task "$WORK/bogus.yaml" >/dev/null 2>&1
 assert_eq "bogus backend rejected" "1" "$?"
 
-echo "=== schema rejects backend: agentpager + executor: wingman ==="
-cat > "$WORK/apwing.yaml" <<YAML
-id: t
-goal: g
-backend: agentpager
-executor: wingman
-plan: p.md
-scope: { cwd: "$WORK/repo" }
-acceptance_criteria:
-  - id: AC1
-    verify: { cmd: "true" }
-YAML
-_ccs_dispatch_gate_load_task "$WORK/apwing.yaml" >/dev/null 2>&1
-assert_eq "agentpager+wingman rejected" "1" "$?"
-
 echo "=== schema accepts backend: agentpager + executor: grok ==="
 cat > "$WORK/apgrok.yaml" <<YAML
 id: t
