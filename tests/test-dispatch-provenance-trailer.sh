@@ -80,6 +80,8 @@ _ccs_dispatch_run_worker() { mkdir -p "$3/attempt-$(printf '%02d' "$4")"; return
 out="$(ccs-dispatch-run "$(mk esc.yaml 'executor: gemini' 'model: m1' \
   'execution_policy: {loop_budget: 0}')" 2>/dev/null)"
 assert_contains "outcome is escalated (AC unsatisfied)" "$out" "outcome: escalated"
+assert_contains "single-hop escalate names its stop reason" "$out" \
+  "outcome: escalated, stop=ESCALATE"
 assert_contains "trailer prints on escalated outcome" "$out" \
   "X-Executor: gemini/m1 (ccs-dispatch-run)"
 
