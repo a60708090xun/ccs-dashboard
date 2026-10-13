@@ -644,7 +644,7 @@ hops:
 **展開規則（確定性）：**
 
 - 每 hop → `<out>/hop-NN-<id>.task.yaml`（1-based、zero-padded）。
-- `defaults` 併入每個 hop；hop 層級同名 key 覆寫整個該 key。
+- `defaults` 併入每個 hop（shallow merge）；hop 層級同名 key 覆寫整個該 key，hop 內寫 `execution_policy` 會整塊蓋掉 `defaults` 的 `execution_policy`。
 - 依 hops 順序自動串 `next:`（下一 hop 的檔名）；最後一 hop 無 `next:`。
 - wingman hop 的 `plan:` 建議寫**絕對路徑**：hop 檔產出在 out dir（預設
   `<spec 所在目錄>/chain/`），相對 `plan:` 會以 out dir 為基準解析，
@@ -743,6 +743,9 @@ plan: "plan.md"                 # 僅 executor: wingman（互為充要）：wing
 next: "task-y.yaml"             # 可選：下一個要自動執行與驗收的任務路徑（相對於此 yaml）
 execution_policy:
   loop_budget: 1                # 重派上限（預設 1 = 共 2 attempts）
+  timeout_sec: 600              # 可選：worker 與單條 AC 的共同預設（未寫取 CCS_DISPATCH_TIMEOUT）
+  worker_timeout_sec: 900       # 可選：只管 worker；順序 本欄位 -> timeout_sec -> CCS_DISPATCH_TIMEOUT。須 null 或正整數
+  ac_timeout_sec: 120           # 可選：只管每條 verify.cmd，規則同上
 acceptance_criteria:
   - id: AC1
     text: "greet 函式存在"       # 外部可觀察行為（給人讀）
@@ -792,9 +795,9 @@ CCS_DISPATCH_GATE_LOOP_BUDGET=1        # loop_budget 預設值（task.yaml 可�
 CCS_DISPATCH_GATE_CMD_TAIL_CHARS=2000  # per-AC stdout/stderr 擷取尾端字元數
 ```
 
-> **安全註記（§8.4）：** AC `verify.cmd` 會執行 worker 產出的 code（`pytest`、`python -c` 等，驗證本質使然），僅靠 `execution_policy.timeout_sec` 設界。只對「你本就願意在本機執行」的 worker 開跑；不加 network / write-path 限制（單人本地 MVP）。
+> **安全註記（§8.4）：** AC `verify.cmd` 會執行 worker 產出的 code（`pytest`、`python -c` 等，驗證本質使然），僅靠 `execution_policy.ac_timeout_sec`（未寫則 `timeout_sec`）設界。只對「你本就願意在本機執行」的 worker 開跑；不加 network / write-path 限制（單人本地 MVP）。
 
-**backend: agentpager（互動 worker 進 gate）：** 預設 `backend: headless` 走同步 headless CLI；`backend: agentpager` 讓 gate worker 改跑在 agent-pager 互動 local channel（tmux、可監看/中途接管），把「gate 驗收 + 重派」與「可觀察互動 worker」合流（issue #91）。實作為**前景阻塞式 spawn+wait**：寫 inbound launch → 等 worker 寫 per-attempt handoff 檔（`tmp/handoff-<hop>-a<NN>.md`）為完成訊號 → 收回單一 per-user seat → 回來後 gate 照常對現實跑 `verify.cmd`（handoff 內容不採信，gate 仍是唯一裁決來源）。**重派＝Option B**：gate 判 RETRY 時，attempt 迴圈重新前景 spawn 一個 fresh 互動 hop、把上輪 machine 事實 feedback 前綴進 prompt（與 headless 對稱；不同於 `wingman` 的不重派）。**bounded wait**：先有 startup grace 等 worker session 出現（`CCS_DISPATCH_AGENTPAGER_STARTUP`，預設 60s），再以 `execution_policy.timeout_sec` 綁定 completion 等待——逾時未見 handoff 即收回 seat、當作未完成（gate 隨即 FAIL）。故最壞上界約 startup + timeout。gate 路徑本質 autonomous，與 jobs/`--chain` 互動路徑的「no wall-clock kill（D2）」互不相干。`executor` 映射為互動 worker CLI（claude|gemini|grok）；`agentpager` + `wingman` 不合法（wingman 非可互動 launch）。auth 註記：互動 gemini worker 的 `GOOGLE_CLOUD_PROJECT` 由 agent-pager runner daemon 的 process env 繼承（worker 經 `bash -c` 起、不 source `.bashrc`），非結構性保證；持久修復屬 agent-pager 側。
+**backend: agentpager（互動 worker 進 gate）：** 預設 `backend: headless` 走同步 headless CLI；`backend: agentpager` 讓 gate worker 改跑在 agent-pager 互動 local channel（tmux、可監看/中途接管），把「gate 驗收 + 重派」與「可觀察互動 worker」合流（issue #91）。實作為**前景阻塞式 spawn+wait**：寫 inbound launch → 等 worker 寫 per-attempt handoff 檔（`tmp/handoff-<hop>-a<NN>.md`）為完成訊號 → 收回單一 per-user seat → 回來後 gate 照常對現實跑 `verify.cmd`（handoff 內容不採信，gate 仍是唯一裁決來源）。**重派＝Option B**：gate 判 RETRY 時，attempt 迴圈重新前景 spawn 一個 fresh 互動 hop、把上輪 machine 事實 feedback 前綴進 prompt（與 headless 對稱；不同於 `wingman` 的不重派）。**bounded wait**：先有 startup grace 等 worker session 出現（`CCS_DISPATCH_AGENTPAGER_STARTUP`，預設 60s），再以 `execution_policy.worker_timeout_sec`（未寫則 `timeout_sec`）綁定 completion 等待——逾時未見 handoff 即收回 seat、當作未完成（gate 隨即 FAIL）。故最壞上界約 startup + timeout。gate 路徑本質 autonomous，與 jobs/`--chain` 互動路徑的「no wall-clock kill（D2）」互不相干。`executor` 映射為互動 worker CLI（claude|gemini|grok）；`agentpager` + `wingman` 不合法（wingman 非可互動 launch）。auth 註記：互動 gemini worker 的 `GOOGLE_CLOUD_PROJECT` 由 agent-pager runner daemon 的 process env 繼承（worker 經 `bash -c` 起、不 source `.bashrc`），非結構性保證；持久修復屬 agent-pager 側。
 
 **Scope C 限制（後續 sprint 補）：** 無 tier ladder（重派用同一 executor）、無 pager escalation ladder、不接 `--chain`（gated chain 續鏈為獨立層）、無 Stage-2 judgment review 自動化、guidance-AC 一律 SKIPPED_FOR_LLM。evidence 目前全留（未來加 TTL）。orchestrator-wake（worker 完成回灌派工 session）為獨立 followup。
 
