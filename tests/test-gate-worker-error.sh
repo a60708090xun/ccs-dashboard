@@ -24,7 +24,7 @@ mkdir -p "$WORK/repo" "$WORK/bin"; _TEST_DIRS+=("$WORK")
 # comes from FAKE_CLI_EXIT so a "crash" is deterministic: 125/126/127 stand in
 # for timeout-itself-failed / not-executable / not-found, which in the real
 # world are produced by `timeout` and the shell rather than by the CLI.
-for c in claude gemini grok; do
+for c in claude gemini grok opencode; do
   cat > "$WORK/bin/$c" <<'FAKE'
 #!/usr/bin/env bash
 echo "$0 $*" >> "$FAKE_CLI_LOG"
@@ -192,6 +192,8 @@ C_MODEL2="There's an issue with the selected model (no-such-model-x1). It may no
 G_AUTH='Please set an Auth method in your ~/.gemini/settings.json or specify one of the following environment variables before running: GEMINI_API_KEY, GOOGLE_GENAI_USE_VERTEXAI, GOOGLE_GENAI_USE_GCA'
 G_AUTH2='FatalAuthenticationError: authentication required'
 G_MODEL='Error when talking to Gemini API Full report available at: <tmp>/gemini-client-error-Turn.run-sendMessageStream.json ModelNotFoundError: Requested entity was not found.'
+O_AUTH=$'\e[91m\e[1mError: \e[0mAuthentication Error, No api key passed in.'
+O_UNKNOWN=$'\e[91m\e[1mError: \e[0m{\n  "name": "UnknownError",\n  "data": {\n    "message": "Unexpected server error. Check server logs for details.",\n    "ref": "err_x"\n  }\n}'
 G_QUOTA='Attempt 1 failed: You have exhausted your capacity on this model. Your quota will reset after 4m57s.. Retrying after 328332ms...'
 
 classify_case "claude 'Not logged in' -> auth" claude 1 auth "$C_AUTH"
@@ -220,6 +222,11 @@ classify_case "a reply mentioning the auth method alone is not classified" \
   gemini 1 absent 'Configured the auth method in settings.'
 classify_case "a reply mentioning an API key alone is not classified" \
   claude 1 absent 'Rotated the API key in the vault.'
+
+classify_case "opencode auth string -> auth" opencode 1 auth "$O_AUTH"
+classify_case "opencode UnknownError is not classified" opencode 1 absent "$O_UNKNOWN"
+classify_case "a reply naming Authentication Error alone is not classified" \
+  opencode 1 absent 'Added a retry for the Authentication Error path in client.py.'
 
 echo "=== worker output classification: guards ==="
 classify_case "rc 0 with an auth string writes nothing" claude 0 absent "$C_AUTH"

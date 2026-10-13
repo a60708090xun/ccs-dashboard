@@ -50,4 +50,9 @@ echo "=== grok task threads grok to worker ==="
 _ccs_dispatch_run "$(mk k.yaml 'executor: grok')" >/dev/null
 assert_eq "worker saw grok" "grok" "$(head -1 "$WORK/seen-executor.log")"
 
+echo "=== opencode task threads opencode to worker ==="
+: > "$WORK/seen-executor.log"; rm -f "$CWD/done.txt"
+_ccs_dispatch_run "$(mk o.yaml 'executor: opencode')" >/dev/null
+assert_eq "worker saw opencode" "opencode" "$(head -1 "$WORK/seen-executor.log")"
+
 test_summary

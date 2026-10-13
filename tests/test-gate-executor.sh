@@ -31,6 +31,11 @@ js_g="$(_ccs_dispatch_gate_load_task "$(mk grok.yaml 'executor: grok')")"; rc_g=
 assert_eq "grok rc 0" "0" "$rc_g"
 assert_eq "grok parsed" "grok" "$(echo "$js_g" | jq -r '.executor')"
 
+echo "=== executor: opencode loads OK ==="
+js_o="$(_ccs_dispatch_gate_load_task "$(mk opencode.yaml 'executor: opencode')")"; rc_o=$?
+assert_eq "opencode rc 0" "0" "$rc_o"
+assert_eq "opencode parsed" "opencode" "$(echo "$js_o" | jq -r '.executor')"
+
 echo "=== executor: claude loads OK ==="
 _ccs_dispatch_gate_load_task "$(mk c.yaml 'executor: claude')" >/dev/null 2>&1
 assert_eq "claude rc 0" "0" "$?"
