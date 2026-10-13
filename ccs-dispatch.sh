@@ -85,6 +85,10 @@ _ccs_dispatch_gate_load_task() {
   # has exactly one of cmd/guidance; and at least one cmd-track AC exists (an
   # all-guidance task would auto-PASS with zero deterministic verification,
   # defeating the gate's purpose).
+  # worker_timeout_sec / ac_timeout_sec must be null or a positive integer,
+  # judged on the string form: jq 1.7 echoes 30.0 verbatim, and the digits-only
+  # guard downstream would turn it into 0 (= no limit). timeout_sec stays
+  # unvalidated (pre-existing behaviour).
   echo "$js" | jq -e '
     (.id | type == "string" and (length > 0))
     and (.goal | type == "string" and (length > 0))
@@ -110,6 +114,11 @@ _ccs_dispatch_gate_load_task() {
     and (if .backend == "agentpager"
          then (.executor != "wingman")
          else true end)
+    and (def posint: (. == null)
+           or (type == "number" and (tostring | test("^[1-9][0-9]*$")));
+         (.execution_policy | if type == "object"
+            then (.worker_timeout_sec | posint) and (.ac_timeout_sec | posint)
+            else true end))
   ' >/dev/null 2>&1 \
     || { echo "gate: task validation failed: $yaml" >&2; return 1; }
   echo "$js"
@@ -266,8 +275,9 @@ _ccs_dispatch_gate_run() {
   local gate_dir="$attempt_dir/gate"
   mkdir -p "$gate_dir"
 
+  # AC bound: ac_timeout_sec -> timeout_sec -> CCS_DISPATCH_TIMEOUT.
   local timeout_sec
-  timeout_sec="$(echo "$task" | jq -r '.execution_policy.timeout_sec // empty')"
+  timeout_sec="$(echo "$task" | jq -r '.execution_policy.ac_timeout_sec // .execution_policy.timeout_sec // empty')"
   [ -z "$timeout_sec" ] && timeout_sec="$CCS_DISPATCH_TIMEOUT"
 
   local n verdicts='[]' ac rec ac_id
@@ -546,7 +556,8 @@ _ccs_dispatch_run_one() {
   backend="$(echo "$task" | jq -r '.backend // "headless"')"
   # Optional; empty means "whatever default the worker CLI has saved".
   model="$(echo "$task" | jq -r '.model // empty')"
-  timeout_sec="$(echo "$task" | jq -r '.execution_policy.timeout_sec // empty')"
+  # Worker bound: worker_timeout_sec -> timeout_sec -> CCS_DISPATCH_TIMEOUT.
+  timeout_sec="$(echo "$task" | jq -r '.execution_policy.worker_timeout_sec // .execution_policy.timeout_sec // empty')"
   [ -z "$timeout_sec" ] && timeout_sec="$CCS_DISPATCH_TIMEOUT"
   plan="$(echo "$task" | jq -r '.plan // empty')"
   # plan: resolves like next: -- against the ORIGINAL task file's directory,

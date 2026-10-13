@@ -12,12 +12,14 @@
 | `goal` | Yes | 非空字串；worker 收到的任務描述全文 |
 | `scope.cwd` | No | worker 執行與 gate 驗收目錄；預設 `.`（呼叫時的 cwd）；建議寫絕對路徑 |
 | `executor` | No | `claude`（預設）\| `gemini` \| `wingman` \| `grok`；頂層字串欄位。claude/gemini/grok 以 auto-approve 跑 headless（gate 為信任邊界，見 SKILL.md § 邊界）；wingman 為本地 LLM 檔案驅動，需 `plan:` |
-| `backend` | No | `headless`（預設）\| `agentpager`；頂層字串欄位。`agentpager` 讓 gate worker 跑在 agent-pager 互動 local channel（tmux、可監看/接管），gate 以前景阻塞式 spawn+wait 等 per-attempt handoff 檔為完成訊號，回來後照常對現實驗收（gate 仍是唯一裁決來源）；bounded wait（逾 `timeout_sec` 收回 seat）。`executor` 映射為互動 worker CLI（claude\|gemini\|grok）；`agentpager` + `wingman` 不合法 |
+| `backend` | No | `headless`（預設）\| `agentpager`；頂層字串欄位。`agentpager` 讓 gate worker 跑在 agent-pager 互動 local channel（tmux、可監看/接管），gate 以前景阻塞式 spawn+wait 等 per-attempt handoff 檔為完成訊號，回來後照常對現實驗收（gate 仍是唯一裁決來源）；bounded wait（逾 `worker_timeout_sec`，未寫則 `timeout_sec`，收回 seat）。`executor` 映射為互動 worker CLI（claude\|gemini\|grok）；`agentpager` + `wingman` 不合法 |
 | `model` | No | 頂層字串欄位；派工者宣告本次執行用的 model。**會實際生效**：headless 帶 `-m`（gemini / grok）/ `--model`（claude），`backend: agentpager` 則寫進 launch 檔的 `model:` 欄（由 agent-pager 的 registry 解析 alias）。缺省 = 沿用該 CLI 自己記住的預設。`executor: wingman` 為檔案驅動、無 model 旗標，該欄僅作 provenance。同時供收尾 auto-suggest 的 `X-Executor` trailer 填 `<model>` 段（缺省時退化為 executor-only） |
 | `plan` | 僅 wingman | 與 `executor: wingman` 互為充要（缺一驗證失敗）；wingman plan.md 路徑，相對**本檔所在目錄**解析（同 `next:`），執行時轉絕對路徑傳給 `wingman execute --plan`。plan 依 wingman plan-template 紀律由派工者撰寫 |
 | `next` | No | 下一個 task.yaml 路徑；相對路徑以**本檔所在目錄**解析。**與 worker handoff frontmatter 的同名欄位不同型別**：那邊的 `next:` 是散文一行，在 `ccs-dispatch --chain`（非同步鏈）會被原樣拼進下一 hop 的 prompt。**`ccs-dispatch-run` 的 gated chain 只讀本檔的 `next:`，不讀 worker handoff**。在 handoff 寫路徑不會報錯，只會讓非同步鏈的下一個 worker 收到一行沒有語境的路徑 |
 | `execution_policy.loop_budget` | No | 重派上限；預設 1（共 2 attempts）；0 = 不重派。`executor: wingman` 一律視同 0（重派摘要走 prompt 前綴，wingman 吃不到；feedback 迴圈為 followup） |
-| `execution_policy.timeout_sec` | No | worker 與單條 AC 的 timeout；預設取 `CCS_DISPATCH_TIMEOUT`（600） |
+| `execution_policy.timeout_sec` | No | worker 與單條 AC 的 timeout，也是下面兩個欄位的預設；未寫時取 `CCS_DISPATCH_TIMEOUT`（600）。不驗證型別（沿用既有行為） |
+| `execution_policy.worker_timeout_sec` | No | 只管 worker（headless 與 `backend: agentpager` 都吃這個值）；取值順序為本欄位 → `timeout_sec` → `CCS_DISPATCH_TIMEOUT`。須為 `null` 或正整數，`0`、負數、小數（含 `30.0`）、字串載入時即拒絕 |
+| `execution_policy.ac_timeout_sec` | No | 只管每條 `verify.cmd` 的 timeout（逾時 exit 124 → FAIL）；取值順序與驗證規則同上。worker 慢、AC 快（或相反）時用它拆開，不必共用同一個上限 |
 | `acceptance_criteria[]` | Yes | 非空陣列；規則見下 |
 
 ## acceptance_criteria 規則（載入時強制驗證）
@@ -97,7 +99,8 @@ executor: claude
 next: "greeter-docs.task.yaml"        # 可省略
 execution_policy:
   loop_budget: 1
-  timeout_sec: 900
+  timeout_sec: 900          # worker 與 AC 的共同預設
+  ac_timeout_sec: 120       # 可省略；AC 另設較短上限
 acceptance_criteria:
   - id: AC1
     text: "greet 函式存在"
@@ -138,6 +141,12 @@ hops:
 產出 `hop-01-step-one.task.yaml`、`hop-02-step-two.task.yaml`
 （自動 wire `next:`，末 hop 無），每檔皆過載入驗證才落地。
 `model` 走一般 dict merge（可放 `defaults` 或個別 hop），照常存活。
+
+**`defaults` 是 shallow merge**（`_ccs_dispatch_plan_expand` 以 `dict.update` 實作）：
+hop 內只要寫了 `execution_policy`，就會整塊蓋掉 `defaults` 的 `execution_policy`，
+不會逐 key 合併。例：`defaults` 設了 `loop_budget: 3`，某 hop 只寫
+`execution_policy: { ac_timeout_sec: 30 }`，該 hop 的 `loop_budget` 就回到預設值（`CCS_DISPATCH_GATE_LOOP_BUDGET`，預設 1），不是 3。
+hop 要覆寫其中一個 key 時，需把其餘要保留的 key 一併寫進該 hop。`scope` 同理。
 
 ## Executor provenance trailer（收尾 auto-suggest）
 
