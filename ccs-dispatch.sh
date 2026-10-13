@@ -677,7 +677,8 @@ _ccs_dispatch_run_one() {
 
 # Chain driver: run the first task, and follow `next:` on PASS.
 # Echoes the chain run dir; rc 0 accepted / 10 escalated / 11 hard_stop of the
-# terminal hop, or 2 on first-task load error (before any dir alloc).
+# terminal hop, 10 also on a cycle or next-load failure, or 2 on first-task
+# load error (before any dir alloc).
 _ccs_dispatch_run() {
   local first_yaml="$1"
   local cur; cur="$(_ccs_dispatch_abspath "$first_yaml")"
@@ -688,8 +689,9 @@ _ccs_dispatch_run() {
   local max="$CCS_DISPATCH_CHAIN_MAX_DEPTH"
 
   local depth=0 hop_n=1 visited=" $cur " hops='[]'
-  local term rc=0 stop_reason="" chain_outcome="accepted"
+  local term rc=0 stop_reason="" stop_detail="" chain_outcome="accepted"
   local hop_id hop_dir attempts hop_outcome next nxt ntask hop_executor hop_model
+  local load_err="$chain_dir/next-load.stderr"
   while : ; do
     hop_id="$(echo "$task" | jq -r '.id')"
     hop_dir="$chain_dir/hop-$(printf '%02d' "$hop_n")-${hop_id}"
@@ -717,18 +719,32 @@ _ccs_dispatch_run() {
     [ -n "$stop_reason" ] && break          # empty-next (complete) / depth
 
     nxt="$(_ccs_dispatch_resolve_next "$cur" "$next")"
-    case "$visited" in *" $nxt "*) stop_reason="cycle"; break ;; esac
-    if ! ntask="$(_ccs_dispatch_gate_load_task "$nxt" 2>/dev/null)"; then
-      stop_reason="failed"; break
+    # A cycle or a next file that fails to load is a chain configuration error:
+    # the hop the task declared never ran, so the chain must not end accepted.
+    # Not a hop FAIL either -- no retry is spent on it (#125).
+    case "$visited" in *" $nxt "*)
+      stop_reason="cycle"; chain_outcome="escalated"; rc=10
+      stop_detail="next task already ran in this chain: $nxt"; break ;;
+    esac
+    # The loader's stderr goes to a file, not 2>&1: on success any stray stderr
+    # would corrupt the task JSON captured from stdout.
+    if ! ntask="$(_ccs_dispatch_gate_load_task "$nxt" 2>"$load_err")"; then
+      stop_reason="failed"; chain_outcome="escalated"; rc=10
+      stop_detail="$(cat "$load_err" 2>/dev/null)"
+      [ -n "$stop_detail" ] || stop_detail="could not load next task: $nxt"
+      rm -f "$load_err"; break
     fi
+    rm -f "$load_err"
     visited="$visited$nxt "
     task="$ntask"; cur="$nxt"; depth=$((depth + 1)); hop_n=$((hop_n + 1))
   done
 
   jq -n --arg cid "$(basename "$chain_dir")" --argjson hops "$hops" \
     --arg sr "$stop_reason" --arg o "$chain_outcome" --argjson d "$depth" \
+    --arg sd "$stop_detail" \
     '{chain_id:$cid, hops:$hops, stopped_at_hop:($hops|length),
-      stop_reason:$sr, outcome:$o, depth:$d}' \
+      stop_reason:$sr, outcome:$o, depth:$d,
+      stop_detail:(if $sd == "" then null else $sd end)}' \
     > "$chain_dir/chain.json"
   echo "$chain_dir"
   return "$rc"
@@ -745,7 +761,8 @@ Usage: ccs-dispatch-run <task.yaml>
   summary, and record structured evidence under the dispatch runs/ tree. On a
   PASS verdict, follow the task's optional next: field to run the next task
   (synchronous gated chain); the chain stops on non-PASS / empty-next / depth /
-  cycle / next-load failure.
+  cycle / next-load failure; a cycle or next-load failure ends escalated
+  (exit 10) with the reason on stderr.
   Exit: 0 accepted / 10 escalated / 11 hard_stop.
 HELP
     [ -z "$task_yaml" ] && return 1 || return 0
@@ -757,14 +774,22 @@ HELP
     return 2
   fi
   echo "run: $run_dir"
-  local hops sr
+  local hops sr sd
   hops="$(jq -r '.hops | length' "$run_dir/chain.json" 2>/dev/null || echo 1)"
   outcome="$(jq -r '.outcome' "$run_dir/chain.json" 2>/dev/null)"
+  sr="$(jq -r '.stop_reason' "$run_dir/chain.json" 2>/dev/null)"
   if [ "$hops" -le 1 ]; then
-    echo "outcome: $outcome (see $run_dir/chain.json)"
+    if [ "$sr" = "empty-next" ]; then
+      echo "outcome: $outcome (see $run_dir/chain.json)"
+    else
+      echo "outcome: $outcome, stop=$sr (see $run_dir/chain.json)"
+    fi
   else
-    sr="$(jq -r '.stop_reason' "$run_dir/chain.json")"
     echo "chain: $hops hops, outcome=$outcome, stop=$sr (see $run_dir/chain.json)"
+  fi
+  sd="$(jq -r '.stop_detail // empty' "$run_dir/chain.json" 2>/dev/null)"
+  if [ -n "$sd" ]; then
+    echo "ccs-dispatch-run: chain stopped ($sr): $sd" >&2
   fi
   # Advisory provenance: a copy-ready commit trailer attributing the dispatched
   # executor (plus model when the task declared one). dispatch-run never commits

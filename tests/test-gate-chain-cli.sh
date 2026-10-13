@@ -26,6 +26,34 @@ out="$(ccs-dispatch-run "$WORK/s1.yaml")"; rc=$?
 assert_eq "exit 0" "0" "$rc"
 assert_contains "prints run:" "$out" "run:"
 assert_contains "single-hop outcome line" "$out" "outcome: accepted"
+assert_not_contains "empty-next prints no stop reason" "$out" "stop="
+
+echo "=== single hop + invalid next -> escalated, stop reason and loader message ==="
+mk "$WORK/b1.yaml" b1 b2.yaml
+mk "$WORK/b2.yaml" b2
+printf 'executor: wingman\n' >> "$WORK/b2.yaml"
+outb="$(ccs-dispatch-run "$WORK/b1.yaml" 2>&1)"; brc=$?
+assert_eq "invalid next -> exit 10" "10" "$brc"
+assert_contains "single-hop line carries stop reason" "$outb" "outcome: escalated, stop=failed"
+assert_contains "loader message reaches the user" "$outb" "use executor: opencode"
+outs="$(ccs-dispatch-run "$WORK/b1.yaml" 2>/dev/null)"
+assert_contains "stdout still has the outcome line" "$outs" "outcome: escalated"
+assert_not_contains "loader message stays off stdout" "$outs" "use executor: opencode"
+
+echo "=== single hop self-loop -> stop=cycle ==="
+mk "$WORK/l1.yaml" l1 l1.yaml
+outl="$(ccs-dispatch-run "$WORK/l1.yaml" 2>&1)"; lrc=$?
+assert_eq "self-loop -> exit 10" "10" "$lrc"
+assert_contains "single-hop line names the cycle" "$outl" "outcome: escalated, stop=cycle"
+
+echo "=== two hops then missing next -> chain line and loader message ==="
+mk "$WORK/n1.yaml" n1 n2.yaml
+mk "$WORK/n2.yaml" n2 nope.yaml
+outn="$(ccs-dispatch-run "$WORK/n1.yaml" 2>/dev/null)"; nrc=$?
+assert_eq "multi-hop missing next -> exit 10" "10" "$nrc"
+assert_contains "multi-hop chain line" "$outn" "chain: 2 hops, outcome=escalated, stop=failed"
+outn2="$(ccs-dispatch-run "$WORK/n1.yaml" 2>&1 >/dev/null)"
+assert_contains "multi-hop loader message on stderr" "$outn2" "task file not found"
 
 echo "=== two hops -> chain: line ==="
 mk "$WORK/m1.yaml" m1 m2.yaml
