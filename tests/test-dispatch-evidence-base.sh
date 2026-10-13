@@ -26,6 +26,7 @@ mkdir -p "$WORK/repo" "$WORK/bin"; _TEST_DIRS+=("$WORK")
 # test -- the real executor's behaviour here is unconstrained.
 cat > "$WORK/bin/claude" <<'FAKE'
 #!/usr/bin/env bash
+[ "${1:-}" = "--version" ] && { echo "fake 0.0.0"; exit 0; }
 cd "$FAKE_REPO" || exit 1
 case "${FAKE_CLI_MODE:-none}" in
   edit)     printf 'worker line\n' >> tracked.txt ;;

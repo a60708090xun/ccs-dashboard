@@ -109,6 +109,7 @@ runs/<first_id>-chain-NN/
     ├── base-commit                # cwd HEAD before attempt 1 — the diff anchor
     ├── attempt-NN/
     │   ├── prompt.md              # attempt 1 = goal; ≥2 = §6 feedback + goal
+    │   ├── repro.json             # {executor, model, cli_version, cwd_head}, written before the worker runs
     │   ├── executor-output.md     # worker stdout+stderr
     │   ├── executor-exit-code     # worker rc, headless backend only (evidence)
     │   ├── worker-error           # deterministic failure class, if any
@@ -159,6 +160,20 @@ from "never finished" without opening the trace. `worker_rc` comes from
 `executor-exit-code`, which only the headless seam writes — under
 `backend: agentpager` it is always `null` and `agentpager-wait-rc` is the
 corresponding signal.
+
+`repro.json` is written by `_ccs_dispatch_run_one` once per attempt,
+before the worker is called (not inside the `_ccs_dispatch_run_worker`
+seam, so it exists under both backends). `cwd_head` is read per attempt,
+so attempt 2 shows whatever HEAD attempt 1 left behind; it is `null` when
+`cwd` has no commit or is not a git repo. `cli_version` is the first line
+of `timeout 10 <cli> --version` run inside the hop directory, never in
+`scope.cwd`, and is `null` on failure or empty output. Three deliberate
+narrowings: wingman is never probed, so its `cli_version` is always
+`null` (`wingman --version` is an argparse usage error); `model` is the
+value the task declared, not what the CLI actually used, and `null` when
+undeclared; and under `backend: agentpager` `cli_version` is the version
+on the orchestrator's PATH, which a cross-uid seat may not match. The
+file is evidence only — no verdict reads it.
 
 ## 5. Cleanup
 

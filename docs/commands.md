@@ -769,6 +769,7 @@ ${XDG_DATA_HOME:-~/.local/share}/ccs-dashboard/dispatch/runs/<first-task-id>-cha
     base-commit          # 派工前的 scope.cwd HEAD（每 hop 記一次，diff 的錨點；非 git repo 或無 commit 時為空）
     attempt-01/
       prompt.md          # 實際送 worker 的 prompt
+      repro.json         # 每個 attempt 在呼叫 worker 前寫入的重現條件：{executor, model, cli_version, cwd_head}。cli_version 是 `<cli> --version` 第一行（失敗或空為 null；wingman 不呼叫、恆為 null；在 hop 目錄內執行，不在 scope.cwd）；cwd_head 是該 attempt 開始時 scope.cwd 的 HEAD（每個 attempt 各讀一次，無 commit 或非 git repo 為 null）；model 是 task 宣告值而非 CLI 實際使用的 model（未宣告為 null）；backend: agentpager 下 cli_version 是 orchestrator 端 PATH 上的版本，不保證等於 seat 實際跑的
       executor-output.md # worker 原始輸出
       git-status.txt     # gate 當下 git status --porcelain
       diff.patch         # git diff <base-commit>：錨在派工前的 commit，worker `git add` / `git commit` 都不會把它清空（base-commit 為空、或該 revision 已不存在時退回裸 git diff——此時 staged 改動看不到，以 git-status.txt 為主）

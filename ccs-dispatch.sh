@@ -539,6 +539,42 @@ _ccs_dispatch_run_worker() {
   return 0
 }
 
+# Write attempt-NN/repro.json: the facts needed to reproduce one attempt.
+# Called from _ccs_dispatch_run_one (not from the run_worker seam, which tests
+# override and so would hide anything written behind it). Fail-soft: every
+# field degrades to null rather than aborting the run.
+# - cli_version: first line of `<cli> --version`; null on failure or empty.
+#   wingman is never probed (its --version is an argparse usage error). Run in
+#   hop_dir, not cwd, so a CLI side effect cannot land in the tree under test.
+#   Under the agentpager backend this is the orchestrator-side PATH version,
+#   not necessarily what the seat runs.
+# - cwd_head: `git rev-parse --verify HEAD` in cwd, read per attempt so a retry
+#   reflects what its predecessor committed. --verify keeps a commit-less repo
+#   from printing the literal string "HEAD".
+# - model: the task's declared value, not what the CLI actually used.
+_ccs_dispatch_write_repro() { # $1=cwd $2=hop_dir $3=attempt_dir $4=executor $5=model
+  local cwd="$1" hop_dir="$2" ad="$3" executor="$4" model="$5"
+  local cli="" ver="" head_sha=""
+  case "$executor" in
+    claude|gemini|grok) cli="$executor" ;;
+    wingman) cli="" ;;
+    *) cli="claude" ;;
+  esac
+  if [ -n "$cli" ]; then
+    ver="$(cd "$hop_dir" 2>/dev/null && timeout 10 "$cli" --version 2>/dev/null)" || ver=""
+    ver="$(printf '%s\n' "$ver" | head -n1)"
+  fi
+  # No `|| head_sha=""` reset here on purpose: --verify itself prints nothing
+  # on failure, and a reset would mask a regression to the bare form.
+  head_sha="$(cd "$cwd" 2>/dev/null && git rev-parse --verify HEAD 2>/dev/null)" || true
+  jq -n --arg e "$executor" --arg m "$model" --arg v "$ver" --arg h "$head_sha" \
+    '{executor:$e,
+      model:(if $m == "" then null else $m end),
+      cli_version:(if $v == "" then null else $v end),
+      cwd_head:(if $h == "" then null else $h end)}' \
+    > "$ad/repro.json"
+}
+
 # Run ONE task through the attempt loop into <hop_dir>: build prompt (attempt 1
 # = goal; >=2 = §6 feedback + goal), spawn worker, run gate, branch on verdict.
 # <task> is the already-loaded+validated task JSON; <task_yaml> is its source
@@ -597,6 +633,7 @@ _ccs_dispatch_run_one() {
       prompt="${fb}"$'\n'"Task: $goal"
     fi
     printf '%s' "$prompt" > "$ad/prompt.md"
+    _ccs_dispatch_write_repro "$cwd" "$hop_dir" "$ad" "$executor" "$model"
 
     _ccs_dispatch_run_worker "$cwd" "$prompt" "$hop_dir" "$attempt" "$timeout_sec" "$executor" "$plan_abs" "$backend" "$model"
     verdict="$(_ccs_dispatch_gate_run "$cwd" "$task" "$ad" "$attempt" "$budget")"
